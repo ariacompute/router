@@ -76,3 +76,8 @@
 
 ### T10 — 注册
 - [x] serve 在 `router` 非空时 PUT upsert；失败退出
+
+### T11 — `setup` + 默认 `router.yml`
+- [x] CLI `aria-router setup [--status|--clear]` 写入 `~/.ariacompute/router.yml`
+- [x] `validate` / `serve` 的 `--config` 可选，缺省该路径
+- [x] 八语言 SDK `Router.setup` / `setup_status` / `setup_clear`；不写 yml

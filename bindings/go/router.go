@@ -24,7 +24,7 @@ type Router struct {
 
 func NewRouter() *Router { return &Router{} }
 
-func (r *Router) Auth(baseURL, token string) {
+func (r *Router) Setup(baseURL, token string) {
 	if baseURL != "" {
 		r.authBaseURL = baseURL
 	}
@@ -33,7 +33,7 @@ func (r *Router) Auth(baseURL, token string) {
 	}
 }
 
-func (r *Router) AuthClear() {
+func (r *Router) SetupClear() {
 	r.authBaseURL, r.authToken = "", ""
 }
 

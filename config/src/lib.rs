@@ -4,7 +4,7 @@ use aria_router_core::{RouterError, RouterKind};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -535,9 +535,66 @@ pub fn expand_env(raw: &str) -> String {
     .into_owned()
 }
 
+/// Embedded starter templates written by `aria-router setup`.
+pub const SEMANTIC_TINY_YAML: &str = include_str!("../examples/semantic-tiny.yaml");
+pub const AGENT_TINY_YAML: &str = include_str!("../examples/agent-tiny.yaml");
+
+/// `$HOME/.ariacompute` (overridable via `ARIA_COMPUTE_HOME`).
+pub fn aria_home() -> Result<PathBuf, RouterError> {
+    if let Ok(override_home) = std::env::var("ARIA_COMPUTE_HOME") {
+        if !override_home.is_empty() {
+            return Ok(PathBuf::from(override_home));
+        }
+    }
+    let home = dirs::home_dir().ok_or_else(|| {
+        RouterError::Io("could not resolve home directory".into())
+    })?;
+    Ok(home.join(".ariacompute"))
+}
+
+pub fn default_config_path() -> Result<PathBuf, RouterError> {
+    Ok(aria_home()?.join("router.yml"))
+}
+
+/// Write a v0.3 starter YAML to `~/.ariacompute/router.yml`.
+/// `kind` is `semantic` (default) or `agent`.
+pub fn write_default_config(kind: &str, overwrite: bool) -> Result<PathBuf, RouterError> {
+    let path = default_config_path()?;
+    if path.exists() && !overwrite {
+        return Err(RouterError::Io(format!(
+            "{} exists (pass overwrite or --clear)",
+            path.display()
+        )));
+    }
+    let body = match kind {
+        "" | "semantic" => SEMANTIC_TINY_YAML,
+        "agent" => AGENT_TINY_YAML,
+        other => {
+            return Err(RouterError::InvalidParam(format!(
+                "setup template must be semantic|agent, got {other}"
+            )))
+        }
+    };
+    std::fs::create_dir_all(aria_home()?)?;
+    std::fs::write(&path, body)?;
+    RouterDocument::load_path(&path)?;
+    Ok(path)
+}
+
+pub fn clear_default_config() -> Result<PathBuf, RouterError> {
+    let path = default_config_path()?;
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     const TINY: &str = r#"
 version: v0.3
@@ -614,5 +671,40 @@ recipes:
             "algorithm: not-a-real-algo\n          modelRefs:",
         );
         assert!(RouterDocument::from_yaml_str(&raw).is_err());
+    }
+
+    #[test]
+    fn default_config_path_under_aria_compute_home() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
+        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
+        assert_eq!(default_config_path().unwrap(), dir.path().join("router.yml"));
+        match prev {
+            Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
+            None => std::env::remove_var("ARIA_COMPUTE_HOME"),
+        }
+    }
+
+    #[test]
+    fn write_semantic_template_roundtrip() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
+        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
+        let path = write_default_config("semantic", true).unwrap();
+        assert_eq!(path, dir.path().join("router.yml"));
+        let doc = RouterDocument::load_path(&path).unwrap();
+        assert_eq!(doc.entrypoints[0].router, RouterKind::Semantic);
+        assert!(write_default_config("semantic", false).is_err());
+        write_default_config("agent", true).unwrap();
+        let doc = RouterDocument::load_path(&path).unwrap();
+        assert_eq!(doc.entrypoints[0].router, RouterKind::Agent);
+        clear_default_config().unwrap();
+        assert!(!path.exists());
+        match prev {
+            Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
+            None => std::env::remove_var("ARIA_COMPUTE_HOME"),
+        }
     }
 }

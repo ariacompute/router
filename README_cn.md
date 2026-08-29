@@ -28,7 +28,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 示例：[`config/examples/semantic-tiny.yaml`](config/examples/semantic-tiny.yaml)、[`agent-tiny.yaml`](config/examples/agent-tiny.yaml)、[`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml)。
 
 ```bash
-# 校验
+# 写入 ~/.ariacompute/router.yml（默认 semantic 模板）
+aria-router setup
+aria-router setup --status
+
+# 校验（默认路径，或传 --config）
+aria-router validate
 cargo run -p aria-router -- validate --config config/examples/semantic-tiny.yaml
 
 # 服务 — 数据面来自 YAML listeners（semantic-tiny：127.0.0.1:8899）；
@@ -69,8 +74,8 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --compute auto
 
 # engine 侧也可写入配置，不必每次带 --router：
-#   aria-engine auth  # 可选填写 router URL
-#   # 或 ~/.ariacompute/config.yml：
+#   aria-engine setup  # 可选填写 router URL
+#   # 或 ~/.ariacompute/engine.yml：
 #   # router: http://127.0.0.1:8090
 
 # 3. 经本网关对话（实名 = bypass → 已注册 engine）
@@ -172,11 +177,11 @@ C ABI（`ariacompute-router-ffi` / `libaria_router_ffi`）加 `bindings/` 薄封
 
 C 头文件：[`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init`（进程内加载 YAML）、`aria_router_connect`（HTTP 连已运行的 `serve`）、`aria_router_complete` / `_stream`、`aria_router_models`、`aria_router_last_route`、`aria_router_destroy`、`aria_router_last_error`。
 
-动态库顺序：`ARIA_ROUTER_FFI_LIB` → 包内捆绑路径 → `~/.ariacompute/lib/`。实例 `auth` 仅内存 `base_url` / `token`，**禁止**写 `config.yml`。`init` 进程内跑 semantic 与 `builtin` agent；无 subprocess 的平台上 `type: pi` / `deepseek-harness` 显式 `Unsupported`。
+动态库顺序：`ARIA_ROUTER_FFI_LIB` → 包内捆绑路径 → `~/.ariacompute/lib/`。实例 `setup` 仅内存 `base_url` / `token`，**禁止**写 `router.yml`。`init` 进程内跑 semantic 与 `builtin` agent；无 subprocess 的平台上 `type: pi` / `deepseek-harness` 显式 `Unsupported`。
 
 ```bash
 cargo test -p ariacompute-router-ffi -p ariacompute-router
-./scripts/run-binding-tests.sh   # 宿主矩阵（Rust / Python / Go / TS / RN auth）
+./scripts/run-binding-tests.sh   # 宿主矩阵（Rust / Python / Go / TS / RN setup）
 ```
 
 C ABI 变更必须同步 [`bindings/testdata/cases.json`](bindings/testdata/cases.json) 与宿主测。
@@ -199,7 +204,7 @@ r.close()
 
 # 或连接已运行的 serve（数据面）：
 r = Router().connect("http://127.0.0.1:8899")
-r.auth(base_url="http://127.0.0.1:8899", token="")  # 仅内存
+r.setup(base_url="http://127.0.0.1:8899", token="")  # 仅内存
 ```
 
 **Rust**（`ariacompute-router` — 原生 API，不 dlopen `libaria_router_ffi`）：

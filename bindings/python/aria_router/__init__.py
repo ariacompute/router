@@ -44,17 +44,17 @@ class Router:
         self._handle = None
         self._auth = {"base_url": "", "token": ""}
 
-    def auth(self, base_url: Optional[str] = None, token: Optional[str] = None) -> "Router":
+    def setup(self, base_url: Optional[str] = None, token: Optional[str] = None) -> "Router":
         if base_url is not None:
             self._auth["base_url"] = base_url
         if token is not None:
             self._auth["token"] = token
         return self
 
-    def auth_status(self) -> dict[str, str]:
+    def setup_status(self) -> dict[str, str]:
         return dict(self._auth)
 
-    def auth_clear(self) -> "Router":
+    def setup_clear(self) -> "Router":
         self._auth = {"base_url": "", "token": ""}
         return self
 

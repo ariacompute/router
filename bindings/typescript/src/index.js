@@ -3,17 +3,17 @@ export class Router {
     this._auth = { base_url: "", token: "" };
   }
 
-  auth(u = {}) {
+  setup(u = {}) {
     if (u.base_url !== undefined) this._auth.base_url = u.base_url;
     if (u.token !== undefined) this._auth.token = u.token;
     return this;
   }
 
-  authStatus() {
+  setupStatus() {
     return { ...this._auth };
   }
 
-  authClear() {
+  setupClear() {
     this._auth = { base_url: "", token: "" };
     return this;
   }

@@ -1,10 +1,10 @@
 /** @ariacompute/router-rn — auth client; native FFI on-device. */
 
-function defaultAuth() {
+function defaultSetup() {
   return { base_url: '', token: '' };
 }
 
-function applyAuth(existing, updates) {
+function applySetup(existing, updates) {
   const out = { ...existing };
   for (const [k, v] of Object.entries(updates || {})) {
     if (v !== undefined) out[k] = v;
@@ -12,4 +12,4 @@ function applyAuth(existing, updates) {
   return out;
 }
 
-module.exports = { defaultAuth, applyAuth };
+module.exports = { defaultSetup, applySetup };

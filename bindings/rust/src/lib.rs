@@ -13,17 +13,17 @@ pub struct Router {
     state: Option<Arc<AppState>>,
     base_url: Option<String>,
     rt: tokio::runtime::Runtime,
-    auth: AuthConfig,
+    setup: SetupConfig,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct AuthConfig {
+pub struct SetupConfig {
     pub base_url: String,
     pub token: String,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct AuthUpdates {
+pub struct SetupUpdates {
     pub base_url: Option<String>,
     pub token: Option<String>,
 }
@@ -37,26 +37,26 @@ impl Router {
                 .enable_all()
                 .build()
                 .expect("rt"),
-            auth: AuthConfig::default(),
+            setup: SetupConfig::default(),
         }
     }
 
-    pub fn auth(&mut self, u: &AuthUpdates) -> Result<&mut Self, RouterError> {
+    pub fn setup(&mut self, u: &SetupUpdates) -> Result<&mut Self, RouterError> {
         if let Some(v) = &u.base_url {
-            self.auth.base_url = v.clone();
+            self.setup.base_url = v.clone();
         }
         if let Some(v) = &u.token {
-            self.auth.token = v.clone();
+            self.setup.token = v.clone();
         }
         Ok(self)
     }
 
-    pub fn auth_status(&self) -> &AuthConfig {
-        &self.auth
+    pub fn setup_status(&self) -> &SetupConfig {
+        &self.setup
     }
 
-    pub fn auth_clear(&mut self) -> &mut Self {
-        self.auth = AuthConfig::default();
+    pub fn setup_clear(&mut self) -> &mut Self {
+        self.setup = SetupConfig::default();
         self
     }
 
@@ -103,10 +103,10 @@ impl Router {
             let url = self
                 .base_url
                 .as_deref()
-                .or(if self.auth.base_url.is_empty() {
+                .or(if self.setup.base_url.is_empty() {
                     None
                 } else {
-                    Some(self.auth.base_url.as_str())
+                    Some(self.setup.base_url.as_str())
                 })
                 .ok_or_else(|| RouterError::InvalidParam("not initialized".into()))?;
             let text = self
@@ -172,15 +172,15 @@ mod tests {
     }
 
     #[test]
-    fn auth_memory_only() {
+    fn setup_memory_only() {
         let mut r = Router::new();
-        r.auth(&AuthUpdates {
+        r.setup(&SetupUpdates {
             base_url: Some("http://127.0.0.1:8899".into()),
             token: Some("t".into()),
         })
         .unwrap();
-        assert_eq!(r.auth_status().token, "t");
-        r.auth_clear();
-        assert!(r.auth_status().token.is_empty());
+        assert_eq!(r.setup_status().token, "t");
+        r.setup_clear();
+        assert!(r.setup_status().token.is_empty());
     }
 }

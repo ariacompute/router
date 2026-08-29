@@ -1,11 +1,11 @@
 package com.ariacompute.router
 
-data class AuthConfig(
+data class SetupConfig(
     var baseUrl: String = "",
     var token: String = "",
 )
 
-fun applyAuth(existing: AuthConfig, baseUrl: String? = null, token: String? = null): AuthConfig {
+fun applySetup(existing: SetupConfig, baseUrl: String? = null, token: String? = null): SetupConfig {
     val out = existing.copy()
     if (baseUrl != null) out.baseUrl = baseUrl
     if (token != null) out.token = token

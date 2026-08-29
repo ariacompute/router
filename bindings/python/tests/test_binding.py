@@ -30,12 +30,12 @@ class BindingTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             Router().init("/no/such.yaml")
 
-    def test_auth_memory_only(self):
+    def test_setup_memory_only(self):
         r = Router()
-        r.auth(base_url="http://127.0.0.1:8899", token="t")
-        self.assertEqual(r.auth_status()["token"], "t")
-        r.auth_clear()
-        self.assertEqual(r.auth_status()["token"], "")
+        r.setup(base_url="http://127.0.0.1:8899", token="t")
+        self.assertEqual(r.setup_status()["token"], "t")
+        r.setup_clear()
+        self.assertEqual(r.setup_status()["token"], "")
 
 
 if __name__ == "__main__":

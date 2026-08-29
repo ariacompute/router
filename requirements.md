@@ -8,7 +8,7 @@
 
 用 **Rust** 实现独立 OpenAI 兼容网关：按 entrypoint 选择 **semantic** 或 **agent** 决策器，在硬约束剪枝后选择或组合 provider 路径并转发。
 
-- **产品面**：`aria-router` CLI（`validate` / `serve`）+ 进程内库 + C ABI + 八语言 SDK。
+- **产品面**：`aria-router` CLI（`setup` / `validate` / `serve`）+ 进程内库 + C ABI + 八语言 SDK。
 - **两种 router**：`semantic`（signals → Boolean recipe → algorithm）与 `agent`（LLM agent + extensions）并列；共享 listeners / providers / 硬约束 / 转发 / replay。
 - **不做**：Dashboard、Operator、Helm、官网、Python `vllm-sr`、Envoy ExtProc、把 TS harness 链进 crate。
 - **与 engine**：engine 仅本地推理；可选向本网关注册为 provider。本仓 SDK 与 `ariacompute-engine` **两套包**，`.so` 名互不覆盖。
@@ -145,7 +145,7 @@ Extensions：
 - `GET /v1/router/replay?n=`
 - `PUT /v1/router/providers`：engine serve upsert（name、endpoint、provider_model_id）
 
-CLI：`aria-router validate --config`；`aria-router serve --config [--bind] [--mgmt-bind]`。
+CLI：`aria-router setup [--status|--clear]` 写入 `~/.ariacompute/router.yml`（YAML v0.3 模板：`semantic` 默认或 `agent`）。`aria-router validate [--config]`；`aria-router serve [--config] [--bind] [--mgmt-bind]`。`--config` 可选，缺省 `~/.ariacompute/router.yml`；文件不存在则报错并提示 `aria-router setup`。
 
 ### 3.6 错误
 
@@ -167,7 +167,7 @@ C API（`include/aria_router.h`）：
 
 动态库：`ARIA_ROUTER_FFI_LIB` → 包内捆绑 → `~/.ariacompute/lib/`。Rust 原生不 dlopen。
 
-实例 `auth`：仅内存 `base_url` / `token`；禁止写 `config.yml`。
+实例 `setup`：仅内存 `base_url` / `token`；禁止写 `router.yml` / `engine.yml`。无 `auth` 别名。
 
 测试：共享 `cases.json`（lifecycle / chat / stream / models / last_route / connect / fail-closed）；`cargo test -p ariacompute-router-ffi`；`./scripts/run-binding-tests.sh`。
 

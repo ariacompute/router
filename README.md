@@ -28,8 +28,18 @@ Routing policy is YAML v0.3 (`--config`). Secrets expand as `${VAR}` / `${VAR:-d
 Examples: [`config/examples/semantic-tiny.yaml`](config/examples/semantic-tiny.yaml), [`agent-tiny.yaml`](config/examples/agent-tiny.yaml), [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml).
 
 ```bash
-# Validate
+# Setup — writes ~/.ariacompute/router.yml (semantic starter by default)
+aria-router setup
+aria-router setup --status
+
+# Validate (default path, or pass --config)
+aria-router validate
 cargo run -p aria-router -- validate --config config/examples/semantic-tiny.yaml
+
+# Serve — data plane from YAML listeners (semantic-tiny: 127.0.0.1:8899);
+# management defaults to 127.0.0.1:8080. Omit --config after setup.
+cargo run -p aria-router -- serve --config config/examples/semantic-tiny.yaml
+aria-router serve --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090
 
 # Serve — data plane from YAML listeners (semantic-tiny: 127.0.0.1:8899);
 # management defaults to 127.0.0.1:8080
@@ -69,8 +79,8 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --compute auto
 
 # Persist on the engine side instead of --router each time:
-#   aria-engine auth  # optional router URL
-#   # or ~/.ariacompute/config.yml:
+#   aria-engine setup  # optional router URL
+#   # or ~/.ariacompute/engine.yml:
 #   # router: http://127.0.0.1:8090
 
 # 3. Chat via this gateway (concrete name = bypass → registered engine)
@@ -172,11 +182,11 @@ Native C ABI (`ariacompute-router-ffi` / `libaria_router_ffi`) plus thin wrapper
 
 C header: [`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init` (in-process YAML), `aria_router_connect` (HTTP to a running `serve`), `aria_router_complete` / `_stream`, `aria_router_models`, `aria_router_last_route`, `aria_router_destroy`, `aria_router_last_error`.
 
-Dynamic lib order: `ARIA_ROUTER_FFI_LIB` → package-bundled path → `~/.ariacompute/lib/`. Instance `auth` is in-memory `base_url` / `token` only and **never** writes `config.yml`. `init` runs semantic and `builtin` agent in-process; `type: pi` / `deepseek-harness` on platforms without subprocess is explicit `Unsupported`.
+Dynamic lib order: `ARIA_ROUTER_FFI_LIB` → package-bundled path → `~/.ariacompute/lib/`. Instance `setup` is in-memory `base_url` / `token` only and **never** writes `router.yml`. `init` runs semantic and `builtin` agent in-process; `type: pi` / `deepseek-harness` on platforms without subprocess is explicit `Unsupported`.
 
 ```bash
 cargo test -p ariacompute-router-ffi -p ariacompute-router
-./scripts/run-binding-tests.sh   # host matrix (Rust / Python / Go / TS / RN auth)
+./scripts/run-binding-tests.sh   # host matrix (Rust / Python / Go / TS / RN setup)
 ```
 
 C ABI changes must update [`bindings/testdata/cases.json`](bindings/testdata/cases.json) and host tests.
@@ -199,7 +209,7 @@ r.close()
 
 # Or attach to a running serve (data plane):
 r = Router().connect("http://127.0.0.1:8899")
-r.auth(base_url="http://127.0.0.1:8899", token="")  # memory only
+r.setup(base_url="http://127.0.0.1:8899", token="")  # memory only
 ```
 
 **Rust** (`ariacompute-router` — native API; does not dlopen `libaria_router_ffi`):
