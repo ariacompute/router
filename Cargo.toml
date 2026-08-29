@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "config",
+    "signal",
+    "decision",
+    "algorithm",
+    "plugin",
+    "provider",
+    "agent",
+    "ext",
+    "http",
+    "bin",
+    "ffi",
+    "bindings/rust",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Aria Compute"]
+
+[workspace.dependencies]
+aria-router-core = { path = "core", version = "0.1.0" }
+aria-router-config = { path = "config", version = "0.1.0" }
+aria-router-signal = { path = "signal", version = "0.1.0" }
+aria-router-decision = { path = "decision", version = "0.1.0" }
+aria-router-algorithm = { path = "algorithm", version = "0.1.0" }
+aria-router-plugin = { path = "plugin", version = "0.1.0" }
+aria-router-provider = { path = "provider", version = "0.1.0" }
+aria-router-agent = { path = "agent", version = "0.1.0" }
+aria-router-ext = { path = "ext", version = "0.1.0" }
+aria-router-http = { path = "http", version = "0.1.0" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "process", "sync", "time"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+bytes = "1"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+async-trait = "0.1"
+regex = "1"
+libc = "0.2"

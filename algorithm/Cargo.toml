@@ -1,0 +1,9 @@
+[package]
+name = "aria-router-algorithm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aria-router-core.workspace = true
+aria-router-config.workspace = true

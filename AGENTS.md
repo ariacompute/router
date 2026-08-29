@@ -1,0 +1,46 @@
+# AGENTS.md — aria router
+
+工程上下文入口。逐层展开：先看「概述/架构/目录」，动手时再看「规范/命令/进行中/注意」。
+
+## 概述
+`router` 仓库 = aria 推理网关（Rust）：独立 OpenAI 兼容 HTTP，**不走 Envoy**。
+两种并列决策器：**semantic**（对齐 vLLM Semantic Router YAML v0.3）与 **agent**
+（LLM agent + extensions 接入 pi / deepseek-harness）。共享 providers、硬约束、转发。
+产物：`aria-router` CLI + C ABI + 八语言 SDK（与 engine SDK **两套包**）。
+
+## 架构
+OpenAI 面 → Entrypoint（`semantic` | `agent`）→ 硬约束剪枝 → 决策 → plugin → provider。
+Semantic：signals → projections → Boolean decision → algorithm/looper。
+Agent：`AgentExtension` 产出 typed `RouteDecision`；第三方 harness **进程外**。
+Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 bypass recipe。
+
+## 目录
+- `config/` `signal/` `decision/` `algorithm/` `plugin/` `provider/` `agent/` `ext/` `http/`：运行时 crate
+- `bin/`：`aria-router`（validate / serve）
+- `ffi/`：`ariacompute-router-ffi`（`libaria_router_ffi`）
+- `bindings/`：rust / python / go / typescript / react-native / flutter / swift / kotlin
+- 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
+
+## 开发规范
+- Rust edition 2021+；错误统一 `RouterError`；禁止吞错与静默 no-op。
+- 未实现 YAML 能力 → `Unsupported`（validate 与运行时均失败）。
+- 新增功能须单测（正常 + 异常）；合入前 `cargo test` 全绿。
+- Harness：半天以上须 `requirements.md`（人审）→ `task.md` → 编码。
+- AGENTS.md ≤100 行；信号/算法清单下沉 `requirements.md`。
+- C ABI 变更须更新 `bindings/testdata/cases.json` 与宿主测。
+
+## 常用命令
+- `cargo test`
+- `cargo run -p aria-router -- validate --config config/examples/semantic-tiny.yaml`
+- `cargo run -p aria-router -- serve --config config/examples/semantic-tiny.yaml`
+- `./scripts/run-binding-tests.sh`
+
+## 进行中需求
+Spec 见 `requirements.md`。阶段 A semantic/agent 黄金路径；B 启发式；C learned+剩余算法；
+D pi/dsh extensions；E 八语言 SDK。engine 去 hybrid，可选 `--router` 注册为 provider。
+
+## 注意事项
+- 黄金路径：keyword decision → static 转发 mock/engine；agent builtin JSON 决策。
+- 四维：Models=候选路径；Compute=pool 排名；Location=硬剪枝；Preference=档位/信号。
+- 一次请求禁止串跑 semantic+agent。未知 extension type / 缺二进制 → 启动失败，不降级。
+- 移动端 `init` 仅 semantic + builtin；pi/dsh → `Unsupported`。

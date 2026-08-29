@@ -1,0 +1,11 @@
+[package]
+name = "aria-router-signal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aria-router-core.workspace = true
+aria-router-config.workspace = true
+serde.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,28 @@
+[package]
+name = "aria-router-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aria-router-core.workspace = true
+aria-router-config.workspace = true
+aria-router-signal.workspace = true
+aria-router-decision.workspace = true
+aria-router-algorithm.workspace = true
+aria-router-plugin.workspace = true
+aria-router-provider.workspace = true
+aria-router-agent.workspace = true
+aria-router-ext.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tower.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+axum = { workspace = true }

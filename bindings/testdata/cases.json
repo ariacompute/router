@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "cases": [
+    {"id": "init_ok", "intent": "Valid YAML config path", "assert": "handle non-null; destroy succeeds"},
+    {"id": "init_missing_path", "intent": "Bad path", "assert": "null/err; last_error non-empty"},
+    {"id": "complete_ok", "intent": "Minimal messages via init (fast-response)", "assert": "success and non-empty response"},
+    {"id": "complete_after_destroy", "intent": "Null router complete", "assert": "error/safe fail"},
+    {"id": "double_destroy", "intent": "Destroy null", "assert": "no crash"},
+    {"id": "complete_stream_ok", "intent": "Streaming callback", "assert": ">=1 chunk"},
+    {"id": "models_ok", "intent": "List entrypoint + provider names", "assert": "data array includes aria/semantic-auto"},
+    {"id": "last_route_after_complete", "intent": "last_route JSON", "assert": "layer/model present after complete"},
+    {"id": "connect_without_server", "intent": "aria_router_connect", "assert": "handle non-null (HTTP later)"},
+    {"id": "auth_memory_only", "intent": "SDK auth base_url/token", "assert": "in memory; no config.yml write"},
+    {"id": "fail_closed_unknown_model", "intent": "Unknown model name", "assert": "error path"}
+  ]
+}

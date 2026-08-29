@@ -1,0 +1,42 @@
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+extensions:
+  - name: builtin
+    type: builtin
+entrypoints:
+  - model_names: [aria/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords: []
+      decisions:
+        - name: canned
+          priority: 1
+          rules:
+            operator: AND
+            conditions: []
+          modelRefs:
+            - model: local/general
+          plugins:
+            - name: fast-response
+              message: hello-from-router
