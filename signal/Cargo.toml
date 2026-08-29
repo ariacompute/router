@@ -3,6 +3,7 @@ name = "aria-router-signal"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Semantic routing signals for aria-router"
 
 [dependencies]
 aria-router-core.workspace = true

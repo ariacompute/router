@@ -3,6 +3,7 @@ name = "aria-router-config"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "YAML v0.3 config for aria-router"
 
 [dependencies]
 aria-router-core.workspace = true

@@ -3,6 +3,7 @@ name = "aria-router-algorithm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Model selection algorithms for aria-router"
 
 [dependencies]
 aria-router-core.workspace = true

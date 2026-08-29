@@ -2,6 +2,9 @@ use aria_router_config::RouterDocument;
 use aria_router_http::{data_router, ensure_extensions_startable, mgmt_router, AppState};
 use std::sync::Arc;
 
+/// Embedded at compile time; release builds set `ARIA_ROUTER_VERSION` from the git tag.
+const ROUTER_VERSION: &str = env!("ARIA_ROUTER_VERSION");
+
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
@@ -10,12 +13,33 @@ async fn main() {
     }
 }
 
+fn print_usage() {
+    println!(
+        "\
+aria-router {ROUTER_VERSION}
+
+aria-router validate --config <file>
+aria-router serve --config <file> [--bind HOST:PORT] [--mgmt-bind HOST:PORT]
+aria-router -h | --help | help
+aria-router -v | --version | version"
+    );
+}
+
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
-    if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
-        println!(
-            "aria-router validate --config <file>\naria-router serve --config <file> [--bind HOST:PORT] [--mgmt-bind HOST:PORT]"
-        );
+    if args.is_empty()
+        || args
+            .iter()
+            .any(|a| a == "-h" || a == "--help" || a == "help")
+    {
+        print_usage();
+        return Ok(());
+    }
+    if args
+        .iter()
+        .any(|a| a == "-v" || a == "--version" || a == "version")
+    {
+        println!("aria-router {ROUTER_VERSION}");
         return Ok(());
     }
     let cmd = args.remove(0);

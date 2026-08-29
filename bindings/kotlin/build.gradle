@@ -1,0 +1,78 @@
+import com.vanniktech.maven.publish.SonatypeHost
+import org.gradle.plugins.signing.Sign
+
+plugins {
+    id 'java-library'
+    id 'org.jetbrains.kotlin.jvm' version '2.0.21'
+    id 'com.vanniktech.maven.publish' version '0.30.0'
+}
+
+group = 'com.ariacompute'
+version = System.getenv('ARIA_VERSION') ?: '0.1.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+kotlin {
+    jvmToolchain(17)
+}
+
+dependencies {
+    implementation 'org.json:json:20240303'
+    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
+}
+
+mavenPublishing {
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, true)
+    signAllPublications()
+
+    coordinates('com.ariacompute', 'router', project.version.toString())
+
+    pom {
+        name = 'Aria Router'
+        description = 'Kotlin/JVM binding for the Aria inference gateway (libaria_router_ffi).'
+        url = 'https://github.com/ariacompute/router'
+        licenses {
+            license {
+                name = 'MIT License'
+                url = 'https://opensource.org/licenses/MIT'
+            }
+        }
+        developers {
+            developer {
+                id = 'ariacompute'
+                name = 'AriaCompute'
+                url = 'https://github.com/ariacompute'
+            }
+        }
+        scm {
+            url = 'https://github.com/ariacompute/router'
+            connection = 'scm:git:git://github.com/ariacompute/router.git'
+            developerConnection = 'scm:git:ssh://git@github.com/ariacompute/router.git'
+        }
+    }
+}
+
+def preparePgpKey(String raw) {
+    String key = raw.replace('\\n', '\n').replace('\r\n', '\n').trim()
+    if (key.contains('-----BEGIN PGP')) {
+        return key
+    }
+    String body = key.replace('\n', '').trim()
+    return "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\n${body}\n-----END PGP PRIVATE KEY BLOCK-----\n"
+}
+
+def pgpKeyRaw = System.getenv('GPG_PRIVATE_KEY') ?: findProperty('signingInMemoryKey')
+def pgpPassword = System.getenv('GPG_PASSPHRASE') ?: findProperty('signingInMemoryKeyPassword') ?: ''
+if (pgpKeyRaw != null && pgpKeyRaw.toString().trim()) {
+    signing.useInMemoryPgpKeys(preparePgpKey(pgpKeyRaw.toString()), pgpPassword.toString())
+}
+
+tasks.withType(Sign).configureEach { signTask ->
+    signTask.onlyIf {
+        def key = System.getenv('GPG_PRIVATE_KEY') ?: findProperty('signingInMemoryKey')
+        key != null && !key.toString().trim().isEmpty()
+    }
+}

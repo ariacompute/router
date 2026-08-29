@@ -3,6 +3,7 @@ name = "aria-router-provider"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "OpenAI-compatible upstream forwarding for aria-router"
 
 [dependencies]
 aria-router-core.workspace = true

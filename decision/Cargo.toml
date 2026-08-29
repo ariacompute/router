@@ -3,6 +3,7 @@ name = "aria-router-decision"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Boolean decisions and projections for aria-router"
 
 [dependencies]
 aria-router-core.workspace = true

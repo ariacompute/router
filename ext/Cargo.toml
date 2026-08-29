@@ -3,6 +3,7 @@ name = "aria-router-ext"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Process-out agent extensions (pi, deepseek-harness)"
 
 [dependencies]
 aria-router-core.workspace = true

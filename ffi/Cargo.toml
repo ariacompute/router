@@ -3,6 +3,7 @@ name = "ariacompute-router-ffi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "C ABI for aria-router (libaria_router_ffi)"
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]

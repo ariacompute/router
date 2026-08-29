@@ -3,6 +3,7 @@ name = "aria-router-plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Request/response plugins for aria-router"
 
 [dependencies]
 aria-router-core.workspace = true
