@@ -104,6 +104,22 @@ fn cache_key(req: &ChatRequest) -> String {
     format!("{}:{}", req.model, req.prompt_text())
 }
 
+pub fn extra_headers(plugins: &[PluginRef]) -> Vec<(String, String)> {
+    let mut out = vec![];
+    for p in plugins {
+        if p.name == "header-mutation" || p.name == "header_mutation" {
+            if let Some(set) = p.extra.get("set").and_then(|v| v.as_object()) {
+                for (k, v) in set {
+                    if let Some(s) = v.as_str() {
+                        out.push((k.clone(), s.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,20 +217,4 @@ mod tests {
             Err(RouterError::Unsupported(_))
         ));
     }
-}
-
-pub fn extra_headers(plugins: &[PluginRef]) -> Vec<(String, String)> {
-    let mut out = vec![];
-    for p in plugins {
-        if p.name == "header-mutation" || p.name == "header_mutation" {
-            if let Some(set) = p.extra.get("set").and_then(|v| v.as_object()) {
-                for (k, v) in set {
-                    if let Some(s) = v.as_str() {
-                        out.push((k.clone(), s.to_string()));
-                    }
-                }
-            }
-        }
-    }
-    out
 }
