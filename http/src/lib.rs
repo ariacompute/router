@@ -340,8 +340,10 @@ async fn route_semantic(
         plugins: plugins.clone(),
         locality: loc,
     };
-    let mut stats = RuntimeStats::default();
-    stats.latency_ms = st.pool.latency_map();
+    let stats = RuntimeStats {
+        latency_ms: st.pool.latency_map(),
+        ..Default::default()
+    };
     let model = select(doc, &dummy, &eligible, &stats)?;
     let hdrs = extra_headers(&plugins);
     match apply_request(&st.plugins, &plugins, req)? {

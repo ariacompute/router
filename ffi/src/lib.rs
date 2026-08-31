@@ -1,5 +1,7 @@
 //! C ABI for aria-router (`libaria_router_ffi`).
 
+#![allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: pointers are caller-owned
+
 use aria_router_config::RouterDocument;
 use aria_router_http::{data_router, last_route_json, AppState};
 use axum::body::{to_bytes, Body};
@@ -10,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 thread_local! {
-    static LAST_ERROR: Mutex<Option<CString>> = Mutex::new(None);
+    static LAST_ERROR: Mutex<Option<CString>> = const { Mutex::new(None) };
 }
 
 fn set_err(msg: &str) {
