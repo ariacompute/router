@@ -115,7 +115,7 @@ fn write_out(out: *mut c_char, out_len: usize, s: &str) -> i32 {
         return -1;
     }
     unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out as *mut u8, bytes.len());
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), bytes.len());
         *out.add(bytes.len()) = 0;
     }
     0

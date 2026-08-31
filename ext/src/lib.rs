@@ -36,14 +36,23 @@ impl SubprocessExtension {
 }
 
 fn which(cmd: &str) -> Option<String> {
-    if cmd.contains('/') && Path::new(cmd).exists() {
+    if Path::new(cmd).is_file() {
         return Some(cmd.into());
     }
-    let path = std::env::var("PATH").ok()?;
-    for dir in path.split(':') {
-        let p = Path::new(dir).join(cmd);
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let p = dir.join(cmd);
         if p.is_file() {
             return Some(p.to_string_lossy().into_owned());
+        }
+        #[cfg(windows)]
+        {
+            for ext in [".exe", ".cmd", ".bat", ".com"] {
+                let with_ext = dir.join(format!("{cmd}{ext}"));
+                if with_ext.is_file() {
+                    return Some(with_ext.to_string_lossy().into_owned());
+                }
+            }
         }
     }
     None
@@ -143,27 +152,50 @@ mod tests {
     use super::*;
     use aria_router_core::ModelCard;
 
+    fn mock_echo_command(stem: &str, json_line: &str) -> Vec<String> {
+        let dir = std::env::temp_dir();
+        let out = dir.join(format!("aria-router-{stem}.out"));
+        std::fs::write(&out, format!("{json_line}\n")).unwrap();
+        #[cfg(windows)]
+        {
+            let script = dir.join(format!("aria-router-{stem}.cmd"));
+            std::fs::write(
+                &script,
+                format!("@echo off\r\nset /p line=\r\ntype \"{}\"\r\n", out.display()),
+            )
+            .unwrap();
+            vec![script.to_string_lossy().into_owned()]
+        }
+        #[cfg(not(windows))]
+        {
+            let script = dir.join(format!("aria-router-{stem}.sh"));
+            std::fs::write(
+                &script,
+                format!("#!/bin/sh\nread line\ncat '{}'\n", out.display()),
+            )
+            .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut p = std::fs::metadata(&script).unwrap().permissions();
+                p.set_mode(0o755);
+                std::fs::set_permissions(&script, p).unwrap();
+            }
+            vec![script.to_string_lossy().into_owned()]
+        }
+    }
+
     #[tokio::test]
     async fn mock_script_json() {
-        let dir = std::env::temp_dir();
-        let script = dir.join("aria-router-ext-mock.sh");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\nread line\necho '{\"model\":\"local/general\",\"reason\":\"mock\",\"confidence\":0.9}'\n",
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut p = std::fs::metadata(&script).unwrap().permissions();
-            p.set_mode(0o755);
-            std::fs::set_permissions(&script, p).unwrap();
-        }
+        let command = mock_echo_command(
+            "ext-mock",
+            r#"{"model":"local/general","reason":"mock","confidence":0.9}"#,
+        );
         let ext = SubprocessExtension {
             cfg: ExtensionCfg {
                 name: "mock".into(),
                 ext_type: "deepseek-harness".into(),
-                command: vec![script.to_string_lossy().into_owned()],
+                command,
                 workdir: None,
                 timeout_ms: Some(2000),
                 env: Default::default(),
@@ -206,25 +238,15 @@ mod tests {
 
     #[tokio::test]
     async fn mock_pi_jsonl() {
-        let dir = std::env::temp_dir();
-        let script = dir.join("aria-router-pi-mock.sh");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\nread line\necho '{\"data\":\"{\\\"model\\\":\\\"local/general\\\",\\\"reason\\\":\\\"pi\\\",\\\"confidence\\\":0.7}\"}'\n",
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut p = std::fs::metadata(&script).unwrap().permissions();
-            p.set_mode(0o755);
-            std::fs::set_permissions(&script, p).unwrap();
-        }
+        let command = mock_echo_command(
+            "pi-mock",
+            r#"{"data":"{\"model\":\"local/general\",\"reason\":\"pi\",\"confidence\":0.7}"}"#,
+        );
         let ext = SubprocessExtension {
             cfg: ExtensionCfg {
                 name: "pi".into(),
                 ext_type: "pi".into(),
-                command: vec![script.to_string_lossy().into_owned()],
+                command,
                 workdir: None,
                 timeout_ms: Some(2000),
                 env: Default::default(),
