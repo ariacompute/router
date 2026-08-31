@@ -97,7 +97,7 @@ pub fn select_decision<'a>(
                     .then_with(|| b.priority.cmp(&a.priority))
             });
         }
-        _ => matched.sort_by(|a, b| b.priority.cmp(&a.priority)),
+        _ => matched.sort_by_key(|a| std::cmp::Reverse(a.priority)),
     }
     Ok(matched.into_iter().next())
 }

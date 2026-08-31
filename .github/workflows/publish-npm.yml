@@ -3,8 +3,9 @@ name: Publish npm (@ariacompute/router-ts, @ariacompute/router-rn)
 # Publish the TypeScript SDK (@ariacompute/router-ts) and the React Native
 # binding (@ariacompute/router-rn) to npmjs.com under the `ariacompute`
 # account. Both packages are plain JS (no tsc). Version is injected from
-# the release tag via `npm version --no-git-tag-version` (no git tag, no
-# repo write-back). Publish failures are hard failures (no continue-on-error);
+# the release tag via `npm version --no-git-tag-version --allow-same-version`
+# (no git tag, no repo write-back; same version as package.json is a no-op).
+# Publish failures are hard failures (no continue-on-error);
 # republishing an existing version fails with npm 409 — bump the tag to
 # re-release.
 #
@@ -50,7 +51,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd bindings/typescript
-          npm version "$VERSION" --no-git-tag-version
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
           npm publish --access public
 
   router-rn:
@@ -80,5 +81,5 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd bindings/react-native
-          npm version "$VERSION" --no-git-tag-version
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
           npm publish --access public
