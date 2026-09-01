@@ -367,6 +367,17 @@ impl RouterDocument {
         Ok(doc)
     }
 
+    pub fn from_json_str(raw: &str) -> Result<Self, RouterError> {
+        let doc: Self = serde_json::from_str(raw)
+            .map_err(|e| RouterError::Config(format!("json: {e}")))?;
+        doc.validate()?;
+        Ok(doc)
+    }
+
+    pub fn to_yaml(&self) -> Result<String, RouterError> {
+        serde_yaml::to_string(self).map_err(|e| RouterError::Config(format!("yaml: {e}")))
+    }
+
     pub fn load_path(path: impl AsRef<Path>) -> Result<Self, RouterError> {
         let raw = std::fs::read_to_string(path.as_ref()).map_err(|e| {
             RouterError::Io(format!("read {}: {e}", path.as_ref().display()))

@@ -40,6 +40,7 @@ serde_yaml = "0.9"
 axum = { version = "0.8", features = ["json"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "process", "sync", "time"] }
 tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs"] }
 http-body-util = "0.1"
 bytes = "1"
 futures-util = "0.3"

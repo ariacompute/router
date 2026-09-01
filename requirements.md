@@ -2,7 +2,7 @@
 
 > 本文件为 `router` 仓库 **Semantic + Agent 并列网关 / OpenAI 兼容 HTTP / 八语言 SDK** 的功能边界、API、配置、异常与验收标准。**须经人工逐项审核**，审核通过后方可据其生成 / 执行 `task.md`。
 >
-> 架构参考：[vLLM Semantic Router](https://github.com/vllm-project/semantic-router) YAML v0.3（运行时对等，不做 Dashboard/Operator/Envoy）；agent 面参考 [earendil-works/pi](https://github.com/earendil-works/pi) JSONL RPC 与 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 进程接入。
+> 架构参考：[vLLM Semantic Router](https://github.com/vllm-project/semantic-router) YAML v0.3（运行时对等，不做 Operator/Envoy）；运维 Dashboard 对齐其 dashboard 的 Config / Topology / Playground / Replay，不接 Grafana / ML / Security。agent 面参考 [earendil-works/pi](https://github.com/earendil-works/pi) JSONL RPC 与 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 进程接入。
 
 ## 1. 目标与范围
 
@@ -10,7 +10,7 @@
 
 - **产品面**：`aria-router` CLI（`setup` / `validate` / `serve`）+ 进程内库 + C ABI + 八语言 SDK。
 - **两种 router**：`semantic`（signals → Boolean recipe → algorithm）与 `agent`（LLM agent + extensions）并列；共享 listeners / providers / 硬约束 / 转发 / replay。
-- **不做**：Dashboard、Operator、Helm、官网、Python `vllm-sr`、Envoy ExtProc、把 TS harness 链进 crate。
+- **不做**：Operator、Helm、官网、Python `vllm-sr`、Envoy ExtProc、Grafana / Prometheus、ML wizard、Security Policy、wizmap、fleet-sim、把 TS harness 链进 crate。
 - **与 engine**：engine 仅本地推理；可选向本网关注册为 provider。本仓 SDK 与 `ariacompute-engine` **两套包**，`.so` 名互不覆盖。
 
 ### 1.1 阶段
@@ -23,6 +23,7 @@
 | **C** | 运行时对等 | learned signals（ONNX feature `ml`）、剩余 algorithm/looper/plugin；未实现显式 Unsupported |
 | **D** | 第三方 extensions | `pi` JSONL RPC、`deepseek-harness` 进程；CI 用 mock command |
 | **E** | SDK | C ABI + 八语言；`cases.json`；`run-binding-tests.sh` |
+| **F-dashboard** | 运维面 | 管理面 SPA：Overview / Config（可写热重载）/ Topology / Providers / Replay / Playground |
 
 未达阶段的 YAML 能力须 `Unsupported`，禁止静默空实现。
 
@@ -43,13 +44,14 @@
 | 2 | **semantic** | signals、projections、Boolean AST、priority/confidence、algorithms、plugins |
 | 3 | **agent** | `AgentExtension`；`builtin` / `pi` / `deepseek-harness`；schema 校验；timeout / max_turns |
 | 4 | **provider** | OpenAI 兼容转发、加权 `backend_refs`、health、latency 采样 |
-| 5 | **http** | 数据面 `:8899` chat/SSE/`/v1/models`；管理面默认 `127.0.0.1` health/validate/replay/`PUT` provider |
+| 5 | **http** | 数据面 `:8899` chat/SSE/`/v1/models`；管理面默认 `127.0.0.1` health/validate/replay/providers + Dashboard API |
 | 6 | **ffi** | `libaria_router_ffi`：init/connect/complete/stream/models/last_route |
 | 7 | **bindings** | rust/python/go/typescript/react-native/flutter/swift/kotlin |
+| 8 | **dashboard** | 管理面同端口 SPA（`dashboard/`）；`--no-dashboard` 仅 JSON API |
 
 ### 2.1 非目标
 
-- Envoy ExtProc、Dashboard、Operator、fleet-sim
+- Envoy ExtProc、Operator、Helm、fleet-sim、Grafana / Prometheus、ML Setup、Security Policy、wizmap、独立 dashboard 端口 / OIDC
 - Vendoring Pi / DeepSeek Harness 源码
 - 在 Rust 内重写 Cordis
 
@@ -144,8 +146,17 @@ Extensions：
 - `POST /v1/router/validate`
 - `GET /v1/router/replay?n=`
 - `PUT /v1/router/providers`：engine serve upsert（name、endpoint、provider_model_id）
+- `GET /v1/router/config`：内存文档 JSON + YAML 文本
+- `PUT /v1/router/config`：YAML 或 JSON；`validate` / 缺 extension 二进制失败则 **不替换**；成功换内存文档并写回 `--config` 路径
+- `GET /v1/router/overview`：entrypoint / recipe / provider 计数、`last_route`、health
+- `GET /v1/router/providers`：模型 + `backend_refs` + pool 延迟/失败
+- `GET /v1/router/topology`：entrypoint → recipe（signals / decisions / algorithm / plugins 或 agent extension）→ models
+- `POST /v1/router/chat`：同进程复用数据面管线（Playground 同 origin，不给数据面开 CORS）
+- `GET /` 与 SPA fallback（非 `/v1/*`、非 `/health`）→ `dashboard/dist`；`--no-dashboard` 或无构建产物则不提供 SPA
 
-CLI：`aria-router setup [--status|--clear]` 写入 `~/.ariacompute/router.yml`（YAML v0.3 模板：`semantic` 默认或 `agent`）。`aria-router validate [--config]`；`aria-router serve [--config] [--bind] [--mgmt-bind]`。`--config` 可选，缺省 `~/.ariacompute/router.yml`；文件不存在则报错并提示 `aria-router setup`。
+管理面默认只绑 `127.0.0.1`；绑 `0.0.0.0` 视为运维自担。v1 **无登录**。
+
+CLI：`aria-router setup [--status|--clear]` 写入 `~/.ariacompute/router.yml`（YAML v0.3 模板：`semantic` 默认或 `agent`）。`aria-router validate [--config]`；`aria-router serve [--config] [--bind] [--mgmt-bind] [--no-dashboard]`。`--config` 可选，缺省 `~/.ariacompute/router.yml`；文件不存在则报错并提示 `aria-router setup`。`serve` 在提供 SPA 时打印 `dashboard http://{mgmt}/`。
 
 ### 3.6 错误
 
@@ -181,12 +192,14 @@ C API（`include/aria_router.h`）：
 - C：learned 无权重且被引用 → Unsupported；未知 algorithm 同。
 - D：pi/dsh mock command 产出决策；缺 command 启动失败。
 - E：八语言跑通 `cases.json` 黄金项。
+- F：`PUT /v1/router/config` 非法 YAML 不改文档；合法 tiny YAML 热重载；topology 对 semantic-tiny / agent-tiny 有预期节点；`POST /v1/router/chat` 走 keyword / fake-agent 黄金路径；`--no-dashboard` 时 `/` 不提供 SPA。
 
 ## 5. 目录
 
 ```
 router/
   config/ signal/ decision/ algorithm/ plugin/ provider/ agent/ ext/ http/ bin/ ffi/
+  dashboard/   # Vite React SPA；产物 dashboard/dist 由管理面托管
   bindings/{rust,python,go,typescript,react-native,flutter,swift,kotlin,testdata}/
   config/examples/
   AGENTS.md requirements.md task.md README.md Cargo.toml

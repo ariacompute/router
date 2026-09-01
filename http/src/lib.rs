@@ -1,5 +1,7 @@
 //! OpenAI data plane + management API + routing pipeline.
 
+mod topology;
+
 use aria_router_agent::{task_from, AgentExtension, BuiltinExtension, FakeExtension};
 use aria_router_algorithm::{hard_filter, select, RuntimeStats};
 use aria_router_config::{ExtensionCfg, Recipe, RouterDocument};
@@ -20,10 +22,12 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub struct AppState {
     pub doc: Mutex<RouterDocument>,
+    pub config_path: PathBuf,
     pub pool: PoolState,
     pub plugins: PluginHost,
     pub last_route: Mutex<Option<RouteDecision>>,
@@ -33,8 +37,13 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(doc: RouterDocument) -> Self {
+        Self::with_path(doc, PathBuf::new())
+    }
+
+    pub fn with_path(doc: RouterDocument, config_path: PathBuf) -> Self {
         Self {
             doc: Mutex::new(doc),
+            config_path,
             pool: PoolState::default(),
             plugins: PluginHost::default(),
             last_route: Mutex::new(None),
@@ -56,11 +65,48 @@ pub fn data_router(state: Arc<AppState>) -> Router {
 }
 
 pub fn mgmt_router(state: Arc<AppState>) -> Router {
+    mgmt_api_router(state)
+}
+
+/// Management JSON API plus optional SPA fallback from `static_dir`.
+pub fn mgmt_router_with_dashboard(state: Arc<AppState>, static_dir: impl AsRef<Path>) -> Router {
+    let dir = static_dir.as_ref().to_path_buf();
+    let index = dir.join("index.html");
+    let files = tower_http::services::ServeDir::new(dir)
+        .append_index_html_on_directories(true)
+        .fallback(tower_http::services::ServeFile::new(index));
+    mgmt_api_router(state).fallback_service(files)
+}
+
+/// Resolve `dashboard/dist` next to CWD, the binary, or `ARIA_ROUTER_DASHBOARD`.
+pub fn resolve_dashboard_dir() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("ARIA_ROUTER_DASHBOARD") {
+        let p = PathBuf::from(p);
+        if p.join("index.html").is_file() {
+            return Some(p);
+        }
+    }
+    let mut cands = vec![PathBuf::from("dashboard/dist")];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            cands.push(parent.join("dashboard/dist"));
+            cands.push(parent.join("../dashboard/dist"));
+            cands.push(parent.join("../../dashboard/dist"));
+        }
+    }
+    cands.into_iter().find(|p| p.join("index.html").is_file())
+}
+
+fn mgmt_api_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/v1/router/validate", post(validate_ep))
         .route("/v1/router/replay", get(replay_ep))
-        .route("/v1/router/providers", put(upsert_provider))
+        .route("/v1/router/providers", put(upsert_provider).get(list_providers))
+        .route("/v1/router/config", get(get_config).put(put_config))
+        .route("/v1/router/overview", get(overview_ep))
+        .route("/v1/router/topology", get(topology_ep))
+        .route("/v1/router/chat", post(chat))
         .with_state(state)
 }
 
@@ -157,6 +203,86 @@ fn apply_upsert(st: &AppState, body: ProviderUpsert) -> Result<Json<Value>, Rout
         });
     }
     Ok(Json(json!({"ok": true, "name": body.name})))
+}
+
+async fn list_providers(State(st): State<Arc<AppState>>) -> Json<Value> {
+    Json(providers_json(&st))
+}
+
+fn providers_json(st: &AppState) -> Value {
+    let doc = st.doc.lock().unwrap();
+    let lat = st.pool.latency_map();
+    let fails = st.pool.failures_map();
+    let models: Vec<Value> = doc
+        .providers
+        .models
+        .iter()
+        .map(|m| {
+            json!({
+                "name": m.name,
+                "provider_model_id": m.provider_model_id,
+                "locality": m.locality,
+                "modality": m.modality,
+                "backend_refs": m.backend_refs,
+                "latency_ms": lat.get(&m.name),
+                "failures": fails.get(&m.name).copied().unwrap_or(0),
+            })
+        })
+        .collect();
+    json!({"models": models})
+}
+
+async fn get_config(State(st): State<Arc<AppState>>) -> Result<Json<Value>, AppError> {
+    let doc = snapshot_doc(&st);
+    let yaml = doc.to_yaml().map_err(AppError)?;
+    Ok(Json(json!({"document": doc, "yaml": yaml})))
+}
+
+async fn put_config(
+    State(st): State<Arc<AppState>>,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, AppError> {
+    let raw = String::from_utf8(body.to_vec())
+        .map_err(|e| AppError(RouterError::InvalidParam(e.to_string())))?;
+    let doc = parse_config_body(&raw).map_err(AppError)?;
+    replace_config(&st, doc, &raw).map_err(AppError)?;
+    Ok(Json(json!({"ok": true})))
+}
+
+fn parse_config_body(raw: &str) -> Result<RouterDocument, RouterError> {
+    let trimmed = raw.trim_start();
+    if trimmed.starts_with('{') {
+        RouterDocument::from_json_str(raw)
+    } else {
+        RouterDocument::from_yaml_str(raw)
+    }
+}
+
+fn replace_config(st: &AppState, doc: RouterDocument, raw: &str) -> Result<(), RouterError> {
+    ensure_extensions_startable(&doc)?;
+    if !st.config_path.as_os_str().is_empty() {
+        std::fs::write(&st.config_path, raw).map_err(|e| {
+            RouterError::Io(format!("write {}: {e}", st.config_path.display()))
+        })?;
+    }
+    *st.doc.lock().unwrap() = doc;
+    Ok(())
+}
+
+async fn overview_ep(State(st): State<Arc<AppState>>) -> Json<Value> {
+    let doc = snapshot_doc(&st);
+    Json(json!({
+        "status": "ok",
+        "entrypoints": doc.entrypoints.len(),
+        "recipes": doc.recipes.len(),
+        "providers": doc.providers.models.len(),
+        "last_route": st.last_route.lock().unwrap().clone(),
+    }))
+}
+
+async fn topology_ep(State(st): State<Arc<AppState>>) -> Json<Value> {
+    let doc = snapshot_doc(&st);
+    Json(topology::topology_graph(&doc))
 }
 
 async fn list_models(State(st): State<Arc<AppState>>) -> Json<Value> {
@@ -823,5 +949,208 @@ recipes:
         missing.ext_type = "deepseek-harness".into();
         missing.command = vec!["aria-router-dsh-not-installed".into()];
         assert!(SubprocessExtension { cfg: missing }.ensure_binary().is_err());
+    }
+
+    async fn oneshot_json(app: Router, req: Request<Body>) -> (StatusCode, Value) {
+        let res = app.oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        let v = if bytes.is_empty() {
+            json!({})
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(json!({"raw": String::from_utf8_lossy(&bytes)}))
+        };
+        (status, v)
+    }
+
+    #[tokio::test]
+    async fn put_config_rejects_unknown_block() {
+        let backend = mock_upstream().await;
+        let yaml = tiny_yaml(&backend);
+        let path = std::env::temp_dir().join(format!("aria-router-put-bad-{}.yml", std::process::id()));
+        std::fs::write(&path, &yaml).unwrap();
+        let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
+        let st = Arc::new(AppState::with_path(doc, path.clone()));
+        let before = snapshot_doc(&st);
+        let admin = mgmt_router(st.clone());
+        let (status, _) = oneshot_json(
+            admin,
+            Request::put("/v1/router/config")
+                .header("content-type", "application/yaml")
+                .body(Body::from(format!("{yaml}\nunknown_block: true\n")))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(snapshot_doc(&st).entrypoints.len(), before.entrypoints.len());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn put_config_reloads_tiny_yaml() {
+        let backend = mock_upstream().await;
+        let yaml = tiny_yaml(&backend);
+        let path = std::env::temp_dir().join(format!("aria-router-put-ok-{}.yml", std::process::id()));
+        std::fs::write(&path, &yaml).unwrap();
+        let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
+        let st = Arc::new(AppState::with_path(doc, path.clone()));
+        let admin = mgmt_router(st.clone());
+        let replaced = yaml.replace("aria/semantic-auto", "aria/semantic-renamed");
+        let (status, body) = oneshot_json(
+            admin,
+            Request::put("/v1/router/config")
+                .header("content-type", "application/yaml")
+                .body(Body::from(replaced))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(body["ok"], true);
+        let got = oneshot_json(
+            mgmt_router(st),
+            Request::get("/v1/router/config").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(got.0, 200);
+        let names = got.1["document"]["entrypoints"][0]["model_names"][0].as_str();
+        assert_eq!(names, Some("aria/semantic-renamed"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn topology_semantic_and_agent() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let st = Arc::new(AppState::new(doc));
+        let (status, body) = oneshot_json(
+            mgmt_router(st),
+            Request::get("/v1/router/topology").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let nodes = body["nodes"].as_array().unwrap();
+        let kinds: Vec<&str> = nodes.iter().filter_map(|n| n["kind"].as_str()).collect();
+        assert!(kinds.contains(&"entrypoint"));
+        assert!(kinds.contains(&"recipe"));
+        assert!(kinds.contains(&"signal"));
+        assert!(kinds.contains(&"decision"));
+        assert!(kinds.contains(&"model"));
+        assert!(kinds.contains(&"extension"));
+        let ids: Vec<&str> = nodes.iter().filter_map(|n| n["id"].as_str()).collect();
+        assert!(ids.iter().any(|id| id.contains("needs_explain")));
+        assert!(ids.contains(&"extension:builtin"));
+        assert!(ids.contains(&"model:local/general"));
+    }
+
+    #[tokio::test]
+    async fn playground_chat_and_providers_list() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let st = Arc::new(AppState::new(doc));
+        st.set_fake_agent(
+            "builtin",
+            RouteDecision {
+                model: "local/general".into(),
+                algorithm: Some("static".into()),
+                reason: "fake".into(),
+                confidence: 0.9,
+                layer: "agent".into(),
+                decision: "agent".into(),
+                bypass: false,
+            },
+        );
+        let admin = mgmt_router(st.clone());
+        let res = admin
+            .oneshot(
+                Request::post("/v1/router/chat")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "aria/semantic-auto",
+                            "messages": [{"role":"user","content":"please explain rust"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers().get("x-aria-router-layer").unwrap(),
+            "semantic"
+        );
+
+        let admin = mgmt_router(st.clone());
+        let res = admin
+            .oneshot(
+                Request::put("/v1/router/providers")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "name": "engine/local",
+                            "endpoint": backend,
+                            "provider_model_id": "echo"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+
+        let (status, body) = oneshot_json(
+            mgmt_router(st),
+            Request::get("/v1/router/providers").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let names: Vec<&str> = body["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["name"].as_str())
+            .collect();
+        assert!(names.contains(&"local/general"));
+        assert!(names.contains(&"engine/local"));
+        let engine = body["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == "engine/local")
+            .unwrap();
+        assert_eq!(engine["backend_refs"][0]["endpoint"], backend);
+    }
+
+    #[tokio::test]
+    async fn no_dashboard_root_is_404() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let st = Arc::new(AppState::new(doc));
+        let res = mgmt_router(st)
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn dashboard_serves_index_when_dist_present() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dashboard/dist");
+        if !dir.join("index.html").is_file() {
+            return;
+        }
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let st = Arc::new(AppState::new(doc));
+        let res = mgmt_router_with_dashboard(st, dir)
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        let html = String::from_utf8_lossy(&bytes);
+        assert!(html.contains("aria-router") || html.contains("root"));
     }
 }

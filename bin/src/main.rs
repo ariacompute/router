@@ -1,7 +1,11 @@
 use aria_router_config::{
     clear_default_config, default_config_path, write_default_config, RouterDocument,
 };
-use aria_router_http::{data_router, ensure_extensions_startable, mgmt_router, AppState};
+use aria_router_http::{
+    data_router, ensure_extensions_startable, mgmt_router, mgmt_router_with_dashboard,
+    resolve_dashboard_dir, AppState,
+};
+use std::path::PathBuf;
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
@@ -23,7 +27,7 @@ aria-router {ROUTER_VERSION}
 
 aria-router setup [--status|--clear]
 aria-router validate [--config <file>]
-aria-router serve [--config <file>] [--bind HOST:PORT] [--mgmt-bind HOST:PORT]
+aria-router serve [--config <file>] [--bind HOST:PORT] [--mgmt-bind HOST:PORT] [--no-dashboard]
 aria-router -h | --help | help
 aria-router -v | --version | version
 
@@ -38,6 +42,7 @@ serve                Start data + management HTTP servers
   --config           YAML path (default: ~/.ariacompute/router.yml)
   --bind             Data-plane address (default: first listener, else 0.0.0.0:8899)
   --mgmt-bind        Management address (default: 127.0.0.1:8080)
+  --no-dashboard     JSON management API only (no SPA)
 "
     );
 }
@@ -136,10 +141,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let bind = take_flag(&mut args, "--bind").unwrap_or_else(|| doc.data_bind());
             let mgmt = take_flag(&mut args, "--mgmt-bind")
                 .unwrap_or_else(|| "127.0.0.1:8080".into());
-            let state = Arc::new(AppState::new(doc));
+            let no_dashboard = take_switch(&mut args, "--no-dashboard");
+            let state = Arc::new(AppState::with_path(doc, PathBuf::from(&config)));
             let data = data_router(state.clone());
-            let admin = mgmt_router(state);
-            println!("data {bind}  mgmt {mgmt}");
+            let admin = if no_dashboard {
+                println!("data {bind}  mgmt {mgmt}");
+                mgmt_router(state)
+            } else if let Some(dir) = resolve_dashboard_dir() {
+                println!("data {bind}  mgmt {mgmt}");
+                println!("dashboard http://{mgmt}/");
+                mgmt_router_with_dashboard(state, dir)
+            } else {
+                println!("data {bind}  mgmt {mgmt}");
+                eprintln!("dashboard assets missing (npm --prefix dashboard run build); API only");
+                mgmt_router(state)
+            };
             let data_l = tokio::net::TcpListener::bind(&bind).await?;
             let mgmt_l = tokio::net::TcpListener::bind(&mgmt).await?;
             let a = axum::serve(data_l, data);
@@ -162,4 +178,13 @@ fn take_flag(args: &mut Vec<String>, name: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn take_switch(args: &mut Vec<String>, name: &str) -> bool {
+    if let Some(i) = args.iter().position(|a| a == name) {
+        args.remove(i);
+        true
+    } else {
+        false
+    }
 }

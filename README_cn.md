@@ -25,7 +25,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `recipes` | Semantic 的 `routing.*` 或 agent 的 `agent.*` |
 | `global` | 可观测 / 分类器资产（可选） |
 
-示例：[`config/examples/semantic-tiny.yaml`](config/examples/semantic-tiny.yaml)、[`agent-tiny.yaml`](config/examples/agent-tiny.yaml)、[`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml)。
+示例：[`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml)、[`agent-tiny.yaml`](config/examples/agent-tiny.yaml)、[`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml)。
 
 ```bash
 # 写入 ~/.ariacompute/router.yml（默认 semantic 模板）
@@ -52,7 +52,23 @@ cargo run -p aria-router -- serve \
   --mgmt-bind 127.0.0.1:8090
 ```
 
-`--bind` 是 **数据面**（`POST /v1/chat/completions`、`GET /v1/models`）。`--mgmt-bind` 是 **管理面**（`/health`、validate、replay、provider upsert）。一次请求不会串跑 semantic 与 agent。实名 provider **bypass** recipe，直打该后端。
+`--bind` 是 **数据面**（`POST /v1/chat/completions`、`GET /v1/models`）。`--mgmt-bind` 是 **管理面**（`/health`、validate、replay、providers、config、topology、playground chat，以及运维 Dashboard）。一次请求不会串跑 semantic 与 agent。实名 provider **bypass** recipe，直打该后端。
+
+## Dashboard
+
+管理面在存在 `dashboard/dist` 时托管 Vite React SPA（Overview / Config / Topology / Providers / Replay / Playground），地址为 `http://{mgmt}/`：
+
+```bash
+npm --prefix dashboard ci
+npm --prefix dashboard run build
+cargo run -p aria-router -- serve \
+  --config config/examples/semantic-tiny.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+# 打开 http://127.0.0.1:8090/
+```
+
+`--no-dashboard` 只提供 JSON API。无 Grafana、ML wizard、登录；默认绑 `127.0.0.1`。
 
 硬约束（location / auth / modality / tools）在排名 **之前** 剪枝。Compute 只进排名。无合格路径 → fail closed。
 
@@ -156,6 +172,10 @@ curl -sD - -o /dev/null http://127.0.0.1:8899/v1/chat/completions \
 curl -s http://127.0.0.1:8090/health | jq .
 curl -s -X POST http://127.0.0.1:8090/v1/router/validate | jq .
 curl -s 'http://127.0.0.1:8090/v1/router/replay?n=20' | jq .
+curl -s http://127.0.0.1:8090/v1/router/overview | jq .
+curl -s http://127.0.0.1:8090/v1/router/providers | jq .
+curl -s http://127.0.0.1:8090/v1/router/topology | jq .
+curl -s http://127.0.0.1:8090/v1/router/config | jq .
 ```
 
 响应头：`x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`。

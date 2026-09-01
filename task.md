@@ -81,3 +81,12 @@
 - [x] CLI `aria-router setup [--status|--clear]` 写入 `~/.ariacompute/router.yml`
 - [x] `validate` / `serve` 的 `--config` 可选，缺省该路径
 - [x] 八语言 SDK `Router.setup` / `setup_status` / `setup_clear`；不写 yml
+
+## 阶段 F — 运维 Dashboard
+
+### T12 — 管理面 SPA
+- [x] Spec：`requirements.md` 阶段 F；Dashboard 移出非目标；仍不做 Grafana / ML / Security
+- [x] `GET/PUT /v1/router/config`、overview、providers GET、topology、`POST /v1/router/chat`
+- [x] `serve` 托管 `dashboard/dist`；`--no-dashboard`
+- [x] `dashboard/`：Overview / Config / Topology / Providers / Replay / Playground
+- [x] 单测：非法 PUT 不更新、topology 黄金 YAML、playground chat、providers 列表

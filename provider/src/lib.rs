@@ -31,6 +31,10 @@ impl PoolState {
     pub fn latency_map(&self) -> HashMap<String, f32> {
         self.latency_ms.lock().map(|g| g.clone()).unwrap_or_default()
     }
+
+    pub fn failures_map(&self) -> HashMap<String, u32> {
+        self.failures.lock().map(|g| g.clone()).unwrap_or_default()
+    }
 }
 
 pub async fn forward(

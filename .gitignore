@@ -6,6 +6,7 @@ target
 **/mutants.out*/
 **/*.pyc
 **/node_modules/
+dashboard/dist/
 bindings/python/aria_router/lib/
 bindings/python/build/
 bindings/python/dist/

@@ -25,7 +25,7 @@ Routing policy is YAML v0.3 (`--config`). Secrets expand as `${VAR}` / `${VAR:-d
 | `recipes` | Semantic `routing.*` or agent `agent.*` |
 | `global` | Observability / classifier assets (optional) |
 
-Examples: [`config/examples/semantic-tiny.yaml`](config/examples/semantic-tiny.yaml), [`agent-tiny.yaml`](config/examples/agent-tiny.yaml), [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml).
+Examples: [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml), [`agent-tiny.yaml`](config/examples/agent-tiny.yaml), [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml).
 
 ```bash
 # Setup — writes ~/.ariacompute/router.yml (semantic starter by default)
@@ -57,7 +57,23 @@ cargo run -p aria-router -- serve \
   --mgmt-bind 127.0.0.1:8090
 ```
 
-`--bind` is the **data** plane (`POST /v1/chat/completions`, `GET /v1/models`). `--mgmt-bind` is the **management** plane (`/health`, validate, replay, provider upsert). One request never runs both semantic and agent. Concrete provider names **bypass** recipes and forward straight to that backend.
+`--bind` is the **data** plane (`POST /v1/chat/completions`, `GET /v1/models`). `--mgmt-bind` is the **management** plane (`/health`, validate, replay, providers, config, topology, playground chat, and the ops dashboard). One request never runs both semantic and agent. Concrete provider names **bypass** recipes and forward straight to that backend.
+
+## Dashboard
+
+The management listener serves a Vite React SPA (Overview / Config / Topology / Providers / Replay / Playground) at `http://{mgmt}/` when `dashboard/dist` exists. Build it first:
+
+```bash
+npm --prefix dashboard ci
+npm --prefix dashboard run build
+cargo run -p aria-router -- serve \
+  --config config/examples/semantic-tiny.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+# open http://127.0.0.1:8090/
+```
+
+`--no-dashboard` serves JSON APIs only. There is no Grafana, ML wizard, or login; bind `127.0.0.1` unless you accept an open admin port.
 
 Hard constraints (location / auth / modality / tools) prune **before** ranking. Compute is ranking only. No eligible path → fail closed.
 
@@ -161,6 +177,10 @@ curl -sD - -o /dev/null http://127.0.0.1:8899/v1/chat/completions \
 curl -s http://127.0.0.1:8090/health | jq .
 curl -s -X POST http://127.0.0.1:8090/v1/router/validate | jq .
 curl -s 'http://127.0.0.1:8090/v1/router/replay?n=20' | jq .
+curl -s http://127.0.0.1:8090/v1/router/overview | jq .
+curl -s http://127.0.0.1:8090/v1/router/providers | jq .
+curl -s http://127.0.0.1:8090/v1/router/topology | jq .
+curl -s http://127.0.0.1:8090/v1/router/config | jq .
 ```
 
 Response headers: `x-aria-router-layer`, `x-aria-router-decision`, `x-aria-router-model`.

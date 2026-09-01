@@ -1,0 +1,95 @@
+.h1 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin: 0 0 1rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.card {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 0.85rem 1rem;
+}
+
+.label {
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.value {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin-top: 0.25rem;
+}
+
+.row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0.75rem 0;
+}
+
+.err {
+  color: var(--err);
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.table th,
+.table td {
+  text-align: start;
+  border-bottom: 1px solid var(--line);
+  padding: 0.45rem 0.35rem;
+}
+
+.mono {
+  white-space: pre-wrap;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 0.75rem;
+  overflow: auto;
+}
+
+.flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.col {
+  min-width: 9rem;
+  border: 1px solid var(--line);
+  padding: 0.5rem;
+  background: var(--panel);
+}
+
+.chip {
+  display: block;
+  border: 1px solid var(--line);
+  padding: 0.25rem 0.4rem;
+  margin: 0.25rem 0;
+  font-size: 0.8rem;
+}
+
+.kind {
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
