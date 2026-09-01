@@ -53,11 +53,11 @@ pub struct CostLedger {
 }
 
 impl CostLedger {
-    pub fn record(&mut self, mut ev: CostEvent) {
+    pub fn record(&mut self, ev: CostEvent) {
         *self.session_turns.entry(ev.session.clone()).or_insert(0) += 1;
         self.users.insert(ev.user.clone());
         self.sessions.insert(ev.session.clone());
-        self.bump(&mut ev);
+        self.bump(&ev);
         self.events.push(ev);
         if self.events.len() > MAX_EVENTS {
             self.events.remove(0);

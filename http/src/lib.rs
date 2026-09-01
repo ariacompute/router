@@ -474,6 +474,14 @@ struct CostCtx {
     entrypoint: String,
 }
 
+struct CostUsage<'a> {
+    turns_in_request: u32,
+    upstream_requests: u32,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    tokens_source: &'a str,
+}
+
 fn resolve_chat_auth(
     st: &AppState,
     headers: &HeaderMap,
@@ -538,11 +546,13 @@ async fn route_and_forward(
                 &st,
                 &ctx,
                 &decision,
-                turns_in_request,
-                0,
-                prompt_est,
-                completion,
-                "estimate",
+                CostUsage {
+                    turns_in_request,
+                    upstream_requests: 0,
+                    prompt_tokens: prompt_est,
+                    completion_tokens: completion,
+                    tokens_source: "estimate",
+                },
             );
             let mut res = Json(fast).into_response();
             attach_route_headers(res.headers_mut(), &decision);
@@ -558,11 +568,13 @@ async fn route_and_forward(
                     &st,
                     &ctx,
                     &decision,
-                    turns_in_request,
-                    1,
-                    pt,
-                    ct,
-                    src,
+                    CostUsage {
+                        turns_in_request,
+                        upstream_requests: 1,
+                        prompt_tokens: pt,
+                        completion_tokens: ct,
+                        tokens_source: src,
+                    },
                 );
                 let mut res = Response::builder()
                     .status(200)
@@ -579,11 +591,13 @@ async fn route_and_forward(
                     &st,
                     &ctx,
                     &decision,
-                    turns_in_request,
-                    1,
-                    pt,
-                    ct,
-                    src,
+                    CostUsage {
+                        turns_in_request,
+                        upstream_requests: 1,
+                        prompt_tokens: pt,
+                        completion_tokens: ct,
+                        tokens_source: src,
+                    },
                 );
                 let mut res = Json(body).into_response();
                 attach_route_headers(res.headers_mut(), &decision);
@@ -627,16 +641,7 @@ fn parse_sse_usage(text: &str, prompt_est: u64) -> (u64, u64, &'static str) {
     (prompt_est, estimate_tokens(text) / 4, "estimate")
 }
 
-fn record_cost(
-    st: &AppState,
-    ctx: &CostCtx,
-    decision: &RouteDecision,
-    turns_in_request: u32,
-    upstream_requests: u32,
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    tokens_source: &str,
-) {
+fn record_cost(st: &AppState, ctx: &CostCtx, decision: &RouteDecision, usage: CostUsage<'_>) {
     let doc = snapshot_doc(st);
     let (in_p, out_p, priced) = match doc.provider(&decision.model).and_then(|p| p.pricing.as_ref()) {
         Some(p) if p.input_per_mtok > 0.0 || p.output_per_mtok > 0.0 => {
@@ -644,7 +649,7 @@ fn record_cost(
         }
         _ => (0.0, 0.0, false),
     };
-    let cost = cost_usd(prompt_tokens, completion_tokens, in_p, out_p);
+    let cost = cost_usd(usage.prompt_tokens, usage.completion_tokens, in_p, out_p);
     let ev = CostEvent {
         ts: now_rfc3339(),
         user: ctx.user.clone(),
@@ -656,14 +661,14 @@ fn record_cost(
         decision: decision.decision.clone(),
         model: decision.model.clone(),
         bypass: decision.bypass,
-        turns_in_request: turns_in_request.max(1),
-        upstream_requests,
-        prompt_tokens,
-        completion_tokens,
+        turns_in_request: usage.turns_in_request.max(1),
+        upstream_requests: usage.upstream_requests,
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
         input_per_mtok: in_p,
         output_per_mtok: out_p,
         cost_usd: cost,
-        tokens_source: tokens_source.into(),
+        tokens_source: usage.tokens_source.into(),
         priced,
     };
     st.cost.lock().unwrap().record(ev);

@@ -125,7 +125,7 @@ impl KeyStore {
         rand::thread_rng().fill_bytes(&mut rnd);
         let secret = format!("{SECRET_PREFIX}{}", hex::encode(rnd));
         let hash = sha256_hex(&secret);
-        let id = format!("key_{}", &hex::encode(&rnd[..8]));
+        let id = format!("key_{}", hex::encode(&rnd[..8]));
         let created_at = now_rfc3339();
         let prefix: String = secret.chars().take(12).collect();
         let rec = KeyRecord {
