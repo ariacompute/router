@@ -1,6 +1,4 @@
-use aria_router_config::{
-    clear_default_config, default_config_path, write_default_config, RouterDocument,
-};
+use aria_router_config::{clear_default_config, default_config_path, RouterDocument};
 use aria_router_http::{
     data_router, ensure_extensions_startable, mgmt_router, mgmt_router_with_dashboard,
     resolve_dashboard_dir, AppState,
@@ -71,8 +69,23 @@ fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         let path = default_config_path()?;
         println!("config: {}", path.display());
         if path.exists() {
-            RouterDocument::load_path(&path)?;
+            let doc = RouterDocument::load_path(&path)?;
             println!("ok");
+            println!("require_api_key: {}", doc.global.require_api_key);
+            let kp = doc
+                .global
+                .keys_path
+                .clone()
+                .unwrap_or_else(|| "~/.ariacompute/router-keys.json".into());
+            println!("keys_path: {kp}");
+            let resolved = aria_router_config::resolve_keys_path(&kp)?;
+            if resolved.exists() {
+                let store = aria_router_http::load_keys_for_status(&resolved)?;
+                let (a, r) = store;
+                println!("api_keys: active={a} revoked={r}");
+            } else {
+                println!("api_keys: (file missing)");
+            }
         } else {
             println!("(missing; run aria-router setup)");
         }
@@ -81,6 +94,14 @@ fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|a| a == "--clear") {
         let path = clear_default_config()?;
         println!("cleared {}", path.display());
+        let ans = prompt("also delete router-keys.json? [y/N]: ")?;
+        if matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes") {
+            let kp = aria_router_config::default_keys_path()?;
+            if kp.exists() {
+                std::fs::remove_file(&kp)?;
+                println!("cleared {}", kp.display());
+            }
+        }
         return Ok(());
     }
 
@@ -93,6 +114,8 @@ fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if kind != "semantic" && kind != "agent" {
         return Err(format!("invalid template: {kind}").into());
     }
+    let req_key = prompt("require API key on data plane? [y/N]: ")?;
+    let require_api_key = matches!(req_key.to_ascii_lowercase().as_str(), "y" | "yes");
     let path = default_config_path()?;
     let overwrite = if path.exists() {
         let ans = prompt(&format!("{} exists; overwrite? [y/N]: ", path.display()))?;
@@ -104,7 +127,7 @@ fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         println!("kept {}", path.display());
         return Ok(());
     }
-    let written = write_default_config(&kind, true)?;
+    let written = aria_router_config::write_default_config_with(&kind, true, require_api_key)?;
     println!("wrote {}", written.display());
     Ok(())
 }

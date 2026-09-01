@@ -21,7 +21,25 @@ pub struct RouterDocument {
     #[serde(default)]
     pub recipes: Vec<Recipe>,
     #[serde(default)]
-    pub global: serde_json::Value,
+    pub global: GlobalCfg,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlobalCfg {
+    #[serde(default)]
+    pub require_api_key: bool,
+    #[serde(default)]
+    pub keys_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelPricing {
+    #[serde(default)]
+    pub input_per_mtok: f64,
+    #[serde(default)]
+    pub output_per_mtok: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,7 +92,19 @@ pub struct ProviderModel {
     #[serde(default)]
     pub backend_refs: Vec<BackendRef>,
     #[serde(default)]
-    pub pricing: Option<serde_json::Value>,
+    pub pricing: Option<ModelPricing>,
+}
+
+impl ProviderModel {
+    /// Effective ranking cost for multi-factor (prefer output price, else input).
+    pub fn ranking_cost(&self) -> f32 {
+        match &self.pricing {
+            Some(p) if p.output_per_mtok > 0.0 || p.input_per_mtok > 0.0 => {
+                p.output_per_mtok.max(p.input_per_mtok) as f32
+            }
+            _ => 1.0,
+        }
+    }
 }
 
 fn default_locality() -> String {
@@ -567,9 +597,40 @@ pub fn default_config_path() -> Result<PathBuf, RouterError> {
     Ok(aria_home()?.join("router.yml"))
 }
 
+pub fn default_keys_path() -> Result<PathBuf, RouterError> {
+    Ok(aria_home()?.join("router-keys.json"))
+}
+
+/// Expand `~/` or leave absolute/relative paths as-is under aria home resolution.
+pub fn resolve_keys_path(raw: &str) -> Result<PathBuf, RouterError> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return default_keys_path();
+    }
+    if let Some(rest) = t.strip_prefix("~/") {
+        let home = dirs::home_dir().ok_or_else(|| {
+            RouterError::Io("could not resolve home directory".into())
+        })?;
+        return Ok(home.join(rest));
+    }
+    if t.starts_with('/') {
+        return Ok(PathBuf::from(t));
+    }
+    Ok(aria_home()?.join(t))
+}
+
 /// Write a v0.3 starter YAML to `~/.ariacompute/router.yml`.
 /// `kind` is `semantic` (default) or `agent`.
 pub fn write_default_config(kind: &str, overwrite: bool) -> Result<PathBuf, RouterError> {
+    write_default_config_with(kind, overwrite, false)
+}
+
+/// Like [`write_default_config`], with optional `require_api_key` in `global:`.
+pub fn write_default_config_with(
+    kind: &str,
+    overwrite: bool,
+    require_api_key: bool,
+) -> Result<PathBuf, RouterError> {
     let path = default_config_path()?;
     if path.exists() && !overwrite {
         return Err(RouterError::Io(format!(
@@ -586,8 +647,32 @@ pub fn write_default_config(kind: &str, overwrite: bool) -> Result<PathBuf, Rout
             )))
         }
     };
+    let keys = default_keys_path()?;
+    let keys_disp = format!("~/.ariacompute/{}", keys.file_name().and_then(|s| s.to_str()).unwrap_or("router-keys.json"));
+    let mut doc: serde_yaml::Value = serde_yaml::from_str(body).map_err(|e| {
+        RouterError::Config(format!("embedded template: {e}"))
+    })?;
+    if let Some(map) = doc.as_mapping_mut() {
+        let mut g = serde_yaml::Mapping::new();
+        g.insert(
+            serde_yaml::Value::String("require_api_key".into()),
+            serde_yaml::Value::Bool(require_api_key),
+        );
+        g.insert(
+            serde_yaml::Value::String("keys_path".into()),
+            serde_yaml::Value::String(keys_disp),
+        );
+        map.insert(
+            serde_yaml::Value::String("global".into()),
+            serde_yaml::Value::Mapping(g),
+        );
+    }
+    let out = serde_yaml::to_string(&doc).map_err(|e| RouterError::Config(e.to_string()))?;
     std::fs::create_dir_all(aria_home()?)?;
-    std::fs::write(&path, body)?;
+    std::fs::write(&path, out)?;
+    if !keys.exists() {
+        std::fs::write(&keys, "{\n  \"keys\": []\n}\n")?;
+    }
     RouterDocument::load_path(&path)?;
     Ok(path)
 }

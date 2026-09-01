@@ -6,9 +6,13 @@ import Topology from './pages/Topology';
 import Providers from './pages/Providers';
 import Replay from './pages/Replay';
 import Playground from './pages/Playground';
+import Cost from './pages/Cost';
+import Keys from './pages/Keys';
 
 const links = [
   { to: '/', label: 'Overview', end: true },
+  { to: '/cost', label: 'Cost' },
+  { to: '/keys', label: 'API keys' },
   { to: '/config', label: 'Config' },
   { to: '/topology', label: 'Topology' },
   { to: '/providers', label: 'Providers' },
@@ -37,6 +41,8 @@ export default function App() {
       <main className={styles.main}>
         <Routes>
           <Route path="/" element={<Overview />} />
+          <Route path="/cost" element={<Cost />} />
+          <Route path="/keys" element={<Keys />} />
           <Route path="/config" element={<Config />} />
           <Route path="/topology" element={<Topology />} />
           <Route path="/providers" element={<Providers />} />

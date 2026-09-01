@@ -24,6 +24,7 @@
 | **D** | 第三方 extensions | `pi` JSONL RPC、`deepseek-harness` 进程；CI 用 mock command |
 | **E** | SDK | C ABI + 八语言；`cases.json`；`run-binding-tests.sh` |
 | **F-dashboard** | 运维面 | 管理面 SPA：Overview / Config（可写热重载）/ Topology / Providers / Replay / Playground |
+| **G-cost** | 成本 + API key | 六因子成本账本；YAML `pricing`；Dashboard「API 密钥」签发；数据面 / provider 注册 Bearer；engine 传 `router_api_key` |
 
 未达阶段的 YAML 能力须 `Unsupported`，禁止静默空实现。
 
@@ -47,11 +48,14 @@
 | 5 | **http** | 数据面 `:8899` chat/SSE/`/v1/models`；管理面默认 `127.0.0.1` health/validate/replay/providers + Dashboard API |
 | 6 | **ffi** | `libaria_router_ffi`：init/connect/complete/stream/models/last_route |
 | 7 | **bindings** | rust/python/go/typescript/react-native/flutter/swift/kotlin |
-| 8 | **dashboard** | 管理面同端口 SPA（`dashboard/`）；`--no-dashboard` 仅 JSON API |
+| 8 | **dashboard** | 管理面同端口 SPA（`dashboard/`）；`--no-dashboard` 仅 JSON API；Cost / API 密钥页 |
+| 9 | **cost** | 内存六因子账本；`GET /v1/router/cost`；按 model/layer/entrypoint/key 分桶 |
+| 10 | **api-keys** | Dashboard 签发；`keys_path` 只存 sha256；数据面与 `PUT /providers` Bearer；`require_api_key` |
 
 ### 2.1 非目标
 
-- Envoy ExtProc、Operator、Helm、fleet-sim、Grafana / Prometheus、ML Setup、Security Policy、wizmap、独立 dashboard 端口 / OIDC
+- Envoy ExtProc、Operator、Helm、fleet-sim、Grafana / Prometheus、ML Setup、Security Policy、wizmap、独立 dashboard 端口 / OIDC / 密码登录
+- 硬 quota、Slack 告警、把 Dashboard `sk-aria_` 当 HF/ModelScope token
 - Vendoring Pi / DeepSeek Harness 源码
 - 在 Rust 内重写 Cordis
 
@@ -80,6 +84,9 @@ providers:
           endpoint: 127.0.0.1:8000
           protocol: http
           weight: 100
+      pricing:                    # 可选；USD / 百万 token
+        input_per_mtok: 0.15
+        output_per_mtok: 0.60
 extensions: []
 entrypoints:
   - model_names: [aria/semantic-auto]
@@ -92,10 +99,12 @@ recipes:
       strategy: priority
       signals: { keywords: [...] }
       decisions: [...]
-global: {}
+global:
+  require_api_key: false          # true → 数据面 chat 与 PUT providers 须 Bearer
+  keys_path: ~/.ariacompute/router-keys.json
 ```
 
-密钥：`${VAR}` / `${VAR:-default}`。未知顶层块 → validate 失败。
+密钥：`${VAR}` / `${VAR:-default}`。未知顶层块 → validate 失败。未知 `global` / `pricing` 子键 → validate 失败。`backend_refs.api_key` 仅转发上游，与 Dashboard 签发的客户端 key **不是同一把**。
 
 ### 3.2 Semantic signals
 
@@ -139,28 +148,35 @@ Extensions：
 - `POST /v1/chat/completions` JSON + SSE
 - `GET /v1/models`：entrypoint 虚拟名 + 实名 provider 名
 - 响应头 `x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`
+- `global.require_api_key: true` 时须 `Authorization: Bearer` 或 `x-api-key` 命中未吊销密钥，否则 **401**
 
 **管理面**（默认 `127.0.0.1:8080`）：
 
 - `GET /health`
 - `POST /v1/router/validate`
 - `GET /v1/router/replay?n=`
-- `PUT /v1/router/providers`：engine serve upsert（name、endpoint、provider_model_id）
+- `PUT /v1/router/providers`：engine serve upsert；`require_api_key: true` 时同样须 Bearer，否则 401
 - `GET /v1/router/config`：内存文档 JSON + YAML 文本
 - `PUT /v1/router/config`：YAML 或 JSON；`validate` / 缺 extension 二进制失败则 **不替换**；成功换内存文档并写回 `--config` 路径
-- `GET /v1/router/overview`：entrypoint / recipe / provider 计数、`last_route`、health
+- `GET /v1/router/overview`：entrypoint / recipe / provider 计数、`last_route`、health、`cost` 摘要、api key 计数
 - `GET /v1/router/providers`：模型 + `backend_refs` + pool 延迟/失败
 - `GET /v1/router/topology`：entrypoint → recipe（signals / decisions / algorithm / plugins 或 agent extension）→ models
-- `POST /v1/router/chat`：同进程复用数据面管线（Playground 同 origin，不给数据面开 CORS）
+- `POST /v1/router/chat`：同进程复用数据面管线（Playground；记 `user=playground`）；不要求客户端 Bearer
+- `GET /v1/router/cost`：六因子 totals/factors、`by_model` / `by_layer` / `by_entrypoint` / `by_key`、`recent`
+- `GET /v1/router/keys`：元数据列表（无明文 secret）
+- `POST /v1/router/keys`：`{name}` → `{id,name,prefix,secret}`（secret 仅此一次）
+- `DELETE /v1/router/keys/:id`：吊销（幂等）
 - `GET /` 与 SPA fallback（非 `/v1/*`、非 `/health`）→ `dashboard/dist`；`--no-dashboard` 或无构建产物则不提供 SPA
 
-管理面默认只绑 `127.0.0.1`；绑 `0.0.0.0` 视为运维自担。v1 **无登录**。
+管理面默认只绑 `127.0.0.1`；绑 `0.0.0.0` 视为运维自担。v1 **无登录**（本机 SPA 可签发密钥）。密钥明文只在 POST 响应出现一次；磁盘 `keys_path` 只存 sha256。
 
-CLI：`aria-router setup [--status|--clear]` 写入 `~/.ariacompute/router.yml`（YAML v0.3 模板：`semantic` 默认或 `agent`）。`aria-router validate [--config]`；`aria-router serve [--config] [--bind] [--mgmt-bind] [--no-dashboard]`。`--config` 可选，缺省 `~/.ariacompute/router.yml`；文件不存在则报错并提示 `aria-router setup`。`serve` 在提供 SPA 时打印 `dashboard http://{mgmt}/`。
+CLI：`aria-router setup` 在 template 后询问 `require API key on data plane?`，写入 `global.require_api_key` + `keys_path`；**不**在 CLI 签发 secret。`--status` 显示开关、路径、key 数量。`--clear` 默认只删 `router.yml`。`validate` / `serve` 同前。
+
+**与 engine**：engine `setup` 写入 `router_api_key`；`serve --router` / `--router-api-key` 在 `PUT /v1/router/providers` 带 Bearer。
 
 ### 3.6 错误
 
-`RouterError::{Io, Config, Unsupported, InvalidParam, FailClosed, Upstream, Timeout, Extension}`。禁止 panic 当控制流。
+`RouterError::{Io, Config, Unsupported, InvalidParam, FailClosed, Upstream, Timeout, Extension, Unauthorized}`。禁止 panic 当控制流。
 
 ### 3.7 FFI / SDK
 
@@ -193,6 +209,7 @@ C API（`include/aria_router.h`）：
 - D：pi/dsh mock command 产出决策；缺 command 启动失败。
 - E：八语言跑通 `cases.json` 黄金项。
 - F：`PUT /v1/router/config` 非法 YAML 不改文档；合法 tiny YAML 热重载；topology 对 semantic-tiny / agent-tiny 有预期节点；`POST /v1/router/chat` 走 keyword / fake-agent 黄金路径；`--no-dashboard` 时 `/` 不提供 SPA。
+- G：带 `usage` 的 mock chat 计入账本；无 usage → estimate；无 pricing → `cost=0` 且 `priced=false`；`require_api_key: true` 无 Bearer 聊天与 PUT providers → 401；合法 key → 200 且 `by_key` 有 id；吊销后 401；Cost JSON 含六因子键。
 
 ## 5. 目录
 

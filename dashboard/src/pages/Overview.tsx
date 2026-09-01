@@ -35,6 +35,20 @@ export default function Overview() {
           <div className={styles.label}>Providers</div>
           <div className={styles.value}>{data.providers}</div>
         </div>
+        <div className={styles.card}>
+          <div className={styles.label}>Cost (USD)</div>
+          <div className={styles.value}>
+            {data.cost ? `$${data.cost.cost_usd.toFixed(4)}` : '—'}
+          </div>
+        </div>
+        <div className={styles.card}>
+          <div className={styles.label}>API keys</div>
+          <div className={styles.value}>
+            {data.api_keys
+              ? `${data.api_keys.active} active / ${data.api_keys.revoked} revoked`
+              : '—'}
+          </div>
+        </div>
       </div>
       <h2 className={styles.h1}>Last route</h2>
       <pre className={styles.mono}>

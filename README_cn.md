@@ -35,7 +35,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 | [`ffi.yaml`](config/examples/ffi.yaml) | 黄金 `fast-response` + 同上 catalog recipe |
 
 ```bash
-# 写入 ~/.ariacompute/router.yml（默认 semantic 模板）
+# 写入 ~/.ariacompute/router.yml（默认 semantic 模板）。
+# 会询问是否在数据面（及 provider 注册）强制 API key；密钥只在 Dashboard「API 密钥」签发。
 aria-router setup
 aria-router setup --status
 
@@ -63,7 +64,7 @@ cargo run -p aria-router -- serve \
 
 ## Dashboard
 
-管理面在存在 `dashboard/dist` 时托管 Vite React SPA（Overview / Config / Topology / Providers / Replay / Playground），地址为 `http://{mgmt}/`：
+管理面在存在 `dashboard/dist` 时托管 Vite React SPA（Overview / Cost / API 密钥 / Config / Topology / Providers / Replay / Playground），地址为 `http://{mgmt}/`：
 
 ```bash
 npm --prefix dashboard ci
@@ -75,7 +76,21 @@ cargo run -p aria-router -- serve \
 # 打开 http://127.0.0.1:8090/
 ```
 
-`--no-dashboard` 只提供 JSON API。无 Grafana、ML wizard、登录；默认绑 `127.0.0.1`。
+`--no-dashboard` 只提供 JSON API（仍可用 curl 管理 keys/cost）。无 Grafana、ML wizard、登录；默认绑 `127.0.0.1`。
+
+### API 密钥与成本
+
+1. Dashboard → **API 密钥** → 生成（`sk-aria_…` 只显示一次），或 `POST /v1/router/keys`。
+2. `aria-router setup` 可打开 `global.require_api_key`，使 chat 与 `PUT /v1/router/providers` 需要 Bearer。
+3. 客户端与 `aria-engine` 使用同一把 secret（engine：`router_api_key` / `--router-api-key`）。
+4. **Cost** 页 / `GET /v1/router/cost` 展示六因子与 `by_key`（YAML `pricing`）。
+
+```bash
+curl -s http://127.0.0.1:8899/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'Authorization: Bearer sk-aria_…' \
+  -d '{"model":"local/general","messages":[{"role":"user","content":"Hi"}],"max_tokens":16}'
+```
 
 硬约束（location / auth / modality / tools）在排名 **之前** 剪枝。Compute 只进排名。无合格路径 → fail closed。
 
@@ -91,15 +106,18 @@ cargo run -p aria-router -- serve \
   --mgmt-bind 127.0.0.1:8090
 
 # 2. engine 仓 — OpenAI 在 :8080，再 PUT 到管理面
+# 若 router 开启 require_api_key，需带 Dashboard 签发的 secret：
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
+  --router-api-key sk-aria_… \
   --compute auto
 
-# engine 侧也可写入配置，不必每次带 --router：
-#   aria-engine setup  # 可选填写 router URL
+# engine 侧也可写入配置，不必每次带旗标：
+#   aria-engine setup  # router URL + 可选 router API key
 #   # 或 ~/.ariacompute/engine.yml：
 #   # router: http://127.0.0.1:8090
+#   # router_api_key: sk-aria_…
 
 # 3. 经本网关对话（实名 = bypass → 已注册 engine）
 curl -s http://127.0.0.1:8899/v1/chat/completions \

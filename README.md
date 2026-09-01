@@ -35,7 +35,9 @@ Examples (English comments in every file):
 | [`ffi.yaml`](config/examples/ffi.yaml) | gold `fast-response` plus the same catalog recipe |
 
 ```bash
-# Setup — writes ~/.ariacompute/router.yml (semantic starter by default)
+# Setup — writes ~/.ariacompute/router.yml (semantic starter by default).
+# Prompts whether to require API keys on the data plane (and provider registration).
+# Secrets are issued only in Dashboard → API keys (not by CLI).
 aria-router setup
 aria-router setup --status
 
@@ -68,7 +70,7 @@ cargo run -p aria-router -- serve \
 
 ## Dashboard
 
-The management listener serves a Vite React SPA (Overview / Config / Topology / Providers / Replay / Playground) at `http://{mgmt}/` when `dashboard/dist` exists. Build it first:
+The management listener serves a Vite React SPA (Overview / Cost / API keys / Config / Topology / Providers / Replay / Playground) at `http://{mgmt}/` when `dashboard/dist` exists. Build it first:
 
 ```bash
 npm --prefix dashboard ci
@@ -80,7 +82,27 @@ cargo run -p aria-router -- serve \
 # open http://127.0.0.1:8090/
 ```
 
-`--no-dashboard` serves JSON APIs only. There is no Grafana, ML wizard, or login; bind `127.0.0.1` unless you accept an open admin port.
+`--no-dashboard` serves JSON APIs only (keys/cost CRUD still work via curl). There is no Grafana, ML wizard, or login; bind `127.0.0.1` unless you accept an open admin port.
+
+### API keys and cost
+
+1. Open Dashboard → **API keys** → Generate (`sk-aria_…` shown once). Or `POST /v1/router/keys`.
+2. `aria-router setup` → enable `global.require_api_key` when you want chat and `PUT /v1/router/providers` to require Bearer.
+3. Clients and `aria-engine` pass `Authorization: Bearer sk-aria_…` (engine: `router_api_key` / `--router-api-key`).
+4. **Cost** page / `GET /v1/router/cost` shows six-factor spend and `by_key` (YAML `pricing.input_per_mtok` / `output_per_mtok`).
+
+```bash
+# Chat with API key (when require_api_key: true)
+curl -s http://127.0.0.1:8899/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'Authorization: Bearer sk-aria_…' \
+  -d '{"model":"local/general","messages":[{"role":"user","content":"Hi"}],"max_tokens":16}'
+
+# Issue a key via management (no Bearer needed on 127.0.0.1 mgmt)
+curl -s -X POST http://127.0.0.1:8090/v1/router/keys \
+  -H 'content-type: application/json' \
+  -d '{"name":"ops"}' | jq .
+```
 
 Hard constraints (location / auth / modality / tools) prune **before** ranking. Compute is ranking only. No eligible path → fail closed.
 
@@ -96,15 +118,18 @@ cargo run -p aria-router -- serve \
   --mgmt-bind 127.0.0.1:8090
 
 # 2. engine repo — OpenAI on :8080, then PUT to management
+# When router require_api_key is true, pass the Dashboard-issued secret:
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
+  --router-api-key sk-aria_… \
   --compute auto
 
-# Persist on the engine side instead of --router each time:
-#   aria-engine setup  # optional router URL
+# Persist on the engine side instead of --router / --router-api-key each time:
+#   aria-engine setup  # router URL + optional router API key (from Dashboard)
 #   # or ~/.ariacompute/engine.yml:
 #   # router: http://127.0.0.1:8090
+#   # router_api_key: sk-aria_…
 
 # 3. Chat via this gateway (concrete name = bypass → registered engine)
 curl -s http://127.0.0.1:8899/v1/chat/completions \

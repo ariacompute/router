@@ -24,7 +24,12 @@ serde_json.workspace = true
 async-trait.workspace = true
 http-body-util.workspace = true
 bytes.workspace = true
+sha2 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 axum = { workspace = true }
+tempfile = "3"

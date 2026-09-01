@@ -90,3 +90,14 @@
 - [x] `serve` 托管 `dashboard/dist`；`--no-dashboard`
 - [x] `dashboard/`：Overview / Config / Topology / Providers / Replay / Playground
 - [x] 单测：非法 PUT 不更新、topology 黄金 YAML、playground chat、providers 列表
+
+## 阶段 G — 成本 + API key
+
+### T13 — 六因子账本与密钥
+- [x] Spec：`requirements.md` 阶段 G；`pricing` / `require_api_key` / `keys_path`
+- [x] `setup` 询问 API key 开关；密钥仅 Dashboard / `POST /v1/router/keys` 签发
+- [x] 数据面 chat 与 `PUT /providers`：`require_api_key` → Bearer/401
+- [x] `CostLedger` + `GET /v1/router/cost`（含 `by_key`）；overview 摘要
+- [x] Dashboard：Cost 页 + API 密钥页
+- [x] engine：`router_api_key` / `--router-api-key`；`register_with_router` 带 Authorization
+- [x] 单测：usage 计费、401、CRUD、by_key、engine Bearer

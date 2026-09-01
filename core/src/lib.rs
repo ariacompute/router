@@ -21,6 +21,8 @@ pub enum RouterError {
     Timeout(String),
     #[error("extension: {0}")]
     Extension(String),
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
 }
 
 impl From<std::io::Error> for RouterError {
