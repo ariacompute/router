@@ -718,4 +718,39 @@ recipes:
             None => std::env::remove_var("ARIA_COMPUTE_HOME"),
         }
     }
+
+    #[test]
+    fn example_yamls_validate() {
+        for raw in [
+            include_str!("../examples/semantic-tiny.yaml"),
+            include_str!("../examples/agent-tiny.yaml"),
+            include_str!("../examples/ffi-tiny.yaml"),
+            include_str!("../examples/semantic.yaml"),
+            include_str!("../examples/agent.yaml"),
+            include_str!("../examples/ffi.yaml"),
+        ] {
+            RouterDocument::from_yaml_str(raw).unwrap();
+        }
+    }
+
+    #[test]
+    fn catalog_examples_reference_learned_and_declare_extensions() {
+        let semantic = RouterDocument::from_yaml_str(include_str!("../examples/semantic.yaml")).unwrap();
+        let catalog = semantic.recipe("mom-catalog").unwrap();
+        assert!(!semantic.learned_signal_referenced(catalog).is_empty());
+        let mom = semantic.recipe("mom").unwrap();
+        assert!(semantic.learned_signal_referenced(mom).is_empty());
+
+        let ffi = RouterDocument::from_yaml_str(include_str!("../examples/ffi.yaml")).unwrap();
+        let ffi_cat = ffi.recipe("mom-catalog").unwrap();
+        assert!(!ffi.learned_signal_referenced(ffi_cat).is_empty());
+
+        let agent = RouterDocument::from_yaml_str(include_str!("../examples/agent.yaml")).unwrap();
+        let types: Vec<&str> = agent.extensions.iter().map(|e| e.ext_type.as_str()).collect();
+        assert!(types.contains(&"builtin"));
+        assert!(types.contains(&"pi"));
+        assert!(types.contains(&"deepseek-harness"));
+        assert_eq!(agent.recipe("agent-pi").unwrap().agent.as_ref().unwrap().extension, "pi");
+        assert_eq!(agent.recipe("agent-dsh").unwrap().agent.as_ref().unwrap().extension, "dsh");
+    }
 }

@@ -1,0 +1,94 @@
+# Catalog FFI config (YAML v0.3).
+# Gold-path entrypoint: aria/semantic-auto — in-process FFI tests need no upstream
+#   (fast-response plugin). Same contract as ffi-tiny.yaml.
+# Catalog entrypoint: aria/semantic-catalog — validate succeeds; chat is Unsupported
+#   (learned signal referenced + unimplemented algorithm).
+# Does not declare pi / deepseek-harness so aria_router_init can load this file
+#   without a subprocess check. Prefer ffi-tiny.yaml in binding tests.
+
+version: v0.3
+
+# Data-plane bind hint. FFI init does not open this listener.
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+    timeout: 300s
+
+# Backend is unused on the gold path because fast-response short-circuits.
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+          protocol: http
+          weight: 100
+        - name: unused
+          endpoint: 127.0.0.1:9
+          protocol: http
+          weight: 0
+
+global: {}
+
+extensions:
+  - name: builtin
+    type: builtin
+
+entrypoints:
+  - model_names: [aria/semantic-auto]
+    router: semantic
+    recipe: mom
+  - model_names: [aria/semantic-catalog]
+    router: semantic
+    recipe: mom-catalog
+
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: unused
+            operator: OR
+            keywords: []
+      decisions:
+        - name: canned
+          description: Always match; return a canned completion (no upstream)
+          priority: 1
+          rules:
+            operator: AND
+            conditions: []
+          modelRefs:
+            - model: local/general
+          algorithm: static
+          plugins:
+            - name: fast-response
+              message: hello-from-router
+
+  # Catalog only. extract() is Unsupported because classifier is referenced.
+  - name: mom-catalog
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        classifier:
+          weights: catalog-placeholder
+      decisions:
+        - name: learned_route
+          priority: 1
+          rules:
+            operator: AND
+            conditions:
+              - type: classifier
+                name: catalog
+          modelRefs:
+            - model: local/general
+          algorithm: svm

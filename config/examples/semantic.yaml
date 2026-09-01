@@ -1,0 +1,188 @@
+# Catalog semantic config (YAML v0.3).
+# Gold-path entrypoint: aria/semantic-auto (heuristic signals only; serve + chat work
+#   if backends are up). Daily serve should still prefer semantic-tiny.yaml.
+# Catalog entrypoint: aria/semantic-catalog — validate succeeds; every chat on this
+#   virtual model is Unsupported (a decision references a learned signal, and one
+#   decision uses an unimplemented algorithm).
+# Does not declare pi / deepseek-harness, so serve is not blocked on those binaries.
+# entrypoint.router must equal recipe.router. Secrets: ${VAR} / ${VAR:-default}.
+
+version: v0.3
+
+# Data-plane bind hint (used as --bind default).
+listeners:
+  - name: http-8899
+    address: 127.0.0.1
+    port: 8899
+    timeout: 300s
+
+# Named models and weighted backends. locality is a hard constraint (local|private|cloud).
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/fast
+      provider_model_id: echo-fast
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:8000
+          protocol: http
+          weight: 70
+          # Empty default: no Bearer unless the operator exports the var.
+          api_key_env: ${ARIA_UPSTREAM_KEY:-}
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:8000
+          protocol: http
+          weight: 100
+          api_key_env: ${ARIA_UPSTREAM_KEY:-}
+
+# Optional observability / classifier asset blob (unused by the gold path).
+global: {}
+
+# Virtual model names → recipe. Concrete provider names bypass recipes.
+entrypoints:
+  - model_names: [aria/semantic-auto]
+    router: semantic
+    recipe: mom
+  - model_names: [aria/semantic-catalog]
+    router: semantic
+    recipe: mom-catalog
+
+recipes:
+  # Stage B: heuristics + projections + implemented algorithms/plugins.
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain", "walk me through"]
+        language:
+          - name: english
+            code: en
+        context:
+          - name: long_prompt
+            min_tokens: 32
+            max_tokens: 8192
+        authz:
+          - name: admin_role
+            role: admin
+        conversation:
+          - name: multi_turn
+            min_messages: 2
+        metadata:
+          - name: tenant_acme
+            key: tenant
+            value: acme
+        event:
+          - name: ticket
+            code: TICKET-
+        structure:
+          - name: multi_question
+            min_questions: 2
+      # partition / score / mapping (computed; not eligibility).
+      projections:
+        - name: topic
+          type: partition
+          signals: [needs_explain, ticket]
+        - name: explain_score
+          type: score
+          weights:
+            needs_explain: 1.0
+            long_prompt: 0.3
+        - name: explain_band
+          type: mapping
+          from: explain_score
+          bands:
+            - name: high
+              min: 0.8
+              max: 1.0
+            - name: default
+              min: 0.0
+              max: 0.8
+      decisions:
+        - name: explanatory
+          description: Keyword hit → static pick + request plugins
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+          algorithm: static
+          plugins:
+            - name: system-prompt
+              content: Answer briefly and cite the routed model.
+            - name: header-mutation
+              set:
+                x-aria-route: explanatory
+            - name: request-params
+              max_tokens: 64
+        - name: long_context
+          description: Long prompt → latency-aware ranking
+          priority: 80
+          rules:
+            operator: AND
+            conditions:
+              - type: context
+                name: long_prompt
+          modelRefs:
+            - model: local/fast
+            - model: local/general
+          algorithm: latency-aware
+        - name: fallback_pool
+          description: Default pool → multi-factor + exact response cache
+          priority: 1
+          rules:
+            operator: AND
+            conditions: []
+          modelRefs:
+            - model: local/fast
+            - model: local/general
+          algorithm: multi-factor
+          plugins:
+            - name: response-cache
+
+  # Catalog only: learned signal referenced + unimplemented algorithm (knn).
+  # validate succeeds (names are known). Chat on aria/semantic-catalog → Unsupported
+  # because extract() scans every decision in this recipe for learned types.
+  - name: mom-catalog
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+        # Learned families (stage C / feature ml). Presence is allowed.
+        classifier:
+          weights: catalog-placeholder
+        complexity: {}
+        domain: {}
+      decisions:
+        - name: learned_route
+          description: References classifier — extract() is Unsupported without ml
+          priority: 50
+          rules:
+            operator: AND
+            conditions:
+              - type: classifier
+                name: catalog
+          modelRefs:
+            - model: local/general
+          # knn is in KNOWN_ALGOS so validate passes; select() is Unsupported.
+          algorithm: knn

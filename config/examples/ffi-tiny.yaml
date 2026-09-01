@@ -1,8 +1,18 @@
+# Gold-path FFI config (YAML v0.3).
+# Entrypoint: aria/semantic-auto. fast-response returns a canned completion so
+# binding tests need no upstream. Backend 127.0.0.1:9 is unused on this path.
+# Prefer this file in cases.json / run-binding-tests.sh. See ffi.yaml for catalog.
+# entrypoint.router must equal recipe.router.
+
 version: v0.3
+
+# Data-plane bind hint. FFI init does not open this listener.
 listeners:
   - name: http
     address: 127.0.0.1
     port: 8899
+
+# Unused when fast-response short-circuits.
 providers:
   defaults:
     default_model: local/general
@@ -15,13 +25,16 @@ providers:
       backend_refs:
         - name: primary
           endpoint: 127.0.0.1:9
+
 extensions:
   - name: builtin
     type: builtin
+
 entrypoints:
   - model_names: [aria/semantic-auto]
     router: semantic
     recipe: mom
+
 recipes:
   - name: mom
     router: semantic

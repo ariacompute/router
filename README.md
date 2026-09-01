@@ -25,7 +25,14 @@ Routing policy is YAML v0.3 (`--config`). Secrets expand as `${VAR}` / `${VAR:-d
 | `recipes` | Semantic `routing.*` or agent `agent.*` |
 | `global` | Observability / classifier assets (optional) |
 
-Examples: [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml), [`agent-tiny.yaml`](config/examples/agent-tiny.yaml), [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml).
+Examples (English comments in every file):
+
+| File | Role |
+|------|------|
+| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) / [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) / [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | Gold path — `validate` + `serve` / FFI |
+| [`semantic.yaml`](config/examples/semantic.yaml) | heuristics plus `aria/semantic-catalog` (learned signal + unimplemented algorithm → chat `Unsupported`) |
+| [`agent.yaml`](config/examples/agent.yaml) | `builtin` + `pi` + `deepseek-harness`. `validate` ok; `serve` needs those binaries |
+| [`ffi.yaml`](config/examples/ffi.yaml) | gold `fast-response` plus the same catalog recipe |
 
 ```bash
 # Setup — writes ~/.ariacompute/router.yml (semantic starter by default)

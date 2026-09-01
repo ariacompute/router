@@ -1,8 +1,18 @@
+# Gold-path agent config (YAML v0.3).
+# Entrypoint: aria/agent-auto. builtin extension only — serve does not need pi / dsh.
+# validate and serve work. Prefer this file for daily serve. See agent.yaml for
+# builtin + pi + deepseek-harness (serve fails if those binaries are missing).
+# entrypoint.router must equal recipe.router.
+
 version: v0.3
+
+# Data-plane bind hint (used as --bind default).
 listeners:
   - name: http
     address: 127.0.0.1
     port: 8899
+
+# Eligible pool. locality is a hard constraint before the agent sees candidates.
 providers:
   defaults:
     default_model: local/general
@@ -15,13 +25,17 @@ providers:
       backend_refs:
         - name: primary
           endpoint: 127.0.0.1:8000
+
+# In-process tool-call JSON. No subprocess binary check.
 extensions:
   - name: builtin
     type: builtin
+
 entrypoints:
   - model_names: [aria/agent-auto]
     router: agent
     recipe: agent-default
+
 recipes:
   - name: agent-default
     router: agent

@@ -25,7 +25,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `recipes` | Semantic 的 `routing.*` 或 agent 的 `agent.*` |
 | `global` | 可观测 / 分类器资产（可选） |
 
-示例：[`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml)、[`agent-tiny.yaml`](config/examples/agent-tiny.yaml)、[`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml)。
+示例（YAML 内注释为英文）：
+
+| 文件 | 用途 |
+|------|------|
+| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) / [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) / [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | 黄金路径 — 可 `validate` + `serve` / FFI |
+| [`semantic.yaml`](config/examples/semantic.yaml) | 启发式 + `aria/semantic-catalog`（learned signal 与未实现 algorithm → chat `Unsupported`） |
+| [`agent.yaml`](config/examples/agent.yaml) | `builtin` + `pi` + `deepseek-harness`。`validate` 通过；`serve` 需本机二进制 |
+| [`ffi.yaml`](config/examples/ffi.yaml) | 黄金 `fast-response` + 同上 catalog recipe |
 
 ```bash
 # 写入 ~/.ariacompute/router.yml（默认 semantic 模板）
