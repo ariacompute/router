@@ -3,21 +3,21 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ariarouter"
+name = "ariacompute-router"
 version = "0.1.0"
-description = "Python SDK for ariarouter (ctypes over libariarouter_ffi)"
+description = "Python SDK for aria-router (ctypes over libaria_router_ffi)"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Aria Compute" }]
 
 [tool.setuptools.packages.find]
-include = ["ariarouter*"]
+include = ["aria_router*"]
 
 [tool.setuptools.package-data]
-ariarouter = ["lib/*.so", "lib/*.dylib", "lib/*.dll"]
+aria_router = ["lib/*.so", "lib/*.dylib", "lib/*.dll"]
 
 [tool.cibuildwheel]
 build = "cp310-* cp311-* cp312-* cp313-*"
 skip = "*musllinux*"
 archs = ["auto"]
-test-command = "python -c \"from ariarouter import Router; print('ok')\""
+test-command = "python -c \"from aria_router import Router; print('ok')\""

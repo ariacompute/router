@@ -1,17 +1,17 @@
 [package]
-name = "ariarouter"
+name = "aria-router"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
 [[bin]]
-name = "ariarouter"
+name = "aria-router"
 path = "src/main.rs"
 
 [dependencies]
-ariarouter-config.workspace = true
-ariarouter-http.workspace = true
-ariarouter-core.workspace = true
+aria-router-config.workspace = true
+aria-router-http.workspace = true
+aria-router-core.workspace = true
 axum.workspace = true
 tokio.workspace = true

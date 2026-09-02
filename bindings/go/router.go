@@ -1,11 +1,11 @@
-//go:build ariarouter_ffi
+//go:build aria_router_ffi
 
-package ariarouter
+package aria
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../ffi/include
-#cgo LDFLAGS: -L${SRCDIR}/../../target/debug -L${SRCDIR}/../../target/release -lariarouter_ffi
-#include "ariarouter.h"
+#cgo LDFLAGS: -L${SRCDIR}/../../target/debug -L${SRCDIR}/../../target/release -laria_router_ffi
+#include "aria_router.h"
 #include <stdlib.h>
 */
 import "C"
@@ -40,9 +40,9 @@ func (r *Router) SetupClear() {
 func (r *Router) Init(configPath string) error {
 	cs := C.CString(configPath)
 	defer C.free(unsafe.Pointer(cs))
-	h := C.ariarouter_init(cs)
+	h := C.aria_router_init(cs)
 	if h == nil {
-		return errors.New(C.GoString(C.ariarouter_last_error()))
+		return errors.New(C.GoString(C.aria_router_last_error()))
 	}
 	r.Close()
 	r.h = unsafe.Pointer(h)
@@ -51,12 +51,12 @@ func (r *Router) Init(configPath string) error {
 
 func (r *Router) Close() {
 	if r.h != nil {
-		C.ariarouter_destroy((*C.Ariarouter)(r.h))
+		C.aria_router_destroy((*C.AriaRouter)(r.h))
 		r.h = nil
 	}
 }
 
-func (r *Router) native() *C.Ariarouter { return (*C.Ariarouter)(r.h) }
+func (r *Router) native() *C.AriaRouter { return (*C.AriaRouter)(r.h) }
 
 func (r *Router) Complete(messages any, options any) (map[string]any, error) {
 	mb, _ := json.Marshal(messages)
@@ -65,9 +65,9 @@ func (r *Router) Complete(messages any, options any) (map[string]any, error) {
 	defer C.free(unsafe.Pointer(ms))
 	defer C.free(unsafe.Pointer(os_))
 	buf := make([]byte, 256*1024)
-	rc := C.ariarouter_complete(r.native(), ms, os_, (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
+	rc := C.aria_router_complete(r.native(), ms, os_, (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
 	if rc != 0 {
-		return nil, errors.New(C.GoString(C.ariarouter_last_error()))
+		return nil, errors.New(C.GoString(C.aria_router_last_error()))
 	}
 	var out map[string]any
 	n := 0
@@ -82,9 +82,9 @@ func (r *Router) Complete(messages any, options any) (map[string]any, error) {
 
 func (r *Router) Models() (map[string]any, error) {
 	buf := make([]byte, 64*1024)
-	rc := C.ariarouter_models(r.native(), (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
+	rc := C.aria_router_models(r.native(), (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
 	if rc != 0 {
-		return nil, errors.New(C.GoString(C.ariarouter_last_error()))
+		return nil, errors.New(C.GoString(C.aria_router_last_error()))
 	}
 	n := 0
 	for n < len(buf) && buf[n] != 0 {
@@ -99,9 +99,9 @@ func (r *Router) Models() (map[string]any, error) {
 
 func (r *Router) LastRoute() (map[string]any, error) {
 	buf := make([]byte, 64*1024)
-	rc := C.ariarouter_last_route(r.native(), (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
+	rc := C.aria_router_last_route(r.native(), (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
 	if rc != 0 {
-		return nil, errors.New(C.GoString(C.ariarouter_last_error()))
+		return nil, errors.New(C.GoString(C.aria_router_last_error()))
 	}
 	n := 0
 	for n < len(buf) && buf[n] != 0 {
@@ -114,4 +114,4 @@ func (r *Router) LastRoute() (map[string]any, error) {
 	return out, nil
 }
 
-func ConfigEnv() string { return os.Getenv("ARIAROUTER_CONFIG") }
+func ConfigEnv() string { return os.Getenv("ARIA_ROUTER_CONFIG") }

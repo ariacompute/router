@@ -3,7 +3,7 @@
 #   (fast-response plugin). Same contract as ffi-tiny.yaml.
 # Catalog entrypoint: aria/semantic-catalog — validate succeeds; chat is Unsupported
 #   (learned signal referenced + unimplemented algorithm).
-# Does not declare pi / deepseek-harness so ariarouter_init can load this file
+# Does not declare pi / deepseek-harness so aria_router_init can load this file
 #   without a subprocess check. Prefer ffi-tiny.yaml in binding tests.
 
 version: v0.3

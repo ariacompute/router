@@ -1,4 +1,4 @@
-/// ariarouter Flutter SDK (C ABI via FFI on device; auth is in-memory).
+/// aria-router Flutter SDK (C ABI via FFI on device; auth is in-memory).
 library;
 
 class SetupConfig {

@@ -1,9 +1,9 @@
 [package]
-name = "ariarouter-core"
+name = "aria-router-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Shared types and RouterError for ariarouter"
+description = "Shared types and RouterError for aria-router"
 
 [dependencies]
 thiserror.workspace = true

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build libariarouter_ffi and copy the platform dynamic library into the Python wheel.
+# Build libaria_router_ffi and copy the platform dynamic library into the Python wheel.
 # Used as cibuildwheel CIBW_BEFORE_ALL so each platform wheel bundles its own lib.
 #
 # Context: on Linux this runs INSIDE a manylinux container (no Rust preinstalled);
@@ -30,7 +30,7 @@ case "$HOST_TRIPLE" in
   *-musl*)
     echo "ERROR: rust host triple is '$HOST_TRIPLE' (musl)." >&2
     echo "Rust drops the cdylib crate type on musl targets (crt-static default)," >&2
-    echo "so libariarouter_ffi.so cannot be produced here. musllinux wheels are" >&2
+    echo "so libaria_router_ffi.so cannot be produced here. musllinux wheels are" >&2
     echo "disabled; make sure CIBW_SKIP=musllinux* is applied so only manylinux" >&2
     echo "builds run." >&2
     exit 1
@@ -38,12 +38,12 @@ case "$HOST_TRIPLE" in
 esac
 
 case "$(uname -s)" in
-  Darwin)          LIB="libariarouter_ffi.dylib";;
-  MINGW*|MSYS*|CYGWIN*) LIB="ariarouter_ffi.dll";;
-  *)               LIB="libariarouter_ffi.so";;
+  Darwin)          LIB="libaria_router_ffi.dylib";;
+  MINGW*|MSYS*|CYGWIN*) LIB="aria_router_ffi.dll";;
+  *)               LIB="libaria_router_ffi.so";;
 esac
 
-cargo build --release -p ariacompute-ariarouter-ffi
+cargo build --release -p ariacompute-router-ffi
 
 SRC=""
 for c in "target/release/$LIB" "${CARGO_TARGET_DIR:+$CARGO_TARGET_DIR/release/$LIB}"; do
@@ -56,7 +56,7 @@ if [ -z "$SRC" ]; then
   SRC="$(find . -maxdepth 4 -type f -name "$LIB" -path '*/release/*' 2>/dev/null | head -1 || true)"
 fi
 if [ -z "$SRC" ]; then
-  echo "ERROR: $LIB not found after 'cargo build --release -p ariacompute-ariarouter-ffi'" >&2
+  echo "ERROR: $LIB not found after 'cargo build --release -p ariacompute-router-ffi'" >&2
   echo "--- target/release ---" >&2
   ls -la target/release 2>/dev/null | head -20 || true
   echo "--- found libs ---" >&2
@@ -64,7 +64,7 @@ if [ -z "$SRC" ]; then
   exit 1
 fi
 
-DEST="bindings/python/ariarouter/lib"
+DEST="bindings/python/aria_router/lib"
 mkdir -p "$DEST"
 cp "$SRC" "$DEST/"
 echo "FFI copied $SRC -> $DEST"

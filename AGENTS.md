@@ -6,7 +6,7 @@
 `router` 仓库 = aria 推理网关（Rust）：独立 OpenAI 兼容 HTTP，**不走 Envoy**。
 两种并列决策器：**semantic**（对齐 vLLM Semantic Router YAML v0.3）与 **agent**
 （LLM agent + extensions 接入 pi / deepseek-harness）。共享 providers、硬约束、转发。
-产物：`ariarouter` CLI + C ABI + 八语言 SDK（与 engine SDK **两套包**）。
+产物：`aria-router` CLI + C ABI + 八语言 SDK（与 engine SDK **两套包**）。
 
 ## 架构
 OpenAI 面 → Entrypoint（`semantic` | `agent`）→ 硬约束剪枝 → 决策 → plugin → provider。
@@ -16,8 +16,8 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 
 ## 目录
 - `config/` `signal/` `decision/` `algorithm/` `plugin/` `provider/` `agent/` `ext/` `http/`：运行时 crate
-- `bin/`：`ariarouter` CLI（setup / validate / serve）
-- `ffi/`：`ariacompute-ariarouter-ffi`（`libariarouter_ffi`）
+- `bin/`：`aria-router`（setup / validate / serve）
+- `ffi/`：`ariacompute-router-ffi`（`libaria_router_ffi`）
 - `bindings/`：rust / python / go / typescript / react-native / flutter / swift / kotlin
 - `dashboard/`：管理面 SPA（Overview / Config / Topology / Providers / Replay / Playground）
 - 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
@@ -32,9 +32,9 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 
 ## 常用命令
 - `cargo test`
-- `cargo run -p ariarouter -- setup`
-- `cargo run -p ariarouter -- validate`
-- `cargo run -p ariarouter -- serve --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090`
+- `cargo run -p aria-router -- setup`
+- `cargo run -p aria-router -- validate`
+- `cargo run -p aria-router -- serve --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090`
 - `npm --prefix dashboard ci && npm --prefix dashboard run build`
 - `./scripts/run-binding-tests.sh`
 

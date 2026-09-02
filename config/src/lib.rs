@@ -1,6 +1,6 @@
 //! YAML v0.3 document load + validate.
 
-use ariarouter_core::{RouterError, RouterKind};
+use aria_router_core::{RouterError, RouterKind};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -576,7 +576,7 @@ pub fn expand_env(raw: &str) -> String {
     .into_owned()
 }
 
-/// Embedded starter templates written by `ariarouter setup`.
+/// Embedded starter templates written by `aria-router setup`.
 pub const SEMANTIC_TINY_YAML: &str = include_str!("../examples/semantic-tiny.yaml");
 pub const AGENT_TINY_YAML: &str = include_str!("../examples/agent-tiny.yaml");
 
@@ -594,11 +594,11 @@ pub fn aria_home() -> Result<PathBuf, RouterError> {
 }
 
 pub fn default_config_path() -> Result<PathBuf, RouterError> {
-    Ok(aria_home()?.join("ariarouter.yml"))
+    Ok(aria_home()?.join("router.yml"))
 }
 
 pub fn default_keys_path() -> Result<PathBuf, RouterError> {
-    Ok(aria_home()?.join("ariarouter-keys.json"))
+    Ok(aria_home()?.join("router-keys.json"))
 }
 
 /// Expand `~/` or leave absolute/relative paths as-is under aria home resolution.
@@ -619,7 +619,7 @@ pub fn resolve_keys_path(raw: &str) -> Result<PathBuf, RouterError> {
     Ok(aria_home()?.join(t))
 }
 
-/// Write a v0.3 starter YAML to `~/.ariacompute/ariarouter.yml`.
+/// Write a v0.3 starter YAML to `~/.ariacompute/router.yml`.
 /// `kind` is `semantic` (default) or `agent`.
 pub fn write_default_config(kind: &str, overwrite: bool) -> Result<PathBuf, RouterError> {
     write_default_config_with(kind, overwrite, false)
@@ -648,7 +648,7 @@ pub fn write_default_config_with(
         }
     };
     let keys = default_keys_path()?;
-    let keys_disp = format!("~/.ariacompute/{}", keys.file_name().and_then(|s| s.to_str()).unwrap_or("ariarouter-keys.json"));
+    let keys_disp = format!("~/.ariacompute/{}", keys.file_name().and_then(|s| s.to_str()).unwrap_or("router-keys.json"));
     let mut doc: serde_yaml::Value = serde_yaml::from_str(body).map_err(|e| {
         RouterError::Config(format!("embedded template: {e}"))
     })?;
@@ -775,7 +775,7 @@ recipes:
         let dir = tempfile::tempdir().unwrap();
         let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
         std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
-        assert_eq!(default_config_path().unwrap(), dir.path().join("ariarouter.yml"));
+        assert_eq!(default_config_path().unwrap(), dir.path().join("router.yml"));
         match prev {
             Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
             None => std::env::remove_var("ARIA_COMPUTE_HOME"),
@@ -789,7 +789,7 @@ recipes:
         let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
         std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
         let path = write_default_config("semantic", true).unwrap();
-        assert_eq!(path, dir.path().join("ariarouter.yml"));
+        assert_eq!(path, dir.path().join("router.yml"));
         let doc = RouterDocument::load_path(&path).unwrap();
         assert_eq!(doc.entrypoints[0].router, RouterKind::Semantic);
         assert!(write_default_config("semantic", false).is_err());

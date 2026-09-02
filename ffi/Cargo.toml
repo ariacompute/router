@@ -1,18 +1,18 @@
 [package]
-name = "ariacompute-ariarouter-ffi"
+name = "ariacompute-router-ffi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "C ABI for ariarouter (libariarouter_ffi)"
+description = "C ABI for aria-router (libaria_router_ffi)"
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
-name = "ariarouter_ffi"
+name = "aria_router_ffi"
 
 [dependencies]
-ariarouter-config.workspace = true
-ariarouter-http.workspace = true
-ariarouter-core.workspace = true
+aria-router-config.workspace = true
+aria-router-http.workspace = true
+aria-router-core.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 libc.workspace = true

@@ -21,56 +21,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "ariacompute-ariarouter"
+name = "aria-router"
 version = "0.1.0"
 dependencies = [
- "ariarouter-config",
- "ariarouter-core",
- "ariarouter-http",
- "axum",
- "bytes",
- "http-body-util",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tower",
-]
-
-[[package]]
-name = "ariacompute-ariarouter-ffi"
-version = "0.1.0"
-dependencies = [
- "ariarouter-config",
- "ariarouter-core",
- "ariarouter-http",
- "axum",
- "bytes",
- "http-body-util",
- "libc",
- "reqwest",
- "serde_json",
- "tokio",
- "tower",
-]
-
-[[package]]
-name = "ariarouter"
-version = "0.1.0"
-dependencies = [
- "ariarouter-config",
- "ariarouter-core",
- "ariarouter-http",
+ "aria-router-config",
+ "aria-router-core",
+ "aria-router-http",
  "axum",
  "tokio",
 ]
 
 [[package]]
-name = "ariarouter-agent"
+name = "aria-router-agent"
 version = "0.1.0"
 dependencies = [
- "ariarouter-config",
- "ariarouter-core",
+ "aria-router-config",
+ "aria-router-core",
  "async-trait",
  "reqwest",
  "serde",
@@ -79,18 +45,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "ariarouter-algorithm"
+name = "aria-router-algorithm"
 version = "0.1.0"
 dependencies = [
- "ariarouter-config",
- "ariarouter-core",
+ "aria-router-config",
+ "aria-router-core",
 ]
 
 [[package]]
-name = "ariarouter-config"
+name = "aria-router-config"
 version = "0.1.0"
 dependencies = [
- "ariarouter-core",
+ "aria-router-core",
  "dirs",
  "regex",
  "serde",
@@ -100,7 +66,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ariarouter-core"
+name = "aria-router-core"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -109,41 +75,41 @@ dependencies = [
 ]
 
 [[package]]
-name = "ariarouter-decision"
+name = "aria-router-decision"
 version = "0.1.0"
 dependencies = [
- "ariarouter-config",
- "ariarouter-core",
- "ariarouter-signal",
+ "aria-router-config",
+ "aria-router-core",
+ "aria-router-signal",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "ariarouter-ext"
+name = "aria-router-ext"
 version = "0.1.0"
 dependencies = [
- "ariarouter-agent",
- "ariarouter-config",
- "ariarouter-core",
+ "aria-router-agent",
+ "aria-router-config",
+ "aria-router-core",
  "async-trait",
  "serde_json",
  "tokio",
 ]
 
 [[package]]
-name = "ariarouter-http"
+name = "aria-router-http"
 version = "0.1.0"
 dependencies = [
- "ariarouter-agent",
- "ariarouter-algorithm",
- "ariarouter-config",
- "ariarouter-core",
- "ariarouter-decision",
- "ariarouter-ext",
- "ariarouter-plugin",
- "ariarouter-provider",
- "ariarouter-signal",
+ "aria-router-agent",
+ "aria-router-algorithm",
+ "aria-router-config",
+ "aria-router-core",
+ "aria-router-decision",
+ "aria-router-ext",
+ "aria-router-plugin",
+ "aria-router-provider",
+ "aria-router-signal",
  "async-trait",
  "axum",
  "bytes",
@@ -161,21 +127,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "ariarouter-plugin"
+name = "aria-router-plugin"
 version = "0.1.0"
 dependencies = [
- "ariarouter-config",
- "ariarouter-core",
+ "aria-router-config",
+ "aria-router-core",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "ariarouter-provider"
+name = "aria-router-provider"
 version = "0.1.0"
 dependencies = [
- "ariarouter-config",
- "ariarouter-core",
+ "aria-router-config",
+ "aria-router-core",
  "reqwest",
  "serde",
  "serde_json",
@@ -183,13 +149,47 @@ dependencies = [
 ]
 
 [[package]]
-name = "ariarouter-signal"
+name = "aria-router-signal"
 version = "0.1.0"
 dependencies = [
- "ariarouter-config",
- "ariarouter-core",
+ "aria-router-config",
+ "aria-router-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ariacompute-router"
+version = "0.1.0"
+dependencies = [
+ "aria-router-config",
+ "aria-router-core",
+ "aria-router-http",
+ "axum",
+ "bytes",
+ "http-body-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
+
+[[package]]
+name = "ariacompute-router-ffi"
+version = "0.1.0"
+dependencies = [
+ "aria-router-config",
+ "aria-router-core",
+ "aria-router-http",
+ "axum",
+ "bytes",
+ "http-body-util",
+ "libc",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

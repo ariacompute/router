@@ -10,13 +10,13 @@ test('setup memory only', () => {
   assert.equal(st.token, 't');
 });
 
-test('setup does not write ariarouter.yml', () => {
+test('setup does not write router.yml', () => {
   const prev = process.env.ARIA_COMPUTE_HOME;
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ariarouter-rn-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aria-router-rn-'));
   process.env.ARIA_COMPUTE_HOME = home;
   try {
     applySetup(defaultSetup(), { token: 't' });
-    assert.equal(fs.existsSync(path.join(home, 'ariarouter.yml')), false);
+    assert.equal(fs.existsSync(path.join(home, 'router.yml')), false);
     assert.equal(fs.existsSync(path.join(home, 'engine.yml')), false);
     assert.equal(fs.existsSync(path.join(home, 'config.yml')), false);
   } finally {

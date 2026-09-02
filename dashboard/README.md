@@ -1,11 +1,11 @@
-# ariarouter dashboard
+# aria-router dashboard
 
 Ops SPA served from the management listener (`--mgmt-bind`). Pages: Overview, Config, Topology, Providers, Replay, Playground.
 
 ```bash
 npm --prefix dashboard ci
 npm --prefix dashboard run build
-cargo run -p ariarouter -- serve \
+cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
   --mgmt-bind 127.0.0.1:8090
 ```

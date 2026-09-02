@@ -1,5 +1,5 @@
 {
-  "name": "@ariacompute/ariarouter-ts",
+  "name": "@ariacompute/router-ts",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.js",

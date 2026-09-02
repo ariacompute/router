@@ -1,13 +1,13 @@
 [package]
-name = "ariarouter-decision"
+name = "aria-router-decision"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Boolean decisions and projections for ariarouter"
+description = "Boolean decisions and projections for aria-router"
 
 [dependencies]
-ariarouter-core.workspace = true
-ariarouter-config.workspace = true
-ariarouter-signal.workspace = true
+aria-router-core.workspace = true
+aria-router-config.workspace = true
+aria-router-signal.workspace = true
 serde.workspace = true
 serde_json.workspace = true

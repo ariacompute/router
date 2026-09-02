@@ -7,7 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  BIN_NAME: ariarouter
+  BIN_NAME: aria-router
 
 jobs:
   build:
@@ -57,11 +57,11 @@ jobs:
           TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          # Embed release tag (sans leading v) into ariarouter -v/--version.
-          export ARIAROUTER_VERSION="${TAG_NAME#v}"
-          echo "ARIAROUTER_VERSION=$ARIAROUTER_VERSION"
-          cargo build --release -p ariarouter
-          cargo build --release -p ariacompute-ariarouter-ffi
+          # Embed release tag (sans leading v) into aria-router -v/--version.
+          export ARIA_ROUTER_VERSION="${TAG_NAME#v}"
+          echo "ARIA_ROUTER_VERSION=$ARIA_ROUTER_VERSION"
+          cargo build --release -p aria-router
+          cargo build --release -p ariacompute-router-ffi
 
       - name: Package release archive (Unix)
         if: matrix.archive == 'tar.gz'
@@ -72,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG_NAME#v}"
-          ARCHIVE_NAME="ariarouter_${VERSION}_${ASSET_OS}.tar.gz"
+          ARCHIVE_NAME="router_${VERSION}_${ASSET_OS}.tar.gz"
           tar -czf "$ARCHIVE_NAME" -C target/release "$BIN_NAME"
           echo "ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
 
@@ -84,11 +84,11 @@ jobs:
           ASSET_OS: ${{ matrix.asset_os }}
         run: |
           $version = $env:TAG_NAME.TrimStart('v')
-          $archiveName = "ariarouter_${version}_$($env:ASSET_OS).zip"
+          $archiveName = "router_${version}_$($env:ASSET_OS).zip"
           Compress-Archive -Path "target/release/$($env:BIN_NAME).exe" -DestinationPath $archiveName -Force
           Add-Content -Path $env:GITHUB_ENV -Value "ASSET_PATH=$archiveName"
 
-      - name: Package libariarouter_ffi (Unix)
+      - name: Package libaria_router_ffi (Unix)
         if: matrix.archive == 'tar.gz'
         shell: bash
         env:
@@ -97,23 +97,23 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG_NAME#v}"
-          ARCHIVE_NAME="libariarouter_ffi_${VERSION}_${ASSET_OS}.tar.gz"
+          ARCHIVE_NAME="libaria_router_ffi_${VERSION}_${ASSET_OS}.tar.gz"
           cd target/release
-          if [[ -f libariarouter_ffi.dylib ]]; then
-            tar -czf "../../$ARCHIVE_NAME" libariarouter_ffi.dylib
-          elif [[ -f libariarouter_ffi.so ]]; then
-            tar -czf "../../$ARCHIVE_NAME" libariarouter_ffi.so
-          elif [[ -f libariarouter_ffi.a ]]; then
-            tar -czf "../../$ARCHIVE_NAME" libariarouter_ffi.a
+          if [[ -f libaria_router_ffi.dylib ]]; then
+            tar -czf "../../$ARCHIVE_NAME" libaria_router_ffi.dylib
+          elif [[ -f libaria_router_ffi.so ]]; then
+            tar -czf "../../$ARCHIVE_NAME" libaria_router_ffi.so
+          elif [[ -f libaria_router_ffi.a ]]; then
+            tar -czf "../../$ARCHIVE_NAME" libaria_router_ffi.a
           else
-            echo "No libariarouter_ffi shared/static library found in target/release" >&2
+            echo "No libaria_router_ffi shared/static library found in target/release" >&2
             ls -la
             exit 1
           fi
           cd ../..
           echo "FFI_ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
 
-      - name: Package libariarouter_ffi (Windows)
+      - name: Package libaria_router_ffi (Windows)
         if: matrix.archive == 'zip'
         shell: bash
         env:
@@ -122,15 +122,15 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG_NAME#v}"
-          ARCHIVE_NAME="libariarouter_ffi_${VERSION}_${ASSET_OS}.tar.gz"
+          ARCHIVE_NAME="libaria_router_ffi_${VERSION}_${ASSET_OS}.tar.gz"
           cd target/release
-          if [[ -f ariarouter_ffi.dll ]]; then
-            FILES=(ariarouter_ffi.dll)
-            [[ -f ariarouter_ffi.dll.lib ]] && FILES+=(ariarouter_ffi.dll.lib)
-            [[ -f ariarouter_ffi.lib ]] && FILES+=(ariarouter_ffi.lib)
+          if [[ -f aria_router_ffi.dll ]]; then
+            FILES=(aria_router_ffi.dll)
+            [[ -f aria_router_ffi.dll.lib ]] && FILES+=(aria_router_ffi.dll.lib)
+            [[ -f aria_router_ffi.lib ]] && FILES+=(aria_router_ffi.lib)
             tar -czf "../../$ARCHIVE_NAME" "${FILES[@]}"
           else
-            echo "No ariarouter_ffi.dll found in target/release" >&2
+            echo "No aria_router_ffi.dll found in target/release" >&2
             ls -la
             exit 1
           fi
@@ -162,15 +162,15 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION"
-      - name: npm @ariacompute/ariarouter-ts + router-rn
+      - name: npm @ariacompute/router-ts + router-rn
         continue-on-error: true
         run: |
           echo "npm publish handled by publish-npm.yml (router-ts / router-rn)"
           echo "npm publish stub (fail-pass)"
-      - name: pub.dev package:ariarouter
+      - name: pub.dev package:aria_router
         continue-on-error: true
         run: |
-          echo "pub.dev publish handled by publish-pub.yml (publisher ariacompute.com, package:ariarouter)"
+          echo "pub.dev publish handled by publish-pub.yml (publisher ariacompute.com, package:aria_router)"
           echo "pub.dev publish stub (fail-pass)"
       - name: Maven Central com.ariacompute:router
         continue-on-error: true
@@ -180,14 +180,14 @@ jobs:
       - name: CocoaPods Swift
         continue-on-error: true
         run: |
-          echo "Configure COCOAPODS_TRUNK_TOKEN then: pod trunk push bindings/swift/Ariarouter.podspec"
+          echo "Configure COCOAPODS_TRUNK_TOKEN then: pod trunk push bindings/swift/AriaRouter.podspec"
           echo "CocoaPods publish stub (fail-pass)"
-      - name: crates.io ariacompute-ariarouter
+      - name: crates.io ariacompute-router
         continue-on-error: true
         run: |
-          echo "crates.io publish handled by publish-cargo.yml (ariacompute-ariarouter + deps)"
+          echo "crates.io publish handled by publish-cargo.yml (ariacompute-router + deps)"
           echo "crates.io publish stub (fail-pass)"
-      - name: PyPI ariarouter
+      - name: PyPI ariacompute-router
         continue-on-error: true
         run: |
           echo "PyPI publish handled by publish-pypi.yml (cibuildwheel platform wheels)"

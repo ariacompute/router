@@ -1,12 +1,12 @@
 [package]
-name = "ariarouter-plugin"
+name = "aria-router-plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Request/response plugins for ariarouter"
+description = "Request/response plugins for aria-router"
 
 [dependencies]
-ariarouter-core.workspace = true
-ariarouter-config.workspace = true
+aria-router-core.workspace = true
+aria-router-config.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-Aria Compute inference gateway: OpenAI-compatible HTTP, two parallel routers (**semantic** YAML v0.3 and **agent** via extensions). Shared providers, hard constraints, and forwarding. Not Envoy. Local inference lives in the **engine** repo (`ariaengine`). Engine SDK and this SDK are **two package families** (`libariaengine_ffi` vs `libariarouter_ffi`).
+Aria Compute inference gateway: OpenAI-compatible HTTP, two parallel routers (**semantic** YAML v0.3 and **agent** via extensions). Shared providers, hard constraints, and forwarding. Not Envoy. Local inference lives in the **engine** repo (`aria-engine`). Engine SDK and this SDK are **two package families** (`libaria_ffi` vs `libaria_router_ffi`).
 
 ## Build / Test
 
@@ -35,32 +35,32 @@ Examples (English comments in every file):
 | [`ffi.yaml`](config/examples/ffi.yaml) | gold `fast-response` plus the same catalog recipe |
 
 ```bash
-# Setup — writes ~/.ariacompute/ariarouter.yml (semantic starter by default).
+# Setup — writes ~/.ariacompute/router.yml (semantic starter by default).
 # Prompts whether to require API keys on the data plane (and provider registration).
 # Secrets are issued only in Dashboard → API keys (not by CLI).
-ariarouter setup
-ariarouter setup --status
+aria-router setup
+aria-router setup --status
 
 # Validate (default path, or pass --config)
-ariarouter validate
-cargo run -p ariarouter -- validate --config config/examples/semantic-tiny.yaml
+aria-router validate
+cargo run -p aria-router -- validate --config config/examples/semantic-tiny.yaml
 
 # Serve — data plane from YAML listeners (semantic-tiny: 127.0.0.1:8899);
 # management defaults to 127.0.0.1:8080. Omit --config after setup.
-cargo run -p ariarouter -- serve --config config/examples/semantic-tiny.yaml
-ariarouter serve --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090
+cargo run -p aria-router -- serve --config config/examples/semantic-tiny.yaml
+aria-router serve --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090
 
 # Serve — data plane from YAML listeners (semantic-tiny: 127.0.0.1:8899);
 # management defaults to 127.0.0.1:8080
-cargo run -p ariarouter -- serve --config config/examples/semantic-tiny.yaml
+cargo run -p aria-router -- serve --config config/examples/semantic-tiny.yaml
 
-# Explicit binds (keep mgmt off engine's 8080 if you will register ariaengine)
-cargo run -p ariarouter -- serve \
+# Explicit binds (keep mgmt off engine's 8080 if you will register aria-engine)
+cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-cargo run -p ariarouter -- serve \
+cargo run -p aria-router -- serve \
   --config config/examples/agent-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
@@ -75,7 +75,7 @@ The management listener serves a Vite React SPA (Overview / Cost / API keys / Co
 ```bash
 npm --prefix dashboard ci
 npm --prefix dashboard run build
-cargo run -p ariarouter -- serve \
+cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
@@ -87,8 +87,8 @@ cargo run -p ariarouter -- serve \
 ### API keys and cost
 
 1. Open Dashboard → **API keys** → Generate (`sk-aria_…` shown once). Or `POST /v1/router/keys`.
-2. `ariarouter setup` → enable `global.require_api_key` when you want chat and `PUT /v1/router/providers` to require Bearer.
-3. Clients and `ariaengine` pass `Authorization: Bearer sk-aria_…` (engine: `router_api_key` / `--router-api-key`).
+2. `aria-router setup` → enable `global.require_api_key` when you want chat and `PUT /v1/router/providers` to require Bearer.
+3. Clients and `aria-engine` pass `Authorization: Bearer sk-aria_…` (engine: `router_api_key` / `--router-api-key`).
 4. **Cost** page / `GET /v1/router/cost` shows six-factor spend and `by_key` (YAML `pricing.input_per_mtok` / `output_per_mtok`).
 
 ```bash
@@ -106,27 +106,27 @@ curl -s -X POST http://127.0.0.1:8090/v1/router/keys \
 
 Hard constraints (location / auth / modality / tools) prune **before** ranking. Compute is ranking only. No eligible path → fail closed.
 
-## Register ariaengine
+## Register aria-engine
 
-This process routes; `ariaengine serve` optionally registers as a local provider. Use **different ports**: engine `--bind` vs this `--mgmt-bind` (default `127.0.0.1:8080`). Clients talk to the **data** plane.
+This process routes; `aria-engine serve` optionally registers as a local provider. Use **different ports**: engine `--bind` vs this `--mgmt-bind` (default `127.0.0.1:8080`). Clients talk to the **data** plane.
 
 ```bash
 # 1. router repo — data :8899, management :8090
-cargo run -p ariarouter -- serve \
+cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
 # 2. engine repo — OpenAI on :8080, then PUT to management
 # When router require_api_key is true, pass the Dashboard-issued secret:
-ariaengine serve gemma-4-e2b-it_q4 \
+aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
   --router-api-key sk-aria_… \
   --compute auto
 
 # Persist on the engine side instead of --router / --router-api-key each time:
-#   ariaengine setup  # router URL + optional router API key (from Dashboard)
+#   aria-engine setup  # router URL + optional router API key (from Dashboard)
 #   # or ~/.ariacompute/engine.yml:
 #   # router: http://127.0.0.1:8090
 #   # router_api_key: sk-aria_…
@@ -203,7 +203,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
 curl -sD - -o /dev/null http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{"model":"aria/semantic-auto","messages":[{"role":"user","content":"please explain rust"}]}' \
-  | grep -i x-ariarouter
+  | grep -i x-aria-router
 
 # Management
 curl -s http://127.0.0.1:8090/health | jq .
@@ -215,29 +215,29 @@ curl -s http://127.0.0.1:8090/v1/router/topology | jq .
 curl -s http://127.0.0.1:8090/v1/router/config | jq .
 ```
 
-Response headers: `x-ariarouter-layer`, `x-ariarouter-decision`, `x-ariarouter-model`.
+Response headers: `x-aria-router-layer`, `x-aria-router-decision`, `x-aria-router-model`.
 
 ## SDK Bindings
 
-Native C ABI (`ariacompute-ariarouter-ffi` / `libariarouter_ffi`) plus thin wrappers under `bindings/`. **Do not** mix with `libariaengine_ffi` / `ariacompute-ariaengine`.
+Native C ABI (`ariacompute-router-ffi` / `libaria_router_ffi`) plus thin wrappers under `bindings/`. **Do not** mix with `libaria_ffi` / `ariacompute-engine`.
 
 | Binding | Path | Package |
 |---------|------|---------|
-| Rust | `bindings/rust` | `ariacompute-ariarouter` (native; no dlopen) |
-| Python | `bindings/python` | `ariarouter` |
+| Rust | `bindings/rust` | `ariacompute-router` (native; no dlopen) |
+| Python | `bindings/python` | `aria_router` |
 | Go | `bindings/go` | Go module |
-| TypeScript | `bindings/typescript` | npm `@ariacompute/ariarouter-ts` |
-| React Native | `bindings/react-native` | npm `@ariacompute/ariarouter-rn` |
+| TypeScript | `bindings/typescript` | npm `@ariacompute/router-ts` |
+| React Native | `bindings/react-native` | npm `@ariacompute/router-rn` |
 | Flutter | `bindings/flutter` | pub.dev |
 | Swift | `bindings/swift` | CocoaPods |
 | Kotlin | `bindings/kotlin` | Maven |
 
-C header: [`ffi/include/ariarouter.h`](ffi/include/ariarouter.h) — `ariarouter_init` (in-process YAML), `ariarouter_connect` (HTTP to a running `serve`), `ariarouter_complete` / `_stream`, `ariarouter_models`, `ariarouter_last_route`, `ariarouter_destroy`, `ariarouter_last_error`.
+C header: [`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init` (in-process YAML), `aria_router_connect` (HTTP to a running `serve`), `aria_router_complete` / `_stream`, `aria_router_models`, `aria_router_last_route`, `aria_router_destroy`, `aria_router_last_error`.
 
-Dynamic lib order: `ARIAROUTER_FFI_LIB` → package-bundled path → `~/.ariacompute/lib/`. Instance `setup` is in-memory `base_url` / `token` only and **never** writes `ariarouter.yml`. `init` runs semantic and `builtin` agent in-process; `type: pi` / `deepseek-harness` on platforms without subprocess is explicit `Unsupported`.
+Dynamic lib order: `ARIA_ROUTER_FFI_LIB` → package-bundled path → `~/.ariacompute/lib/`. Instance `setup` is in-memory `base_url` / `token` only and **never** writes `router.yml`. `init` runs semantic and `builtin` agent in-process; `type: pi` / `deepseek-harness` on platforms without subprocess is explicit `Unsupported`.
 
 ```bash
-cargo test -p ariacompute-ariarouter-ffi -p ariacompute-ariarouter
+cargo test -p ariacompute-router-ffi -p ariacompute-router
 ./scripts/run-binding-tests.sh   # host matrix (Rust / Python / Go / TS / RN setup)
 ```
 
@@ -245,10 +245,10 @@ C ABI changes must update [`bindings/testdata/cases.json`](bindings/testdata/cas
 
 ### Examples
 
-**Python** (needs `ARIAROUTER_FFI_LIB` or a bundled/cached `libariarouter_ffi`):
+**Python** (needs `ARIA_ROUTER_FFI_LIB` or a bundled/cached `libaria_router_ffi`):
 
 ```python
-from ariarouter import Router
+from aria_router import Router
 
 r = Router().init("config/examples/ffi-tiny.yaml")
 print(r.models())
@@ -264,7 +264,7 @@ r = Router().connect("http://127.0.0.1:8899")
 r.setup(base_url="http://127.0.0.1:8899", token="")  # memory only
 ```
 
-**Rust** (`ariacompute-ariarouter` — native API; does not dlopen `libariarouter_ffi`):
+**Rust** (`ariacompute-router` — native API; does not dlopen `libaria_router_ffi`):
 
 ```rust
 use ariacompute_router::Router;

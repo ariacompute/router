@@ -2,13 +2,13 @@ import json
 import os
 import unittest
 
-from ariarouter import Router
+from aria_router import Router
 
 
-@unittest.skipUnless(os.environ.get("ARIAROUTER_FFI_LIB") and os.environ.get("ARIAROUTER_CONFIG"), "need FFI + config")
+@unittest.skipUnless(os.environ.get("ARIA_ROUTER_FFI_LIB") and os.environ.get("ARIA_ROUTER_CONFIG"), "need FFI + config")
 class BindingTests(unittest.TestCase):
     def setUp(self):
-        self.r = Router().init(os.environ["ARIAROUTER_CONFIG"])
+        self.r = Router().init(os.environ["ARIA_ROUTER_CONFIG"])
 
     def tearDown(self):
         self.r.close()

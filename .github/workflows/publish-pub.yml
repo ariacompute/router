@@ -1,10 +1,10 @@
-name: Publish pub.dev (package:ariarouter)
+name: Publish pub.dev (package:aria_router)
 
-# Publish the Flutter binding (package:ariarouter) to pub.dev under
+# Publish the Flutter binding (package:aria_router) to pub.dev under
 # the verified publisher ariacompute.com, so consumers can use:
 #   dependencies:
-#     ariarouter: <version>
-#   import 'package:ariarouter/ariarouter.dart';
+#     aria_router: <version>
+#   import 'package:aria_router/aria_router.dart';
 # Listed at https://pub.dev/publishers/ariacompute.com/packages
 #
 # Version is injected into bindings/flutter/pubspec.yaml and CHANGELOG.md
@@ -32,7 +32,7 @@ name: Publish pub.dev (package:ariarouter)
 # Do not use a login performed as a personal/WSL Google account.
 #
 # First publish creates the package under that pub.dev user. Transfer it
-# at https://pub.dev/packages/ariarouter/admin to publisher
+# at https://pub.dev/packages/aria_router/admin to publisher
 # ariacompute.com.
 
 on:
@@ -46,7 +46,7 @@ on:
 
 jobs:
   publish:
-    name: pub.dev package:ariarouter
+    name: pub.dev package:aria_router
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -82,7 +82,7 @@ jobs:
               echo
               echo "## $VERSION"
               echo
-              echo "- Release $VERSION of package:ariarouter."
+              echo "- Release $VERSION of package:aria_router."
               echo
               awk 'NR==1 && /^# / { next } { print }' "$CHANGELOG"
             } > "$tmp"
@@ -105,7 +105,7 @@ jobs:
           echo "Wrote PUB_CREDENTIALS to ~/.config/dart/pub-credentials.json"
       - name: Publish to pub.dev
         run: |
-          STAGE="${RUNNER_TEMP:-/tmp}/ariarouter"
+          STAGE="${RUNNER_TEMP:-/tmp}/aria_router"
           rm -rf "$STAGE"
           mkdir -p "$STAGE"
           cp -a bindings/flutter/. "$STAGE/"

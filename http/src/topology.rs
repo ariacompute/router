@@ -1,7 +1,7 @@
 //! Graph derived from the in-memory YAML document.
 
-use ariarouter_config::{RouterDocument, Signals};
-use ariarouter_core::RouterKind;
+use aria_router_config::{RouterDocument, Signals};
+use aria_router_core::RouterKind;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 

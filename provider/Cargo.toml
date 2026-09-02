@@ -1,13 +1,13 @@
 [package]
-name = "ariarouter-provider"
+name = "aria-router-provider"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "OpenAI-compatible upstream forwarding for ariarouter"
+description = "OpenAI-compatible upstream forwarding for aria-router"
 
 [dependencies]
-ariarouter-core.workspace = true
-ariarouter-config.workspace = true
+aria-router-core.workspace = true
+aria-router-config.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

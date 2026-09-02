@@ -1,5 +1,5 @@
-use ariarouter_config::{clear_default_config, default_config_path, RouterDocument};
-use ariarouter_http::{
+use aria_router_config::{clear_default_config, default_config_path, RouterDocument};
+use aria_router_http::{
     data_router, ensure_extensions_startable, mgmt_router, mgmt_router_with_dashboard,
     resolve_dashboard_dir, AppState,
 };
@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
-/// Embedded at compile time; release builds set `ARIAROUTER_VERSION` from the git tag.
-const ROUTER_VERSION: &str = env!("ARIAROUTER_VERSION");
+/// Embedded at compile time; release builds set `ARIA_ROUTER_VERSION` from the git tag.
+const ROUTER_VERSION: &str = env!("ARIA_ROUTER_VERSION");
 
 #[tokio::main]
 async fn main() {
@@ -21,23 +21,23 @@ async fn main() {
 fn print_usage() {
     println!(
         "\
-ariarouter {ROUTER_VERSION}
+aria-router {ROUTER_VERSION}
 
-ariarouter setup [--status|--clear]
-ariarouter validate [--config <file>]
-ariarouter serve [--config <file>] [--bind HOST:PORT] [--mgmt-bind HOST:PORT] [--no-dashboard]
-ariarouter -h | --help | help
-ariarouter -v | --version | version
+aria-router setup [--status|--clear]
+aria-router validate [--config <file>]
+aria-router serve [--config <file>] [--bind HOST:PORT] [--mgmt-bind HOST:PORT] [--no-dashboard]
+aria-router -h | --help | help
+aria-router -v | --version | version
 
 Cache:
-  ~/.ariacompute/ariarouter.yml   (default --config; written by setup)
+  ~/.ariacompute/router.yml   (default --config; written by setup)
 
-setup                Write a starter YAML v0.3 document to ariarouter.yml
+setup                Write a starter YAML v0.3 document to router.yml
   --status           Show default config path and validate if present
-  --clear            Remove ariarouter.yml
-validate             Load + validate YAML (default: ~/.ariacompute/ariarouter.yml)
+  --clear            Remove router.yml
+validate             Load + validate YAML (default: ~/.ariacompute/router.yml)
 serve                Start data + management HTTP servers
-  --config           YAML path (default: ~/.ariacompute/ariarouter.yml)
+  --config           YAML path (default: ~/.ariacompute/router.yml)
   --bind             Data-plane address (default: first listener, else 0.0.0.0:8899)
   --mgmt-bind        Management address (default: 127.0.0.1:8080)
   --no-dashboard     JSON management API only (no SPA)
@@ -59,7 +59,7 @@ fn resolve_config(args: &mut Vec<String>) -> Result<String, Box<dyn std::error::
     }
     let path = default_config_path()?;
     if !path.exists() {
-        return Err("missing --config (run ariarouter setup)".into());
+        return Err("missing --config (run aria-router setup)".into());
     }
     Ok(path.display().to_string())
 }
@@ -76,27 +76,27 @@ fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 .global
                 .keys_path
                 .clone()
-                .unwrap_or_else(|| "~/.ariacompute/ariarouter-keys.json".into());
+                .unwrap_or_else(|| "~/.ariacompute/router-keys.json".into());
             println!("keys_path: {kp}");
-            let resolved = ariarouter_config::resolve_keys_path(&kp)?;
+            let resolved = aria_router_config::resolve_keys_path(&kp)?;
             if resolved.exists() {
-                let store = ariarouter_http::load_keys_for_status(&resolved)?;
+                let store = aria_router_http::load_keys_for_status(&resolved)?;
                 let (a, r) = store;
                 println!("api_keys: active={a} revoked={r}");
             } else {
                 println!("api_keys: (file missing)");
             }
         } else {
-            println!("(missing; run ariarouter setup)");
+            println!("(missing; run aria-router setup)");
         }
         return Ok(());
     }
     if args.iter().any(|a| a == "--clear") {
         let path = clear_default_config()?;
         println!("cleared {}", path.display());
-        let ans = prompt("also delete ariarouter-keys.json? [y/N]: ")?;
+        let ans = prompt("also delete router-keys.json? [y/N]: ")?;
         if matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes") {
-            let kp = ariarouter_config::default_keys_path()?;
+            let kp = aria_router_config::default_keys_path()?;
             if kp.exists() {
                 std::fs::remove_file(&kp)?;
                 println!("cleared {}", kp.display());
@@ -127,7 +127,7 @@ fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         println!("kept {}", path.display());
         return Ok(());
     }
-    let written = ariarouter_config::write_default_config_with(&kind, true, require_api_key)?;
+    let written = aria_router_config::write_default_config_with(&kind, true, require_api_key)?;
     println!("wrote {}", written.display());
     Ok(())
 }
@@ -146,7 +146,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .any(|a| a == "-v" || a == "--version" || a == "version")
     {
-        println!("ariarouter {ROUTER_VERSION}");
+        println!("aria-router {ROUTER_VERSION}");
         return Ok(());
     }
     let cmd = args.remove(0);

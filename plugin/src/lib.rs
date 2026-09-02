@@ -1,7 +1,7 @@
 //! Route-local plugins.
 
-use ariarouter_config::PluginRef;
-use ariarouter_core::{ChatRequest, RouterError};
+use aria_router_config::PluginRef;
+use aria_router_core::{ChatRequest, RouterError};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -51,7 +51,7 @@ pub fn apply_request(
                 if let Some(text) = p.extra.get("content").and_then(|v| v.as_str()) {
                     req.messages.insert(
                         0,
-                        ariarouter_core::ChatMessage {
+                        aria_router_core::ChatMessage {
                             role: "system".into(),
                             content: Value::String(text.to_string()),
                         },
@@ -123,7 +123,7 @@ pub fn extra_headers(plugins: &[PluginRef]) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ariarouter_core::{ChatMessage, ChatRequest};
+    use aria_router_core::{ChatMessage, ChatRequest};
 
     fn req(text: &str) -> ChatRequest {
         ChatRequest {

@@ -1,4 +1,4 @@
-/** @ariacompute/ariarouter-rn — auth client; native FFI on-device. */
+/** @ariacompute/router-rn — auth client; native FFI on-device. */
 
 function defaultSetup() {
   return { base_url: '', token: '' };
