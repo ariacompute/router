@@ -228,7 +228,7 @@ Native C ABI (`ariacompute-ariarouter-ffi` / `libariarouter_ffi`) plus thin wrap
 | Go | `bindings/go` | Go module |
 | TypeScript | `bindings/typescript` | npm `@ariacompute/ariarouter-ts` |
 | React Native | `bindings/react-native` | npm `@ariacompute/ariarouter-rn` |
-| Flutter | `bindings/flutter` | pub.dev |
+| Flutter | `bindings/flutter` | pub.dev `aria_router` |
 | Swift | `bindings/swift` | CocoaPods |
 | Kotlin | `bindings/kotlin` | Maven |
 

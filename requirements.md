@@ -190,7 +190,7 @@ C API（`include/ariarouter.h`）：
 | `ariarouter_models` / `ariarouter_last_route` | 模型列表；最近决策 JSON |
 | `ariarouter_destroy` / `ariarouter_last_error` | 生命周期 / 错误 |
 
-语言包：Python `ariarouter`、Go `ariarouter`、Rust `ariacompute-ariarouter`、Swift、Kotlin、Flutter `ariarouter`、React Native（`@ariacompute/ariarouter-rn`）、TypeScript（`@ariacompute/ariarouter-ts`）。布局：`ffi/` + `bindings/<lang>/` + `bindings/testdata/`。
+语言包：Python `ariarouter`、Go `ariarouter`、Rust `ariacompute-ariarouter`、Swift、Kotlin、Flutter pub.dev **`aria_router`**（`import 'package:aria_router/ariarouter.dart'`）、React Native（`@ariacompute/ariarouter-rn`）、TypeScript（`@ariacompute/ariarouter-ts`）。布局：`ffi/` + `bindings/<lang>/` + `bindings/testdata/`。
 
 动态库：`ARIAROUTER_FFI_LIB` → 包内捆绑 → `~/.ariacompute/lib/`。Rust 原生不 dlopen。
 
