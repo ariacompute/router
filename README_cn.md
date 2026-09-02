@@ -216,7 +216,7 @@ C ABI（`ariacompute-ariarouter-ffi` / `libariarouter_ffi`）加 `bindings/` 薄
 | Go | `bindings/go` | Go module |
 | TypeScript | `bindings/typescript` | npm `@ariacompute/ariarouter-ts` |
 | React Native | `bindings/react-native` | npm `@ariacompute/ariarouter-rn` |
-| Flutter | `bindings/flutter` | pub.dev `aria_router` |
+| Flutter | `bindings/flutter` | pub.dev |
 | Swift | `bindings/swift` | CocoaPods |
 | Kotlin | `bindings/kotlin` | Maven |
 

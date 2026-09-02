@@ -109,5 +109,5 @@
 - [x] workspace crates `ariarouter-*`；FFI crate `ariacompute-ariarouter-ffi` / lib `ariarouter_ffi`
 - [x] 默认配置 `~/.ariacompute/ariarouter.yml` + `ariarouter-keys.json`
 - [x] C API `ariarouter.h` / `ariarouter_*`；env `ARIAROUTER_*`；响应头 `x-ariarouter-*`
-- [x] SDK：PyPI `ariarouter`、Go `ariarouter`、Rust `ariacompute-ariarouter`、Flutter pub `aria_router`（`package:aria_router/ariarouter.dart`）、`@ariacompute/ariarouter-ts` / `-rn`
+- [x] SDK：PyPI `ariarouter`、Go `ariarouter`、Rust `ariacompute-ariarouter`、Flutter `ariarouter`、`@ariacompute/ariarouter-ts` / `-rn`
 - [x] engine + serve 文档字符串同步
