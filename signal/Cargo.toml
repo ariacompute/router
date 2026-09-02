@@ -1,12 +1,12 @@
 [package]
-name = "aria-router-signal"
+name = "ariarouter-signal"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Semantic routing signals for aria-router"
+description = "Semantic routing signals for ariarouter"
 
 [dependencies]
-aria-router-core.workspace = true
-aria-router-config.workspace = true
+ariarouter-core.workspace = true
+ariarouter-config.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -4,19 +4,19 @@ mod topology;
 mod keys;
 mod cost;
 
-use aria_router_agent::{task_from, AgentExtension, BuiltinExtension, FakeExtension};
-use aria_router_algorithm::{hard_filter, select, RuntimeStats};
-use aria_router_config::{
+use ariarouter_agent::{task_from, AgentExtension, BuiltinExtension, FakeExtension};
+use ariarouter_algorithm::{hard_filter, select, RuntimeStats};
+use ariarouter_config::{
     resolve_keys_path, ExtensionCfg, Recipe, RouterDocument,
 };
-use aria_router_core::{
+use ariarouter_core::{
     ChatRequest, RouteDecision, RouterError, RouterKind,
 };
-use aria_router_decision::select_decision;
-use aria_router_ext::SubprocessExtension;
-use aria_router_plugin::{apply_request, extra_headers, remember_response, PluginHost, PluginOutcome};
-use aria_router_provider::{forward, forward_sse_text, PoolState};
-use aria_router_signal::extract;
+use ariarouter_decision::select_decision;
+use ariarouter_ext::SubprocessExtension;
+use ariarouter_plugin::{apply_request, extra_headers, remember_response, PluginHost, PluginOutcome};
+use ariarouter_provider::{forward, forward_sse_text, PoolState};
+use ariarouter_signal::extract;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -55,8 +55,8 @@ impl AppState {
             .as_deref()
             .map(|p| resolve_keys_path(p).unwrap_or_else(|_| PathBuf::from(p)))
             .unwrap_or_else(|| {
-                resolve_keys_path("~/.ariacompute/router-keys.json")
-                    .unwrap_or_else(|_| PathBuf::from("router-keys.json"))
+                resolve_keys_path("~/.ariacompute/ariarouter-keys.json")
+                    .unwrap_or_else(|_| PathBuf::from("ariarouter-keys.json"))
             });
         let keys = KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path));
         Self {
@@ -102,9 +102,9 @@ pub fn mgmt_router_with_dashboard(state: Arc<AppState>, static_dir: impl AsRef<F
     mgmt_api_router(state).fallback_service(files)
 }
 
-/// Resolve `dashboard/dist` next to CWD, the binary, or `ARIA_ROUTER_DASHBOARD`.
+/// Resolve `dashboard/dist` next to CWD, the binary, or `ARIAROUTER_DASHBOARD`.
 pub fn resolve_dashboard_dir() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("ARIA_ROUTER_DASHBOARD") {
+    if let Ok(p) = std::env::var("ARIAROUTER_DASHBOARD") {
         let p = PathBuf::from(p);
         if p.join("index.html").is_file() {
             return Some(p);
@@ -209,7 +209,7 @@ fn auth_provider_upsert(st: &AppState, headers: &HeaderMap) -> Result<(), Router
 fn apply_upsert(st: &AppState, body: ProviderUpsert) -> Result<Json<Value>, RouterError> {
     let mut doc = st.doc.lock().unwrap();
     if let Some(existing) = doc.providers.models.iter_mut().find(|m| m.name == body.name) {
-        existing.backend_refs = vec![aria_router_config::BackendRef {
+        existing.backend_refs = vec![ariarouter_config::BackendRef {
             name: "engine".into(),
             endpoint: body.endpoint.clone(),
             base_url: String::new(),
@@ -222,7 +222,7 @@ fn apply_upsert(st: &AppState, body: ProviderUpsert) -> Result<Json<Value>, Rout
             existing.provider_model_id = body.provider_model_id;
         }
     } else {
-        doc.providers.models.push(aria_router_config::ProviderModel {
+        doc.providers.models.push(ariarouter_config::ProviderModel {
             name: body.name.clone(),
             provider_model_id: if body.provider_model_id.is_empty() {
                 body.name.clone()
@@ -232,7 +232,7 @@ fn apply_upsert(st: &AppState, body: ProviderUpsert) -> Result<Json<Value>, Rout
             locality: body.locality.unwrap_or_else(|| "local".into()),
             modality: "text".into(),
             capabilities: vec!["chat".into()],
-            backend_refs: vec![aria_router_config::BackendRef {
+            backend_refs: vec![ariarouter_config::BackendRef {
                 name: "engine".into(),
                 endpoint: body.endpoint,
                 base_url: String::new(),
@@ -314,8 +314,8 @@ fn replace_config(st: &AppState, doc: RouterDocument, raw: &str) -> Result<(), R
         .map(resolve_keys_path)
         .transpose()?
         .unwrap_or_else(|| {
-            resolve_keys_path("~/.ariacompute/router-keys.json")
-                .unwrap_or_else(|_| PathBuf::from("router-keys.json"))
+            resolve_keys_path("~/.ariacompute/ariarouter-keys.json")
+                .unwrap_or_else(|_| PathBuf::from("ariarouter-keys.json"))
         });
     let keys = KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path));
     *st.keys.lock().unwrap() = keys;
@@ -392,7 +392,7 @@ fn list_models_json(st: &AppState) -> Value {
     let mut data = vec![];
     for ep in &doc.entrypoints {
         for n in &ep.model_names {
-            data.push(json!({"id": n, "object": "model", "owned_by": "aria-router"}));
+            data.push(json!({"id": n, "object": "model", "owned_by": "ariarouter"}));
         }
     }
     for m in &doc.providers.models {
@@ -675,13 +675,13 @@ fn record_cost(st: &AppState, ctx: &CostCtx, decision: &RouteDecision, usage: Co
 }
 
 fn attach_route_headers(h: &mut HeaderMap, d: &RouteDecision) {
-    let _ = h.insert("x-aria-router-layer", d.layer.parse().unwrap_or_else(|_| "none".parse().unwrap()));
+    let _ = h.insert("x-ariarouter-layer", d.layer.parse().unwrap_or_else(|_| "none".parse().unwrap()));
     let _ = h.insert(
-        "x-aria-router-decision",
+        "x-ariarouter-decision",
         d.decision.parse().unwrap_or_else(|_| "none".parse().unwrap()),
     );
     if let Ok(v) = d.model.parse() {
-        h.insert("x-aria-router-model", v);
+        h.insert("x-ariarouter-model", v);
     }
 }
 
@@ -747,7 +747,7 @@ async fn route_semantic(
         .as_ref()
         .ok_or_else(|| RouterError::Config("missing routing".into()))?;
     let signals = extract(doc, recipe, &req, metadata)?;
-    let _proj = aria_router_decision::project(&routing.projections, &signals)?;
+    let _proj = ariarouter_decision::project(&routing.projections, &signals)?;
     let decision_cfg = select_decision(recipe, &signals, &routing.strategy)?;
     let (model_names, algo, plugins, dname, loc) = if let Some(d) = decision_cfg {
         (
@@ -768,14 +768,14 @@ async fn route_semantic(
     if eligible.is_empty() {
         return Err(RouterError::FailClosed("no eligible models after hard constraints".into()));
     }
-    let dummy = aria_router_config::DecisionCfg {
+    let dummy = ariarouter_config::DecisionCfg {
         name: dname.clone(),
         description: None,
         priority: 0,
         rules: Default::default(),
         model_refs: eligible
             .iter()
-            .map(|e| aria_router_config::ModelRef { model: e.name.clone() })
+            .map(|e| ariarouter_config::ModelRef { model: e.name.clone() })
             .collect(),
         algorithm: algo.clone(),
         plugins: plugins.clone(),
@@ -881,8 +881,8 @@ async fn route_agent(
 async fn invoke_extension(
     st: &AppState,
     ext: &ExtensionCfg,
-    agent: &aria_router_config::AgentRecipe,
-    task: aria_router_agent::RouteTask,
+    agent: &ariarouter_config::AgentRecipe,
+    task: ariarouter_agent::RouteTask,
 ) -> Result<RouteDecision, RouterError> {
     let canned = st.fake_agents.lock().unwrap().get(&ext.name).cloned();
     if let Some(fake) = canned {
@@ -961,8 +961,8 @@ pub fn load_keys_for_status(path: &FsPath) -> Result<(usize, usize), RouterError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aria_router_config::ExtensionCfg;
-    use aria_router_ext::SubprocessExtension;
+    use ariarouter_config::ExtensionCfg;
+    use ariarouter_ext::SubprocessExtension;
     use axum::body::to_bytes;
     use axum::http::Request;
     use tower::ServiceExt;
@@ -1076,7 +1076,7 @@ recipes:
             .unwrap();
         assert_eq!(res.status(), 200);
         assert_eq!(
-            res.headers().get("x-aria-router-layer").unwrap(),
+            res.headers().get("x-ariarouter-layer").unwrap(),
             "semantic"
         );
         let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
@@ -1105,7 +1105,7 @@ recipes:
             .unwrap();
         assert_eq!(res.status(), 200);
         assert_eq!(
-            res.headers().get("x-aria-router-layer").unwrap(),
+            res.headers().get("x-ariarouter-layer").unwrap(),
             "bypass"
         );
     }
@@ -1142,7 +1142,7 @@ recipes:
             .await
             .unwrap();
         assert_eq!(res.status(), 200);
-        assert_eq!(res.headers().get("x-aria-router-layer").unwrap(), "agent");
+        assert_eq!(res.headers().get("x-ariarouter-layer").unwrap(), "agent");
 
         let app2 = data_router(st);
         let body = json!({
@@ -1158,7 +1158,7 @@ recipes:
             )
             .await
             .unwrap();
-        assert_eq!(res.headers().get("x-aria-router-layer").unwrap(), "semantic");
+        assert_eq!(res.headers().get("x-ariarouter-layer").unwrap(), "semantic");
     }
 
     #[tokio::test]
@@ -1267,7 +1267,7 @@ recipes:
         let mut missing = ExtensionCfg {
             name: "pi".into(),
             ext_type: "pi".into(),
-            command: vec!["aria-router-pi-not-installed".into()],
+            command: vec!["ariarouter-pi-not-installed".into()],
             workdir: None,
             timeout_ms: Some(10),
             env: Default::default(),
@@ -1278,7 +1278,7 @@ recipes:
             .unwrap_err();
         assert!(err.to_string().contains("not found"));
         missing.ext_type = "deepseek-harness".into();
-        missing.command = vec!["aria-router-dsh-not-installed".into()];
+        missing.command = vec!["ariarouter-dsh-not-installed".into()];
         assert!(SubprocessExtension { cfg: missing }.ensure_binary().is_err());
     }
 
@@ -1298,7 +1298,7 @@ recipes:
     async fn put_config_rejects_unknown_block() {
         let backend = mock_upstream().await;
         let yaml = tiny_yaml(&backend);
-        let path = std::env::temp_dir().join(format!("aria-router-put-bad-{}.yml", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ariarouter-put-bad-{}.yml", std::process::id()));
         std::fs::write(&path, &yaml).unwrap();
         let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
         let st = Arc::new(AppState::with_path(doc, path.clone()));
@@ -1321,7 +1321,7 @@ recipes:
     async fn put_config_reloads_tiny_yaml() {
         let backend = mock_upstream().await;
         let yaml = tiny_yaml(&backend);
-        let path = std::env::temp_dir().join(format!("aria-router-put-ok-{}.yml", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ariarouter-put-ok-{}.yml", std::process::id()));
         std::fs::write(&path, &yaml).unwrap();
         let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
         let st = Arc::new(AppState::with_path(doc, path.clone()));
@@ -1408,7 +1408,7 @@ recipes:
             .unwrap();
         assert_eq!(res.status(), 200);
         assert_eq!(
-            res.headers().get("x-aria-router-layer").unwrap(),
+            res.headers().get("x-ariarouter-layer").unwrap(),
             "semantic"
         );
 
@@ -1482,7 +1482,7 @@ recipes:
         assert_eq!(res.status(), 200);
         let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
         let html = String::from_utf8_lossy(&bytes);
-        assert!(html.contains("aria-router") || html.contains("root"));
+        assert!(html.contains("ariarouter") || html.contains("root"));
     }
 
     fn tiny_yaml_priced(backend: &str, require_key: bool) -> String {

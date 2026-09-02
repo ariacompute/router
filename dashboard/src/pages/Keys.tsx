@@ -60,7 +60,7 @@ export default function Keys() {
       <h1 className={styles.h1}>API keys</h1>
       <p>
         Issue secrets here only. Use the same <code>sk-aria_…</code> for data-plane chat Bearer and
-        for <code>aria-engine setup</code> / <code>--router-api-key</code> when registering providers.
+        for <code>ariaengine setup</code> / <code>--router-api-key</code> when registering providers.
         Plaintext is shown once; disk stores hashes only.
       </p>
       <div className={styles.row}>

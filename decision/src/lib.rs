@@ -1,8 +1,8 @@
 //! Boolean decisions + projections.
 
-use aria_router_config::{DecisionCfg, ProjectionCfg, Recipe, RuleNode};
-use aria_router_core::RouterError;
-use aria_router_signal::SignalSet;
+use ariarouter_config::{DecisionCfg, ProjectionCfg, Recipe, RuleNode};
+use ariarouter_core::RouterError;
+use ariarouter_signal::SignalSet;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -137,7 +137,7 @@ pub fn eval_rule(node: &RuleNode, signals: &SignalSet) -> Result<bool, RouterErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aria_router_signal::SignalHit;
+    use ariarouter_signal::SignalHit;
 
     #[test]
     fn and_or() {
@@ -150,7 +150,7 @@ mod tests {
         });
         let node = RuleNode {
             operator: Some("AND".into()),
-            conditions: vec![aria_router_config::Condition {
+            conditions: vec![ariarouter_config::Condition {
                 kind: "keyword".into(),
                 name: "a".into(),
             }],

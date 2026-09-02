@@ -1,12 +1,12 @@
 [package]
-name = "aria-router-config"
+name = "ariarouter-config"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "YAML v0.3 config for aria-router"
+description = "YAML v0.3 config for ariarouter"
 
 [dependencies]
-aria-router-core.workspace = true
+ariarouter-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

@@ -32,7 +32,7 @@ mavenPublishing {
 
     pom {
         name = 'Aria Router'
-        description = 'Kotlin/JVM binding for the Aria inference gateway (libaria_router_ffi).'
+        description = 'Kotlin/JVM binding for the Aria inference gateway (libariarouter_ffi).'
         url = 'https://github.com/ariacompute/router'
         licenses {
             license {

@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-Aria Compute 推理网关：OpenAI 兼容 HTTP，两种并列决策器（**semantic** YAML v0.3 与 **agent** extensions）。共享 providers、硬约束与转发。不走 Envoy。本地推理在独立 **engine** 仓（`aria-engine`）。Engine SDK 与本仓 SDK 是 **两套包**（`libaria_ffi` vs `libaria_router_ffi`）。
+Aria Compute 推理网关：OpenAI 兼容 HTTP，两种并列决策器（**semantic** YAML v0.3 与 **agent** extensions）。共享 providers、硬约束与转发。不走 Envoy。本地推理在独立 **engine** 仓（`ariaengine`）。Engine SDK 与本仓 SDK 是 **两套包**（`libariaengine_ffi` vs `libariarouter_ffi`）。
 
 ## 构建 / 测试
 
@@ -35,26 +35,26 @@ cargo clippy --workspace --all-targets -- -D warnings
 | [`ffi.yaml`](config/examples/ffi.yaml) | 黄金 `fast-response` + 同上 catalog recipe |
 
 ```bash
-# 写入 ~/.ariacompute/router.yml（默认 semantic 模板）。
+# 写入 ~/.ariacompute/ariarouter.yml（默认 semantic 模板）。
 # 会询问是否在数据面（及 provider 注册）强制 API key；密钥只在 Dashboard「API 密钥」签发。
-aria-router setup
-aria-router setup --status
+ariarouter setup
+ariarouter setup --status
 
 # 校验（默认路径，或传 --config）
-aria-router validate
-cargo run -p aria-router -- validate --config config/examples/semantic-tiny.yaml
+ariarouter validate
+cargo run -p ariarouter -- validate --config config/examples/semantic-tiny.yaml
 
 # 服务 — 数据面来自 YAML listeners（semantic-tiny：127.0.0.1:8899）；
 # 管理面默认 127.0.0.1:8080
-cargo run -p aria-router -- serve --config config/examples/semantic-tiny.yaml
+cargo run -p ariarouter -- serve --config config/examples/semantic-tiny.yaml
 
-# 显式绑定（若要注册 aria-engine，管理面不要占用 engine 的 8080）
-cargo run -p aria-router -- serve \
+# 显式绑定（若要注册 ariaengine，管理面不要占用 engine 的 8080）
+cargo run -p ariarouter -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-cargo run -p aria-router -- serve \
+cargo run -p ariarouter -- serve \
   --config config/examples/agent-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
@@ -69,7 +69,7 @@ cargo run -p aria-router -- serve \
 ```bash
 npm --prefix dashboard ci
 npm --prefix dashboard run build
-cargo run -p aria-router -- serve \
+cargo run -p ariarouter -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
@@ -81,8 +81,8 @@ cargo run -p aria-router -- serve \
 ### API 密钥与成本
 
 1. Dashboard → **API 密钥** → 生成（`sk-aria_…` 只显示一次），或 `POST /v1/router/keys`。
-2. `aria-router setup` 可打开 `global.require_api_key`，使 chat 与 `PUT /v1/router/providers` 需要 Bearer。
-3. 客户端与 `aria-engine` 使用同一把 secret（engine：`router_api_key` / `--router-api-key`）。
+2. `ariarouter setup` 可打开 `global.require_api_key`，使 chat 与 `PUT /v1/router/providers` 需要 Bearer。
+3. 客户端与 `ariaengine` 使用同一把 secret（engine：`router_api_key` / `--router-api-key`）。
 4. **Cost** 页 / `GET /v1/router/cost` 展示六因子与 `by_key`（YAML `pricing`）。
 
 ```bash
@@ -94,27 +94,27 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
 
 硬约束（location / auth / modality / tools）在排名 **之前** 剪枝。Compute 只进排名。无合格路径 → fail closed。
 
-## 注册 aria-engine
+## 注册 ariaengine
 
-本进程做路由；`aria-engine serve` 可选择向本网关注册为本地 provider。端口不要撞车：engine `--bind` vs 本仓 `--mgmt-bind`（默认 `127.0.0.1:8080`）。客户端打 **数据面**。
+本进程做路由；`ariaengine serve` 可选择向本网关注册为本地 provider。端口不要撞车：engine `--bind` vs 本仓 `--mgmt-bind`（默认 `127.0.0.1:8080`）。客户端打 **数据面**。
 
 ```bash
 # 1. router 仓 — 数据面 :8899，管理面 :8090
-cargo run -p aria-router -- serve \
+cargo run -p ariarouter -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
 # 2. engine 仓 — OpenAI 在 :8080，再 PUT 到管理面
 # 若 router 开启 require_api_key，需带 Dashboard 签发的 secret：
-aria-engine serve gemma-4-e2b-it_q4 \
+ariaengine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
   --router-api-key sk-aria_… \
   --compute auto
 
 # engine 侧也可写入配置，不必每次带旗标：
-#   aria-engine setup  # router URL + 可选 router API key
+#   ariaengine setup  # router URL + 可选 router API key
 #   # 或 ~/.ariacompute/engine.yml：
 #   # router: http://127.0.0.1:8090
 #   # router_api_key: sk-aria_…
@@ -191,7 +191,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
 curl -sD - -o /dev/null http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{"model":"aria/semantic-auto","messages":[{"role":"user","content":"please explain rust"}]}' \
-  | grep -i x-aria-router
+  | grep -i x-ariarouter
 
 # 管理面
 curl -s http://127.0.0.1:8090/health | jq .
@@ -203,29 +203,29 @@ curl -s http://127.0.0.1:8090/v1/router/topology | jq .
 curl -s http://127.0.0.1:8090/v1/router/config | jq .
 ```
 
-响应头：`x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`。
+响应头：`x-ariarouter-layer`、`x-ariarouter-decision`、`x-ariarouter-model`。
 
 ## SDK Bindings
 
-C ABI（`ariacompute-router-ffi` / `libaria_router_ffi`）加 `bindings/` 薄封装。**不要**与 `libaria_ffi` / `ariacompute-engine` 混用。
+C ABI（`ariacompute-ariarouter-ffi` / `libariarouter_ffi`）加 `bindings/` 薄封装。**不要**与 `libariaengine_ffi` / `ariacompute-ariaengine` 混用。
 
 | Binding | 路径 | 包 |
 |---------|------|-----|
-| Rust | `bindings/rust` | `ariacompute-router`（原生；不 dlopen） |
-| Python | `bindings/python` | `aria_router` |
+| Rust | `bindings/rust` | `ariacompute-ariarouter`（原生；不 dlopen） |
+| Python | `bindings/python` | `ariarouter` |
 | Go | `bindings/go` | Go module |
-| TypeScript | `bindings/typescript` | npm `@ariacompute/router-ts` |
-| React Native | `bindings/react-native` | npm `@ariacompute/router-rn` |
+| TypeScript | `bindings/typescript` | npm `@ariacompute/ariarouter-ts` |
+| React Native | `bindings/react-native` | npm `@ariacompute/ariarouter-rn` |
 | Flutter | `bindings/flutter` | pub.dev |
 | Swift | `bindings/swift` | CocoaPods |
 | Kotlin | `bindings/kotlin` | Maven |
 
-C 头文件：[`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init`（进程内加载 YAML）、`aria_router_connect`（HTTP 连已运行的 `serve`）、`aria_router_complete` / `_stream`、`aria_router_models`、`aria_router_last_route`、`aria_router_destroy`、`aria_router_last_error`。
+C 头文件：[`ffi/include/ariarouter.h`](ffi/include/ariarouter.h) — `ariarouter_init`（进程内加载 YAML）、`ariarouter_connect`（HTTP 连已运行的 `serve`）、`ariarouter_complete` / `_stream`、`ariarouter_models`、`ariarouter_last_route`、`ariarouter_destroy`、`ariarouter_last_error`。
 
-动态库顺序：`ARIA_ROUTER_FFI_LIB` → 包内捆绑路径 → `~/.ariacompute/lib/`。实例 `setup` 仅内存 `base_url` / `token`，**禁止**写 `router.yml`。`init` 进程内跑 semantic 与 `builtin` agent；无 subprocess 的平台上 `type: pi` / `deepseek-harness` 显式 `Unsupported`。
+动态库顺序：`ARIAROUTER_FFI_LIB` → 包内捆绑路径 → `~/.ariacompute/lib/`。实例 `setup` 仅内存 `base_url` / `token`，**禁止**写 `ariarouter.yml`。`init` 进程内跑 semantic 与 `builtin` agent；无 subprocess 的平台上 `type: pi` / `deepseek-harness` 显式 `Unsupported`。
 
 ```bash
-cargo test -p ariacompute-router-ffi -p ariacompute-router
+cargo test -p ariacompute-ariarouter-ffi -p ariacompute-ariarouter
 ./scripts/run-binding-tests.sh   # 宿主矩阵（Rust / Python / Go / TS / RN setup）
 ```
 
@@ -233,10 +233,10 @@ C ABI 变更必须同步 [`bindings/testdata/cases.json`](bindings/testdata/case
 
 ### 示例
 
-**Python**（需 `ARIA_ROUTER_FFI_LIB` 或捆绑/缓存的 `libaria_router_ffi`）：
+**Python**（需 `ARIAROUTER_FFI_LIB` 或捆绑/缓存的 `libariarouter_ffi`）：
 
 ```python
-from aria_router import Router
+from ariarouter import Router
 
 r = Router().init("config/examples/ffi-tiny.yaml")
 print(r.models())
@@ -252,7 +252,7 @@ r = Router().connect("http://127.0.0.1:8899")
 r.setup(base_url="http://127.0.0.1:8899", token="")  # 仅内存
 ```
 
-**Rust**（`ariacompute-router` — 原生 API，不 dlopen `libaria_router_ffi`）：
+**Rust**（`ariacompute-ariarouter` — 原生 API，不 dlopen `libariarouter_ffi`）：
 
 ```rust
 use ariacompute_router::Router;

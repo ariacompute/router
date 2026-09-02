@@ -1,8 +1,8 @@
 //! Process-out adapters for pi (JSONL RPC) and deepseek-harness.
 
-use aria_router_agent::{parse_decision_json, AgentExtension, RouteTask};
-use aria_router_config::ExtensionCfg;
-use aria_router_core::{RouteDecision, RouterError};
+use ariarouter_agent::{parse_decision_json, AgentExtension, RouteTask};
+use ariarouter_config::ExtensionCfg;
+use ariarouter_core::{RouteDecision, RouterError};
 use async_trait::async_trait;
 use std::path::Path;
 use std::process::Stdio;
@@ -150,15 +150,15 @@ fn extract_text(ext_type: &str, line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aria_router_core::ModelCard;
+    use ariarouter_core::ModelCard;
 
     fn mock_echo_command(stem: &str, json_line: &str) -> Vec<String> {
         let dir = std::env::temp_dir();
-        let out = dir.join(format!("aria-router-{stem}.out"));
+        let out = dir.join(format!("ariarouter-{stem}.out"));
         std::fs::write(&out, format!("{json_line}\n")).unwrap();
         #[cfg(windows)]
         {
-            let script = dir.join(format!("aria-router-{stem}.cmd"));
+            let script = dir.join(format!("ariarouter-{stem}.cmd"));
             std::fs::write(
                 &script,
                 format!("@echo off\r\nset /p line=\r\ntype \"{}\"\r\n", out.display()),
@@ -168,7 +168,7 @@ mod tests {
         }
         #[cfg(not(windows))]
         {
-            let script = dir.join(format!("aria-router-{stem}.sh"));
+            let script = dir.join(format!("ariarouter-{stem}.sh"));
             std::fs::write(
                 &script,
                 format!("#!/bin/sh\nread line\ncat '{}'\n", out.display()),

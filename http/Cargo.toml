@@ -1,20 +1,20 @@
 [package]
-name = "aria-router-http"
+name = "ariarouter-http"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "OpenAI data plane and management API for aria-router"
+description = "OpenAI data plane and management API for ariarouter"
 
 [dependencies]
-aria-router-core.workspace = true
-aria-router-config.workspace = true
-aria-router-signal.workspace = true
-aria-router-decision.workspace = true
-aria-router-algorithm.workspace = true
-aria-router-plugin.workspace = true
-aria-router-provider.workspace = true
-aria-router-agent.workspace = true
-aria-router-ext.workspace = true
+ariarouter-core.workspace = true
+ariarouter-config.workspace = true
+ariarouter-signal.workspace = true
+ariarouter-decision.workspace = true
+ariarouter-algorithm.workspace = true
+ariarouter-plugin.workspace = true
+ariarouter-provider.workspace = true
+ariarouter-agent.workspace = true
+ariarouter-ext.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tower.workspace = true

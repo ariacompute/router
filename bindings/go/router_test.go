@@ -1,6 +1,6 @@
-//go:build aria_router_ffi
+//go:build ariarouter_ffi
 
-package aria
+package ariarouter
 
 import (
 	"encoding/json"
@@ -9,9 +9,9 @@ import (
 )
 
 func TestInitComplete(t *testing.T) {
-	cfg := os.Getenv("ARIA_ROUTER_CONFIG")
+	cfg := os.Getenv("ARIAROUTER_CONFIG")
 	if cfg == "" {
-		t.Skip("ARIA_ROUTER_CONFIG")
+		t.Skip("ARIAROUTER_CONFIG")
 	}
 	r := NewRouter()
 	if err := r.Init(cfg); err != nil {

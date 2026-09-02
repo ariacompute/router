@@ -57,14 +57,14 @@
 ## 阶段 E
 
 ### T7 — C ABI
-- [x] `aria_router.h`：init / connect / complete / stream / models / last_route / destroy / last_error
+- [x] `ariarouter.h`：init / connect / complete / stream / models / last_route / destroy / last_error
 - [x] `bindings/testdata/cases.json`
-- [x] `cargo test -p ariacompute-router-ffi`
+- [x] `cargo test -p ariacompute-ariarouter-ffi`
 
 ### T8 — 八语言 SDK
 - [x] rust / python / go / typescript / react-native / flutter / swift / kotlin
 - [x] `./scripts/run-binding-tests.sh`
-- [x] 包名与 `libaria_ffi` 不冲突
+- [x] 包名与 `libariaengine_ffi` 不冲突
 
 ## engine 协同（engine 仓）
 
@@ -77,8 +77,8 @@
 ### T10 — 注册
 - [x] serve 在 `router` 非空时 PUT upsert；失败退出
 
-### T11 — `setup` + 默认 `router.yml`
-- [x] CLI `aria-router setup [--status|--clear]` 写入 `~/.ariacompute/router.yml`
+### T11 — `setup` + 默认 `ariarouter.yml`
+- [x] CLI `ariarouter setup [--status|--clear]` 写入 `~/.ariacompute/ariarouter.yml`
 - [x] `validate` / `serve` 的 `--config` 可选，缺省该路径
 - [x] 八语言 SDK `Router.setup` / `setup_status` / `setup_clear`；不写 yml
 
@@ -101,3 +101,13 @@
 - [x] Dashboard：Cost 页 + API 密钥页
 - [x] engine：`router_api_key` / `--router-api-key`；`register_with_router` 带 Authorization
 - [x] 单测：usage 计费、401、CRUD、by_key、engine Bearer
+
+## 阶段 H — 产品命名 ariarouter
+
+### T14 — CLI / crates / config / FFI / SDK 统一重命名
+- [x] CLI `ariarouter`；release `ariarouter_*` + `libariarouter_ffi_*`
+- [x] workspace crates `ariarouter-*`；FFI crate `ariacompute-ariarouter-ffi` / lib `ariarouter_ffi`
+- [x] 默认配置 `~/.ariacompute/ariarouter.yml` + `ariarouter-keys.json`
+- [x] C API `ariarouter.h` / `ariarouter_*`；env `ARIAROUTER_*`；响应头 `x-ariarouter-*`
+- [x] SDK：PyPI `ariarouter`、Go `ariarouter`、Rust `ariacompute-ariarouter`、Flutter `ariarouter`、`@ariacompute/ariarouter-ts` / `-rn`
+- [x] engine + serve 文档字符串同步

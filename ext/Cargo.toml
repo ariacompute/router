@@ -1,14 +1,14 @@
 [package]
-name = "aria-router-ext"
+name = "ariarouter-ext"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Process-out agent extensions (pi, deepseek-harness)"
 
 [dependencies]
-aria-router-core.workspace = true
-aria-router-config.workspace = true
-aria-router-agent.workspace = true
+ariarouter-core.workspace = true
+ariarouter-config.workspace = true
+ariarouter-agent.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

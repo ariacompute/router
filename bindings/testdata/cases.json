@@ -9,8 +9,8 @@
     {"id": "complete_stream_ok", "intent": "Streaming callback", "assert": ">=1 chunk"},
     {"id": "models_ok", "intent": "List entrypoint + provider names", "assert": "data array includes aria/semantic-auto"},
     {"id": "last_route_after_complete", "intent": "last_route JSON", "assert": "layer/model present after complete"},
-    {"id": "connect_without_server", "intent": "aria_router_connect", "assert": "handle non-null (HTTP later)"},
-    {"id": "setup_memory_only", "intent": "SDK setup base_url/token", "assert": "in memory; no router.yml write"},
+    {"id": "connect_without_server", "intent": "ariarouter_connect", "assert": "handle non-null (HTTP later)"},
+    {"id": "setup_memory_only", "intent": "SDK setup base_url/token", "assert": "in memory; no ariarouter.yml write"},
     {"id": "fail_closed_unknown_model", "intent": "Unknown model name", "assert": "error path"}
   ]
 }

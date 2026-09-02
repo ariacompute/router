@@ -1,6 +1,6 @@
 //! API key store: Dashboard-issued secrets, sha256 on disk.
 
-use aria_router_core::RouterError;
+use ariarouter_core::RouterError;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

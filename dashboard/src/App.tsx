@@ -24,7 +24,7 @@ export default function App() {
   return (
     <div className={styles.shell}>
       <nav className={styles.nav}>
-        <div className={styles.brand}>aria-router</div>
+        <div className={styles.brand}>ariarouter</div>
         {links.map((l) => (
           <NavLink
             key={l.to}

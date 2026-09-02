@@ -1,7 +1,7 @@
 //! Heuristic (and gated learned) signal extraction.
 
-use aria_router_config::{Recipe, RouterDocument, Signals};
-use aria_router_core::{ChatRequest, RouterError};
+use ariarouter_config::{Recipe, RouterDocument, Signals};
+use ariarouter_core::{ChatRequest, RouterError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -93,7 +93,7 @@ pub fn extract(
     Ok(SignalSet { hits })
 }
 
-fn referenced(decisions: &[aria_router_config::DecisionCfg]) -> Vec<String> {
+fn referenced(decisions: &[ariarouter_config::DecisionCfg]) -> Vec<String> {
     let mut kinds = vec![];
     for d in decisions {
         collect_kinds(&d.rules, &mut kinds);
@@ -103,7 +103,7 @@ fn referenced(decisions: &[aria_router_config::DecisionCfg]) -> Vec<String> {
     kinds
 }
 
-fn collect_kinds(node: &aria_router_config::RuleNode, out: &mut Vec<String>) {
+fn collect_kinds(node: &ariarouter_config::RuleNode, out: &mut Vec<String>) {
     for c in &node.conditions {
         out.push(c.kind.clone());
     }
@@ -283,7 +283,7 @@ fn eval_structure(s: &Signals, prompt: &str) -> Vec<SignalHit> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aria_router_config::RouterDocument;
+    use ariarouter_config::RouterDocument;
 
     #[test]
     fn keyword_or() {
@@ -292,7 +292,7 @@ mod tests {
         let recipe = doc.recipe("mom").unwrap();
         let req = ChatRequest {
             model: "aria/semantic-auto".into(),
-            messages: vec![aria_router_core::ChatMessage {
+            messages: vec![ariarouter_core::ChatMessage {
                 role: "user".into(),
                 content: serde_json::Value::String("please explain rust".into()),
             }],

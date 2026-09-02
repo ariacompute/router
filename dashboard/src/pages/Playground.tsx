@@ -25,9 +25,9 @@ export default function Playground() {
       );
       setHdrs(
         [
-          headers.get('x-aria-router-layer'),
-          headers.get('x-aria-router-decision'),
-          headers.get('x-aria-router-model'),
+          headers.get('x-ariarouter-layer'),
+          headers.get('x-ariarouter-decision'),
+          headers.get('x-ariarouter-model'),
         ]
           .filter(Boolean)
           .join(' / '),

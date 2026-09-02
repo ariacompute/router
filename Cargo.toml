@@ -23,16 +23,16 @@ license = "MIT"
 authors = ["Aria Compute"]
 
 [workspace.dependencies]
-aria-router-core = { path = "core", version = "0.1.0" }
-aria-router-config = { path = "config", version = "0.1.0" }
-aria-router-signal = { path = "signal", version = "0.1.0" }
-aria-router-decision = { path = "decision", version = "0.1.0" }
-aria-router-algorithm = { path = "algorithm", version = "0.1.0" }
-aria-router-plugin = { path = "plugin", version = "0.1.0" }
-aria-router-provider = { path = "provider", version = "0.1.0" }
-aria-router-agent = { path = "agent", version = "0.1.0" }
-aria-router-ext = { path = "ext", version = "0.1.0" }
-aria-router-http = { path = "http", version = "0.1.0" }
+ariarouter-core = { path = "core", version = "0.1.0" }
+ariarouter-config = { path = "config", version = "0.1.0" }
+ariarouter-signal = { path = "signal", version = "0.1.0" }
+ariarouter-decision = { path = "decision", version = "0.1.0" }
+ariarouter-algorithm = { path = "algorithm", version = "0.1.0" }
+ariarouter-plugin = { path = "plugin", version = "0.1.0" }
+ariarouter-provider = { path = "provider", version = "0.1.0" }
+ariarouter-agent = { path = "agent", version = "0.1.0" }
+ariarouter-ext = { path = "ext", version = "0.1.0" }
+ariarouter-http = { path = "http", version = "0.1.0" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

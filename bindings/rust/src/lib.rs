@@ -1,8 +1,8 @@
-//! Native Rust SDK for aria-router (does not dlopen `libaria_router_ffi`).
+//! Native Rust SDK for ariarouter (does not dlopen `libariarouter_ffi`).
 
-use aria_router_config::RouterDocument;
-use aria_router_core::RouterError;
-use aria_router_http::{data_router, last_route_json, AppState};
+use ariarouter_config::RouterDocument;
+use ariarouter_core::RouterError;
+use ariarouter_http::{data_router, last_route_json, AppState};
 use axum::body::{to_bytes, Body};
 use axum::http::Request;
 use serde_json::Value;

@@ -1,7 +1,7 @@
-name: Publish npm (@ariacompute/router-ts, @ariacompute/router-rn)
+name: Publish npm (@ariacompute/ariarouter-ts, @ariacompute/ariarouter-rn)
 
-# Publish the TypeScript SDK (@ariacompute/router-ts) and the React Native
-# binding (@ariacompute/router-rn) to npmjs.com under the `ariacompute`
+# Publish the TypeScript SDK (@ariacompute/ariarouter-ts) and the React Native
+# binding (@ariacompute/ariarouter-rn) to npmjs.com under the `ariacompute`
 # account. Both packages are plain JS (no tsc). Version is injected from
 # the release tag via `npm version --no-git-tag-version --allow-same-version`
 # (no git tag, no repo write-back; same version as package.json is a no-op).
@@ -11,7 +11,7 @@ name: Publish npm (@ariacompute/router-ts, @ariacompute/router-rn)
 #
 # Secrets required:
 #   NPM_TOKEN — npmjs.com token for ~ariacompute with publish permission
-#               on @ariacompute/router-ts and @ariacompute/router-rn
+#               on @ariacompute/ariarouter-ts and @ariacompute/ariarouter-rn
 #               (granular access token, bypass 2FA for automation)
 
 on:
@@ -25,7 +25,7 @@ on:
 
 jobs:
   router-ts:
-    name: npm @ariacompute/router-ts
+    name: npm @ariacompute/ariarouter-ts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
           npm publish --access public
 
   router-rn:
-    name: npm @ariacompute/router-rn
+    name: npm @ariacompute/ariarouter-rn
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -1,7 +1,7 @@
 //! Agent router: extension trait + builtin tool-call loop.
 
-use aria_router_config::{AgentRecipe, ExtensionCfg};
-use aria_router_core::{ChatRequest, ModelCard, RouteDecision, RouterError};
+use ariarouter_config::{AgentRecipe, ExtensionCfg};
+use ariarouter_core::{ChatRequest, ModelCard, RouteDecision, RouterError};
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Value;
@@ -51,7 +51,7 @@ impl AgentExtension for FakeExtension {
     }
 }
 
-/// Builtin: OpenAI-compatible tool loop, or single-shot JSON if `ARIA_ROUTER_BUILTIN_JSON` style.
+/// Builtin: OpenAI-compatible tool loop, or single-shot JSON if `ARIAROUTER_BUILTIN_JSON` style.
 pub struct BuiltinExtension {
     pub endpoint: Option<String>,
     pub model: String,

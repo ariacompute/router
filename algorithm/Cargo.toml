@@ -1,10 +1,10 @@
 [package]
-name = "aria-router-algorithm"
+name = "ariarouter-algorithm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Model selection algorithms for aria-router"
+description = "Model selection algorithms for ariarouter"
 
 [dependencies]
-aria-router-core.workspace = true
-aria-router-config.workspace = true
+ariarouter-core.workspace = true
+ariarouter-config.workspace = true

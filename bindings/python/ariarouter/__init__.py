@@ -1,4 +1,4 @@
-"""Aria Router Python binding (ctypes over libaria_router_ffi)."""
+"""Aria Router Python binding (ctypes over libariarouter_ffi)."""
 from __future__ import annotations
 
 import ctypes
@@ -11,13 +11,13 @@ from typing import Any, Optional
 __version__ = "0.1.0"
 
 _LIB_NAMES = {
-    "win32": "aria_router_ffi.dll",
-    "darwin": "libaria_router_ffi.dylib",
+    "win32": "ariarouter_ffi.dll",
+    "darwin": "libariarouter_ffi.dylib",
 }
 
 
 def _ffi_lib_name() -> str:
-    return _LIB_NAMES.get(sys.platform, "libaria_router_ffi.so")
+    return _LIB_NAMES.get(sys.platform, "libariarouter_ffi.so")
 
 
 def _aria_home() -> str:
@@ -26,7 +26,7 @@ def _aria_home() -> str:
 
 def _load_lib(path: Optional[str] = None):
     if not path:
-        path = os.environ.get("ARIA_ROUTER_FFI_LIB")
+        path = os.environ.get("ARIAROUTER_FFI_LIB")
     if not path:
         bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", _ffi_lib_name())
         path = bundled if os.path.isfile(bundled) else None
@@ -34,7 +34,7 @@ def _load_lib(path: Optional[str] = None):
         cached = os.path.join(_aria_home(), "lib", _ffi_lib_name())
         path = cached if os.path.isfile(cached) else None
     if not path:
-        raise RuntimeError("libaria_router_ffi not found; set ARIA_ROUTER_FFI_LIB")
+        raise RuntimeError("libariarouter_ffi not found; set ARIAROUTER_FFI_LIB")
     return ctypes.CDLL(path)
 
 
@@ -62,27 +62,27 @@ class Router:
         if self._lib is not None:
             return
         self._lib = _load_lib()
-        self._lib.aria_router_init.restype = c_void_p
-        self._lib.aria_router_init.argtypes = [c_char_p]
-        self._lib.aria_router_connect.restype = c_void_p
-        self._lib.aria_router_connect.argtypes = [c_char_p]
-        self._lib.aria_router_destroy.argtypes = [c_void_p]
-        self._lib.aria_router_complete.restype = c_int
-        self._lib.aria_router_complete.argtypes = [c_void_p, c_char_p, c_char_p, c_char_p, c_size_t]
-        self._lib.aria_router_complete_stream.restype = c_int
-        self._lib.aria_router_models.restype = c_int
-        self._lib.aria_router_models.argtypes = [c_void_p, c_char_p, c_size_t]
-        self._lib.aria_router_last_route.restype = c_int
-        self._lib.aria_router_last_route.argtypes = [c_void_p, c_char_p, c_size_t]
-        self._lib.aria_router_last_error.restype = c_char_p
+        self._lib.ariarouter_init.restype = c_void_p
+        self._lib.ariarouter_init.argtypes = [c_char_p]
+        self._lib.ariarouter_connect.restype = c_void_p
+        self._lib.ariarouter_connect.argtypes = [c_char_p]
+        self._lib.ariarouter_destroy.argtypes = [c_void_p]
+        self._lib.ariarouter_complete.restype = c_int
+        self._lib.ariarouter_complete.argtypes = [c_void_p, c_char_p, c_char_p, c_char_p, c_size_t]
+        self._lib.ariarouter_complete_stream.restype = c_int
+        self._lib.ariarouter_models.restype = c_int
+        self._lib.ariarouter_models.argtypes = [c_void_p, c_char_p, c_size_t]
+        self._lib.ariarouter_last_route.restype = c_int
+        self._lib.ariarouter_last_route.argtypes = [c_void_p, c_char_p, c_size_t]
+        self._lib.ariarouter_last_error.restype = c_char_p
 
     def init(self, config_path: str) -> "Router":
         self._ensure()
         if self._handle:
             self.close()
-        self._handle = self._lib.aria_router_init(config_path.encode())
+        self._handle = self._lib.ariarouter_init(config_path.encode())
         if not self._handle:
-            err = self._lib.aria_router_last_error()
+            err = self._lib.ariarouter_last_error()
             raise RuntimeError(err.decode() if err else "init failed")
         return self
 
@@ -90,22 +90,22 @@ class Router:
         self._ensure()
         if self._handle:
             self.close()
-        self._handle = self._lib.aria_router_connect(base_url.encode())
+        self._handle = self._lib.ariarouter_connect(base_url.encode())
         if not self._handle:
-            err = self._lib.aria_router_last_error()
+            err = self._lib.ariarouter_last_error()
             raise RuntimeError(err.decode() if err else "connect failed")
         return self
 
     def close(self) -> None:
         if self._handle and self._lib:
-            self._lib.aria_router_destroy(self._handle)
+            self._lib.ariarouter_destroy(self._handle)
         self._handle = None
 
     def complete(self, messages: list, options: Optional[dict[str, Any]] = None) -> dict:
         if not self._handle:
             raise RuntimeError("router not initialized")
         buf = ctypes.create_string_buffer(256 * 1024)
-        rc = self._lib.aria_router_complete(
+        rc = self._lib.ariarouter_complete(
             self._handle,
             json.dumps(messages).encode(),
             json.dumps(options or {}).encode(),
@@ -113,7 +113,7 @@ class Router:
             len(buf),
         )
         if rc != 0:
-            err = self._lib.aria_router_last_error()
+            err = self._lib.ariarouter_last_error()
             raise RuntimeError(err.decode() if err else "complete failed")
         return json.loads(buf.value.decode())
 
@@ -121,9 +121,9 @@ class Router:
         if not self._handle:
             raise RuntimeError("router not initialized")
         buf = ctypes.create_string_buffer(64 * 1024)
-        rc = self._lib.aria_router_models(self._handle, buf, len(buf))
+        rc = self._lib.ariarouter_models(self._handle, buf, len(buf))
         if rc != 0:
-            err = self._lib.aria_router_last_error()
+            err = self._lib.ariarouter_last_error()
             raise RuntimeError(err.decode() if err else "models failed")
         return json.loads(buf.value.decode())
 
@@ -131,7 +131,7 @@ class Router:
         if not self._handle:
             return {}
         buf = ctypes.create_string_buffer(64 * 1024)
-        rc = self._lib.aria_router_last_route(self._handle, buf, len(buf))
+        rc = self._lib.ariarouter_last_route(self._handle, buf, len(buf))
         if rc != 0:
             return {}
         return json.loads(buf.value.decode() or "{}")

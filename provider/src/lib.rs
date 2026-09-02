@@ -1,7 +1,7 @@
 //! OpenAI-compatible upstream forwarding + health/latency.
 
-use aria_router_config::{ProviderModel, RouterDocument};
-use aria_router_core::{ChatRequest, RouterError};
+use ariarouter_config::{ProviderModel, RouterDocument};
+use ariarouter_core::{ChatRequest, RouterError};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -125,14 +125,14 @@ pub async fn forward_sse_text(
     Ok(text)
 }
 
-fn pick_backend(p: &ProviderModel) -> Result<&aria_router_config::BackendRef, RouterError> {
+fn pick_backend(p: &ProviderModel) -> Result<&ariarouter_config::BackendRef, RouterError> {
     p.backend_refs
         .iter()
         .max_by_key(|b| b.weight)
         .ok_or_else(|| RouterError::Config(format!("model {} has no backend_refs", p.name)))
 }
 
-fn api_key(b: &aria_router_config::BackendRef) -> Option<String> {
+fn api_key(b: &ariarouter_config::BackendRef) -> Option<String> {
     if let Some(k) = &b.api_key {
         if !k.is_empty() {
             return Some(k.clone());

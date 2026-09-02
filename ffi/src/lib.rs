@@ -1,9 +1,9 @@
-//! C ABI for aria-router (`libaria_router_ffi`).
+//! C ABI for ariarouter (`libariarouter_ffi`).
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: pointers are caller-owned
 
-use aria_router_config::RouterDocument;
-use aria_router_http::{data_router, last_route_json, AppState};
+use ariarouter_config::RouterDocument;
+use ariarouter_http::{data_router, last_route_json, AppState};
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use std::ffi::{CStr, CString};
@@ -22,7 +22,7 @@ fn set_err(msg: &str) {
 }
 
 #[no_mangle]
-pub extern "C" fn aria_router_last_error() -> *const c_char {
+pub extern "C" fn ariarouter_last_error() -> *const c_char {
     LAST_ERROR.with(|s| {
         s.lock()
             .unwrap()
@@ -32,13 +32,13 @@ pub extern "C" fn aria_router_last_error() -> *const c_char {
     })
 }
 
-pub struct AriaRouterHandle {
+pub struct AriarouterHandle {
     state: Option<Arc<AppState>>,
     base_url: Option<String>,
     rt: tokio::runtime::Runtime,
 }
 
-impl AriaRouterHandle {
+impl AriarouterHandle {
     fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -55,7 +55,7 @@ fn cstr<'a>(p: *const c_char) -> Result<&'a str, ()> {
 }
 
 #[no_mangle]
-pub extern "C" fn aria_router_init(config_path: *const c_char) -> *mut AriaRouterHandle {
+pub extern "C" fn ariarouter_init(config_path: *const c_char) -> *mut AriarouterHandle {
     let path = match cstr(config_path) {
         Ok(s) => s,
         Err(()) => {
@@ -65,10 +65,10 @@ pub extern "C" fn aria_router_init(config_path: *const c_char) -> *mut AriaRoute
     };
     match RouterDocument::load_path(path) {
         Ok(doc) => {
-            let h = Box::new(AriaRouterHandle {
+            let h = Box::new(AriarouterHandle {
                 state: Some(Arc::new(AppState::new(doc))),
                 base_url: None,
-                rt: AriaRouterHandle::runtime(),
+                rt: AriarouterHandle::runtime(),
             });
             Box::into_raw(h)
         }
@@ -80,7 +80,7 @@ pub extern "C" fn aria_router_init(config_path: *const c_char) -> *mut AriaRoute
 }
 
 #[no_mangle]
-pub extern "C" fn aria_router_connect(base_url: *const c_char) -> *mut AriaRouterHandle {
+pub extern "C" fn ariarouter_connect(base_url: *const c_char) -> *mut AriarouterHandle {
     let url = match cstr(base_url) {
         Ok(s) => s.to_string(),
         Err(()) => {
@@ -88,15 +88,15 @@ pub extern "C" fn aria_router_connect(base_url: *const c_char) -> *mut AriaRoute
             return std::ptr::null_mut();
         }
     };
-    Box::into_raw(Box::new(AriaRouterHandle {
+    Box::into_raw(Box::new(AriarouterHandle {
         state: None,
         base_url: Some(url),
-        rt: AriaRouterHandle::runtime(),
+        rt: AriarouterHandle::runtime(),
     }))
 }
 
 #[no_mangle]
-pub extern "C" fn aria_router_destroy(router: *mut AriaRouterHandle) {
+pub extern "C" fn ariarouter_destroy(router: *mut AriarouterHandle) {
     if !router.is_null() {
         unsafe {
             drop(Box::from_raw(router));
@@ -121,7 +121,7 @@ fn write_out(out: *mut c_char, out_len: usize, s: &str) -> i32 {
     0
 }
 
-fn complete_inner(h: &AriaRouterHandle, messages_json: &str, options_json: &str) -> Result<String, String> {
+fn complete_inner(h: &AriarouterHandle, messages_json: &str, options_json: &str) -> Result<String, String> {
     let opts: serde_json::Value =
         serde_json::from_str(if options_json.is_empty() { "{}" } else { options_json })
             .map_err(|e| e.to_string())?;
@@ -179,8 +179,8 @@ fn complete_inner(h: &AriaRouterHandle, messages_json: &str, options_json: &str)
 }
 
 #[no_mangle]
-pub extern "C" fn aria_router_complete(
-    router: *mut AriaRouterHandle,
+pub extern "C" fn ariarouter_complete(
+    router: *mut AriarouterHandle,
     messages_json: *const c_char,
     options_json: *const c_char,
     out: *mut c_char,
@@ -203,8 +203,8 @@ pub extern "C" fn aria_router_complete(
 }
 
 #[no_mangle]
-pub extern "C" fn aria_router_complete_stream(
-    router: *mut AriaRouterHandle,
+pub extern "C" fn ariarouter_complete_stream(
+    router: *mut AriarouterHandle,
     messages_json: *const c_char,
     options_json: *const c_char,
     out: *mut c_char,
@@ -212,7 +212,7 @@ pub extern "C" fn aria_router_complete_stream(
     callback: Option<extern "C" fn(*const c_char, *mut libc::c_void)>,
     user_data: *mut libc::c_void,
 ) -> i32 {
-    let rc = aria_router_complete(router, messages_json, options_json, out, out_len);
+    let rc = ariarouter_complete(router, messages_json, options_json, out, out_len);
     if rc == 0 {
         if let Some(cb) = callback {
             cb(out, user_data);
@@ -222,8 +222,8 @@ pub extern "C" fn aria_router_complete_stream(
 }
 
 #[no_mangle]
-pub extern "C" fn aria_router_models(
-    router: *mut AriaRouterHandle,
+pub extern "C" fn ariarouter_models(
+    router: *mut AriarouterHandle,
     out: *mut c_char,
     out_len: usize,
 ) -> i32 {
@@ -246,8 +246,8 @@ pub extern "C" fn aria_router_models(
 }
 
 #[no_mangle]
-pub extern "C" fn aria_router_last_route(
-    router: *mut AriaRouterHandle,
+pub extern "C" fn ariarouter_last_route(
+    router: *mut AriarouterHandle,
     out: *mut c_char,
     out_len: usize,
 ) -> i32 {
@@ -271,9 +271,9 @@ mod tests {
     #[test]
     fn init_missing() {
         let p = CString::new("/no/such/config.yaml").unwrap();
-        let h = aria_router_init(p.as_ptr());
+        let h = ariarouter_init(p.as_ptr());
         assert!(h.is_null());
-        assert!(!aria_router_last_error().is_null());
+        assert!(!ariarouter_last_error().is_null());
     }
 
     #[test]
@@ -282,12 +282,12 @@ mod tests {
         let cfg = dir.join("c.yaml");
         std::fs::write(&cfg, include_str!("../../config/examples/semantic-tiny.yaml")).unwrap();
         let p = CString::new(cfg.to_str().unwrap()).unwrap();
-        let h = aria_router_init(p.as_ptr());
+        let h = ariarouter_init(p.as_ptr());
         assert!(!h.is_null());
         let mut buf = vec![0u8; 4096];
-        let rc = aria_router_models(h, buf.as_mut_ptr() as *mut c_char, buf.len());
+        let rc = ariarouter_models(h, buf.as_mut_ptr() as *mut c_char, buf.len());
         assert_eq!(rc, 0);
-        aria_router_destroy(h);
+        ariarouter_destroy(h);
     }
 
     #[test]
@@ -296,12 +296,12 @@ mod tests {
         let cfg = dir.join("ffi.yaml");
         std::fs::write(&cfg, include_str!("../../config/examples/ffi-tiny.yaml")).unwrap();
         let p = CString::new(cfg.to_str().unwrap()).unwrap();
-        let h = aria_router_init(p.as_ptr());
+        let h = ariarouter_init(p.as_ptr());
         assert!(!h.is_null());
         let msgs = CString::new(r#"[{"role":"user","content":"hi"}]"#).unwrap();
         let opts = CString::new(r#"{"model":"aria/semantic-auto"}"#).unwrap();
         let mut buf = vec![0u8; 8192];
-        let rc = aria_router_complete(
+        let rc = ariarouter_complete(
             h,
             msgs.as_ptr(),
             opts.as_ptr(),
@@ -309,7 +309,7 @@ mod tests {
             buf.len(),
         );
         assert_eq!(rc, 0, "{}", unsafe {
-            CStr::from_ptr(aria_router_last_error()).to_string_lossy()
+            CStr::from_ptr(ariarouter_last_error()).to_string_lossy()
         });
         let s = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
             .to_string_lossy()
@@ -317,11 +317,11 @@ mod tests {
         assert!(s.contains("hello-from-router"), "{s}");
         let mut route = vec![0u8; 4096];
         assert_eq!(
-            aria_router_last_route(h, route.as_mut_ptr() as *mut c_char, route.len()),
+            ariarouter_last_route(h, route.as_mut_ptr() as *mut c_char, route.len()),
             0
         );
-        aria_router_destroy(h);
-        aria_router_destroy(std::ptr::null_mut());
+        ariarouter_destroy(h);
+        ariarouter_destroy(std::ptr::null_mut());
     }
 
     #[test]
@@ -330,7 +330,7 @@ mod tests {
         let cfg = dir.join("ffi.yaml");
         std::fs::write(&cfg, include_str!("../../config/examples/ffi-tiny.yaml")).unwrap();
         let p = CString::new(cfg.to_str().unwrap()).unwrap();
-        let h = aria_router_init(p.as_ptr());
+        let h = ariarouter_init(p.as_ptr());
         assert!(!h.is_null());
         let msgs = CString::new(r#"[{"role":"user","content":"hi"}]"#).unwrap();
         let opts = CString::new(r#"{"model":"aria/semantic-auto"}"#).unwrap();
@@ -341,7 +341,7 @@ mod tests {
             }
         }
         let mut hits: i32 = 0;
-        let rc = aria_router_complete_stream(
+        let rc = ariarouter_complete_stream(
             h,
             msgs.as_ptr(),
             opts.as_ptr(),
@@ -352,12 +352,12 @@ mod tests {
         );
         assert_eq!(rc, 0);
         assert!(hits >= 1);
-        aria_router_destroy(h);
+        ariarouter_destroy(h);
     }
 
     fn tempfile_dir() -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!(
-            "aria-router-ffi-{}-{}",
+            "ariarouter-ffi-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

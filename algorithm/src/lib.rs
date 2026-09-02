@@ -1,7 +1,7 @@
 //! Selection algorithms (static / latency-aware / multi-factor).
 
-use aria_router_config::{DecisionCfg, RouterDocument};
-use aria_router_core::{RouterError, ModelCard};
+use ariarouter_config::{DecisionCfg, RouterDocument};
+use ariarouter_core::{RouterError, ModelCard};
 
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeStats {
@@ -137,8 +137,8 @@ mod tests {
             priority: 1,
             rules: Default::default(),
             model_refs: vec![
-                aria_router_config::ModelRef { model: "a".into() },
-                aria_router_config::ModelRef { model: "b".into() },
+                ariarouter_config::ModelRef { model: "a".into() },
+                ariarouter_config::ModelRef { model: "b".into() },
             ],
             algorithm: Some(algo.into()),
             plugins: vec![],

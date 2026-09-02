@@ -8,10 +8,10 @@
 
 用 **Rust** 实现独立 OpenAI 兼容网关：按 entrypoint 选择 **semantic** 或 **agent** 决策器，在硬约束剪枝后选择或组合 provider 路径并转发。
 
-- **产品面**：`aria-router` CLI（`setup` / `validate` / `serve`）+ 进程内库 + C ABI + 八语言 SDK。
+- **产品面**：router CLI（`setup` / `validate` / `serve`）+ 进程内库 + C ABI + 八语言 SDK。
 - **两种 router**：`semantic`（signals → Boolean recipe → algorithm）与 `agent`（LLM agent + extensions）并列；共享 listeners / providers / 硬约束 / 转发 / replay。
 - **不做**：Operator、Helm、官网、Python `vllm-sr`、Envoy ExtProc、Grafana / Prometheus、ML wizard、Security Policy、wizmap、fleet-sim、把 TS harness 链进 crate。
-- **与 engine**：engine 仅本地推理；可选向本网关注册为 provider。本仓 SDK 与 `ariacompute-engine` **两套包**，`.so` 名互不覆盖。
+- **与 engine**：engine 仅本地推理；可选向本网关注册为 provider。本仓 SDK 与 `ariacompute-ariaengine` **两套包**，`.so` 名互不覆盖。
 
 ### 1.1 阶段
 
@@ -46,7 +46,7 @@
 | 3 | **agent** | `AgentExtension`；`builtin` / `pi` / `deepseek-harness`；schema 校验；timeout / max_turns |
 | 4 | **provider** | OpenAI 兼容转发、加权 `backend_refs`、health、latency 采样 |
 | 5 | **http** | 数据面 `:8899` chat/SSE/`/v1/models`；管理面默认 `127.0.0.1` health/validate/replay/providers + Dashboard API |
-| 6 | **ffi** | `libaria_router_ffi`：init/connect/complete/stream/models/last_route |
+| 6 | **ffi** | `libariarouter_ffi`：init/connect/complete/stream/models/last_route |
 | 7 | **bindings** | rust/python/go/typescript/react-native/flutter/swift/kotlin |
 | 8 | **dashboard** | 管理面同端口 SPA（`dashboard/`）；`--no-dashboard` 仅 JSON API；Cost / API 密钥页 |
 | 9 | **cost** | 内存六因子账本；`GET /v1/router/cost`；按 model/layer/entrypoint/key 分桶 |
@@ -101,7 +101,7 @@ recipes:
       decisions: [...]
 global:
   require_api_key: false          # true → 数据面 chat 与 PUT providers 须 Bearer
-  keys_path: ~/.ariacompute/router-keys.json
+  keys_path: ~/.ariacompute/ariarouter-keys.json
 ```
 
 密钥：`${VAR}` / `${VAR:-default}`。未知顶层块 → validate 失败。未知 `global` / `pricing` 子键 → validate 失败。`backend_refs.api_key` 仅转发上游，与 Dashboard 签发的客户端 key **不是同一把**。
@@ -147,7 +147,7 @@ Extensions：
 
 - `POST /v1/chat/completions` JSON + SSE
 - `GET /v1/models`：entrypoint 虚拟名 + 实名 provider 名
-- 响应头 `x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`
+- 响应头 `x-ariarouter-layer`、`x-ariarouter-decision`、`x-ariarouter-model`
 - `global.require_api_key: true` 时须 `Authorization: Bearer` 或 `x-api-key` 命中未吊销密钥，否则 **401**
 
 **管理面**（默认 `127.0.0.1:8080`）：
@@ -170,7 +170,7 @@ Extensions：
 
 管理面默认只绑 `127.0.0.1`；绑 `0.0.0.0` 视为运维自担。v1 **无登录**（本机 SPA 可签发密钥）。密钥明文只在 POST 响应出现一次；磁盘 `keys_path` 只存 sha256。
 
-CLI：`aria-router setup` 在 template 后询问 `require API key on data plane?`，写入 `global.require_api_key` + `keys_path`；**不**在 CLI 签发 secret。`--status` 显示开关、路径、key 数量。`--clear` 默认只删 `router.yml`。`validate` / `serve` 同前。
+CLI：`ariarouter setup` 在 template 后询问 `require API key on data plane?`，写入 `global.require_api_key` + `keys_path`；**不**在 CLI 签发 secret。`--status` 显示开关、路径、key 数量。`--clear` 默认只删 `ariarouter.yml`。`validate` / `serve` 同前。
 
 **与 engine**：engine `setup` 写入 `router_api_key`；`serve --router` / `--router-api-key` 在 `PUT /v1/router/providers` 带 Bearer。
 
@@ -180,23 +180,23 @@ CLI：`aria-router setup` 在 template 后询问 `require API key on data plane?
 
 ### 3.7 FFI / SDK
 
-C API（`include/aria_router.h`）：
+C API（`include/ariarouter.h`）：
 
 | C API | 语义 |
 |------|------|
-| `aria_router_init(config_path)` | 进程内加载 YAML → opaque handle |
-| `aria_router_connect(base_url)` | HTTP 连已运行网关 |
-| `aria_router_complete` / `_stream` | chat；JSON 出参 / chunk 回调 |
-| `aria_router_models` / `aria_router_last_route` | 模型列表；最近决策 JSON |
-| `aria_router_destroy` / `aria_router_last_error` | 生命周期 / 错误 |
+| `ariarouter_init(config_path)` | 进程内加载 YAML → opaque handle |
+| `ariarouter_connect(base_url)` | HTTP 连已运行网关 |
+| `ariarouter_complete` / `_stream` | chat；JSON 出参 / chunk 回调 |
+| `ariarouter_models` / `ariarouter_last_route` | 模型列表；最近决策 JSON |
+| `ariarouter_destroy` / `ariarouter_last_error` | 生命周期 / 错误 |
 
-语言包：Python、Go、Rust（`ariacompute-router`）、Swift、Kotlin、Flutter、React Native（`@ariacompute/router-rn`）、TypeScript（`@ariacompute/router-ts`）。布局：`ffi/` + `bindings/<lang>/` + `bindings/testdata/`。
+语言包：Python `ariarouter`、Go `ariarouter`、Rust `ariacompute-ariarouter`、Swift、Kotlin、Flutter `ariarouter`、React Native（`@ariacompute/ariarouter-rn`）、TypeScript（`@ariacompute/ariarouter-ts`）。布局：`ffi/` + `bindings/<lang>/` + `bindings/testdata/`。
 
-动态库：`ARIA_ROUTER_FFI_LIB` → 包内捆绑 → `~/.ariacompute/lib/`。Rust 原生不 dlopen。
+动态库：`ARIAROUTER_FFI_LIB` → 包内捆绑 → `~/.ariacompute/lib/`。Rust 原生不 dlopen。
 
-实例 `setup`：仅内存 `base_url` / `token`；禁止写 `router.yml` / `engine.yml`。无 `auth` 别名。
+实例 `setup`：仅内存 `base_url` / `token`；禁止写 `ariarouter.yml` / `engine.yml`。无 `auth` 别名。
 
-测试：共享 `cases.json`（lifecycle / chat / stream / models / last_route / connect / fail-closed）；`cargo test -p ariacompute-router-ffi`；`./scripts/run-binding-tests.sh`。
+测试：共享 `cases.json`（lifecycle / chat / stream / models / last_route / connect / fail-closed）；`cargo test -p ariacompute-ariarouter-ffi`；`./scripts/run-binding-tests.sh`。
 
 发布：fail-pass 多 registry，不阻断 CLI。
 
