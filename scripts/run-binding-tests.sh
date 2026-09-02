@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Host binding tests for aria-router: build libaria_router_ffi, run Rust/Python/Go/TS/RN.
+# Host binding tests for aria-router: build libaria_router_ffi (cdylib), run Rust/Python/Go/TS/RN.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"

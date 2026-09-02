@@ -1,4 +1,4 @@
-//! Native Rust SDK for aria-router (does not dlopen `libaria_router_ffi`).
+//! Native Rust SDK for aria-router (does not dlopen `libaria-router_ffi`).
 
 use aria_router_config::RouterDocument;
 use aria_router_core::RouterError;

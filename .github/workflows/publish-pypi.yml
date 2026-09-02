@@ -60,7 +60,7 @@ jobs:
           CIBW_ARCHS: ${{ matrix.arch }}
           CIBW_BEFORE_ALL: bash scripts/build-python-ffi.sh
           # musl targets drop the cdylib crate type, so musllinux wheels
-          # cannot bundle libaria_router_ffi.so.
+          # cannot bundle libaria-router_ffi.so.
           CIBW_SKIP: "*musllinux*"
         with:
           package-dir: bindings/python

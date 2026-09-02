@@ -1,4 +1,4 @@
-"""Aria Router Python binding (ctypes over libaria_router_ffi)."""
+"""Aria Router Python binding (ctypes over libaria-router_ffi)."""
 from __future__ import annotations
 
 import ctypes
@@ -11,13 +11,13 @@ from typing import Any, Optional
 __version__ = "0.1.0"
 
 _LIB_NAMES = {
-    "win32": "aria_router_ffi.dll",
-    "darwin": "libaria_router_ffi.dylib",
+    "win32": "aria-router_ffi.dll",
+    "darwin": "libaria-router_ffi.dylib",
 }
 
 
 def _ffi_lib_name() -> str:
-    return _LIB_NAMES.get(sys.platform, "libaria_router_ffi.so")
+    return _LIB_NAMES.get(sys.platform, "libaria-router_ffi.so")
 
 
 def _aria_home() -> str:
@@ -34,7 +34,7 @@ def _load_lib(path: Optional[str] = None):
         cached = os.path.join(_aria_home(), "lib", _ffi_lib_name())
         path = cached if os.path.isfile(cached) else None
     if not path:
-        raise RuntimeError("libaria_router_ffi not found; set ARIA_ROUTER_FFI_LIB")
+        raise RuntimeError("libaria-router_ffi not found; set ARIA_ROUTER_FFI_LIB")
     return ctypes.CDLL(path)
 
 

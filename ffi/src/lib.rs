@@ -1,4 +1,4 @@
-//! C ABI for aria-router (`libaria_router_ffi`).
+//! C ABI for aria-router (`libaria-router_ffi`).
 
 #![allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: pointers are caller-owned
 

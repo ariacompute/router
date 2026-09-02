@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ariacompute-router"
 version = "0.1.0"
-description = "Python SDK for aria-router (ctypes over libaria_router_ffi)"
+description = "Python SDK for aria-router (ctypes over libaria-router_ffi)"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Aria Compute" }]

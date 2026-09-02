@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-Aria Compute inference gateway: OpenAI-compatible HTTP, two parallel routers (**semantic** YAML v0.3 and **agent** via extensions). Shared providers, hard constraints, and forwarding. Not Envoy. Local inference lives in the **engine** repo (`aria-engine`). Engine SDK and this SDK are **two package families** (`libaria_ffi` vs `libaria_router_ffi`).
+Aria Compute inference gateway: OpenAI-compatible HTTP, two parallel routers (**semantic** YAML v0.3 and **agent** via extensions). Shared providers, hard constraints, and forwarding. Not Envoy. Local inference lives in the **engine** repo (`aria-engine`). Engine SDK and this SDK are **two package families** (`libaria_ffi` vs `libaria-router_ffi`).
 
 ## Build / Test
 
@@ -219,7 +219,7 @@ Response headers: `x-aria-router-layer`, `x-aria-router-decision`, `x-aria-route
 
 ## SDK Bindings
 
-Native C ABI (`ariacompute-router-ffi` / `libaria_router_ffi`) plus thin wrappers under `bindings/`. **Do not** mix with `libaria_ffi` / `ariacompute-engine`.
+Native C ABI (`ariacompute-router-ffi` / `libaria-router_ffi`) plus thin wrappers under `bindings/`. **Do not** mix with `libaria_ffi` / `ariacompute-engine`.
 
 | Binding | Path | Package |
 |---------|------|---------|
@@ -245,7 +245,7 @@ C ABI changes must update [`bindings/testdata/cases.json`](bindings/testdata/cas
 
 ### Examples
 
-**Python** (needs `ARIA_ROUTER_FFI_LIB` or a bundled/cached `libaria_router_ffi`):
+**Python** (needs `ARIA_ROUTER_FFI_LIB` or a bundled/cached `libaria-router_ffi`):
 
 ```python
 from aria_router import Router
@@ -264,7 +264,7 @@ r = Router().connect("http://127.0.0.1:8899")
 r.setup(base_url="http://127.0.0.1:8899", token="")  # memory only
 ```
 
-**Rust** (`ariacompute-router` — native API; does not dlopen `libaria_router_ffi`):
+**Rust** (`ariacompute-router` — native API; does not dlopen `libaria-router_ffi`):
 
 ```rust
 use ariacompute_router::Router;
@@ -281,6 +281,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Release assets
+
+On each GitHub Release, [`.github/workflows/release.yml`](.github/workflows/release.yml) uploads platform archives next to the `aria-router` CLI:
+
+| Asset | Contents |
+|-------|----------|
+| `aria-router_<ver>_linux_x86_64.tar.gz` | `aria-router` |
+| `aria-router_<ver>_linux_arm64.tar.gz` | `aria-router` |
+| `aria-router_<ver>_macos.tar.gz` | `aria-router` |
+| `aria-router_<ver>_windows_x86_64.zip` | `aria-router.exe` |
+| `libaria-router_ffi_<ver>_<os>.tar.gz` | `libaria-router_ffi.so` / `.dylib` / `aria-router_ffi.dll` |
+
+```bash
+# Example: Linux x86_64
+tar -xzf aria-router_0.1.0_linux_x86_64.tar.gz
+chmod +x aria-router
+./aria-router --version
+```
+
+Cut a **GitHub Release** — language package publishes are **fail-pass** and do not block CLI / FFI assets. Version = release tag without leading `v`.
 
 ## Engineering Conventions
 

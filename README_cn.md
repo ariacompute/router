@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-Aria Compute 推理网关：OpenAI 兼容 HTTP，两种并列决策器（**semantic** YAML v0.3 与 **agent** extensions）。共享 providers、硬约束与转发。不走 Envoy。本地推理在独立 **engine** 仓（`aria-engine`）。Engine SDK 与本仓 SDK 是 **两套包**（`libaria_ffi` vs `libaria_router_ffi`）。
+Aria Compute 推理网关：OpenAI 兼容 HTTP，两种并列决策器（**semantic** YAML v0.3 与 **agent** extensions）。共享 providers、硬约束与转发。不走 Envoy。本地推理在独立 **engine** 仓（`aria-engine`）。Engine SDK 与本仓 SDK 是 **两套包**（`libaria_ffi` vs `libaria-router_ffi`）。
 
 ## 构建 / 测试
 
@@ -207,7 +207,7 @@ curl -s http://127.0.0.1:8090/v1/router/config | jq .
 
 ## SDK Bindings
 
-C ABI（`ariacompute-router-ffi` / `libaria_router_ffi`）加 `bindings/` 薄封装。**不要**与 `libaria_ffi` / `ariacompute-engine` 混用。
+C ABI（`ariacompute-router-ffi` / `libaria-router_ffi`）加 `bindings/` 薄封装。**不要**与 `libaria_ffi` / `ariacompute-engine` 混用。
 
 | Binding | 路径 | 包 |
 |---------|------|-----|
@@ -233,7 +233,7 @@ C ABI 变更必须同步 [`bindings/testdata/cases.json`](bindings/testdata/case
 
 ### 示例
 
-**Python**（需 `ARIA_ROUTER_FFI_LIB` 或捆绑/缓存的 `libaria_router_ffi`）：
+**Python**（需 `ARIA_ROUTER_FFI_LIB` 或捆绑/缓存的 `libaria-router_ffi`）：
 
 ```python
 from aria_router import Router
@@ -252,7 +252,7 @@ r = Router().connect("http://127.0.0.1:8899")
 r.setup(base_url="http://127.0.0.1:8899", token="")  # 仅内存
 ```
 
-**Rust**（`ariacompute-router` — 原生 API，不 dlopen `libaria_router_ffi`）：
+**Rust**（`ariacompute-router` — 原生 API，不 dlopen `libaria-router_ffi`）：
 
 ```rust
 use ariacompute_router::Router;
@@ -269,6 +269,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+## Release 资产
+
+每次 GitHub Release，[`.github/workflows/release.yml`](.github/workflows/release.yml) 上传与 `aria-router` CLI 并列的平台包：
+
+| 资产 | 内容 |
+|------|------|
+| `aria-router_<ver>_linux_x86_64.tar.gz` | `aria-router` |
+| `aria-router_<ver>_linux_arm64.tar.gz` | `aria-router` |
+| `aria-router_<ver>_macos.tar.gz` | `aria-router` |
+| `aria-router_<ver>_windows_x86_64.zip` | `aria-router.exe` |
+| `libaria-router_ffi_<ver>_<os>.tar.gz` | `libaria-router_ffi.so` / `.dylib` / `aria-router_ffi.dll` |
+
+```bash
+# 示例：Linux x86_64
+tar -xzf aria-router_0.1.0_linux_x86_64.tar.gz
+chmod +x aria-router
+./aria-router --version
+```
+
+创建 **GitHub Release** — 语言包发布为 **fail-pass**，不阻塞 CLI / FFI 资产。版本号 = tag 去掉前缀 `v`。
 
 ## 工程约定
 

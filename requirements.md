@@ -46,7 +46,7 @@
 | 3 | **agent** | `AgentExtension`；`builtin` / `pi` / `deepseek-harness`；schema 校验；timeout / max_turns |
 | 4 | **provider** | OpenAI 兼容转发、加权 `backend_refs`、health、latency 采样 |
 | 5 | **http** | 数据面 `:8899` chat/SSE/`/v1/models`；管理面默认 `127.0.0.1` health/validate/replay/providers + Dashboard API |
-| 6 | **ffi** | `libaria_router_ffi`：init/connect/complete/stream/models/last_route |
+| 6 | **ffi** | `libaria-router_ffi`：init/connect/complete/stream/models/last_route |
 | 7 | **bindings** | rust/python/go/typescript/react-native/flutter/swift/kotlin |
 | 8 | **dashboard** | 管理面同端口 SPA（`dashboard/`）；`--no-dashboard` 仅 JSON API；Cost / API 密钥页 |
 | 9 | **cost** | 内存六因子账本；`GET /v1/router/cost`；按 model/layer/entrypoint/key 分桶 |
@@ -198,7 +198,7 @@ C API（`include/aria_router.h`）：
 
 测试：共享 `cases.json`（lifecycle / chat / stream / models / last_route / connect / fail-closed）；`cargo test -p ariacompute-router-ffi`；`./scripts/run-binding-tests.sh`。
 
-发布：fail-pass 多 registry，不阻断 CLI。
+发布：fail-pass 多 registry，不阻断 CLI。Release 资产：`aria-router_{ver}_{os}.tar.gz` / `.zip`（CLI）与 `libaria-router_ffi_{ver}_{os}.tar.gz`（FFI）。
 
 ## 4. 验收
 

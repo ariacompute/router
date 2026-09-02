@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build libaria_router_ffi and copy the platform dynamic library into the Python wheel.
+# Build libaria_router_ffi (cdylib) and copy as libaria-router_ffi into the Python wheel.
 # Used as cibuildwheel CIBW_BEFORE_ALL so each platform wheel bundles its own lib.
 #
 # Context: on Linux this runs INSIDE a manylinux container (no Rust preinstalled);
@@ -30,7 +30,7 @@ case "$HOST_TRIPLE" in
   *-musl*)
     echo "ERROR: rust host triple is '$HOST_TRIPLE' (musl)." >&2
     echo "Rust drops the cdylib crate type on musl targets (crt-static default)," >&2
-    echo "so libaria_router_ffi.so cannot be produced here. musllinux wheels are" >&2
+    echo "so libaria-router_ffi.so cannot be produced here. musllinux wheels are" >&2
     echo "disabled; make sure CIBW_SKIP=musllinux* is applied so only manylinux" >&2
     echo "builds run." >&2
     exit 1
@@ -38,9 +38,9 @@ case "$HOST_TRIPLE" in
 esac
 
 case "$(uname -s)" in
-  Darwin)          LIB="libaria_router_ffi.dylib";;
-  MINGW*|MSYS*|CYGWIN*) LIB="aria_router_ffi.dll";;
-  *)               LIB="libaria_router_ffi.so";;
+  Darwin)          LIB="libaria_router_ffi.dylib"; DEST_NAME="libaria-router_ffi.dylib";;
+  MINGW*|MSYS*|CYGWIN*) LIB="aria_router_ffi.dll"; DEST_NAME="aria-router_ffi.dll";;
+  *)               LIB="libaria_router_ffi.so"; DEST_NAME="libaria-router_ffi.so";;
 esac
 
 cargo build --release -p ariacompute-router-ffi
@@ -66,5 +66,5 @@ fi
 
 DEST="bindings/python/aria_router/lib"
 mkdir -p "$DEST"
-cp "$SRC" "$DEST/"
-echo "FFI copied $SRC -> $DEST"
+cp "$SRC" "$DEST/$DEST_NAME"
+echo "FFI copied $SRC -> $DEST/$DEST_NAME"

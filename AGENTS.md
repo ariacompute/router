@@ -17,7 +17,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 ## 目录
 - `config/` `signal/` `decision/` `algorithm/` `plugin/` `provider/` `agent/` `ext/` `http/`：运行时 crate
 - `bin/`：`aria-router`（setup / validate / serve）
-- `ffi/`：`ariacompute-router-ffi`（`libaria_router_ffi`）
+- `ffi/`：`ariacompute-router-ffi`（`libaria-router_ffi`）
 - `bindings/`：rust / python / go / typescript / react-native / flutter / swift / kotlin
 - `dashboard/`：管理面 SPA（Overview / Config / Topology / Providers / Replay / Playground）
 - 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
