@@ -19,6 +19,8 @@ pub struct KeyRecord {
     pub last_used_at: Option<String>,
     #[serde(default)]
     pub revoked: bool,
+    #[serde(default)]
+    pub owner_user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -41,6 +43,8 @@ pub struct KeyPublic {
     pub created_at: String,
     pub last_used_at: Option<String>,
     pub revoked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,7 +110,15 @@ impl KeyStore {
                 created_at: k.created_at.clone(),
                 last_used_at: k.last_used_at.clone(),
                 revoked: k.revoked,
+                owner_user_id: k.owner_user_id.clone(),
             })
+            .collect()
+    }
+
+    pub fn list_for_owner(&self, owner_id: &str, is_admin: bool) -> Vec<KeyPublic> {
+        self.list_public()
+            .into_iter()
+            .filter(|k| is_admin || k.owner_user_id.as_deref() == Some(owner_id))
             .collect()
     }
 
@@ -117,6 +129,14 @@ impl KeyStore {
     }
 
     pub fn create(&mut self, name: &str) -> Result<KeyCreated, RouterError> {
+        self.create_for(name, None)
+    }
+
+    pub fn create_for(
+        &mut self,
+        name: &str,
+        owner_user_id: Option<String>,
+    ) -> Result<KeyCreated, RouterError> {
         let name = name.trim();
         if name.is_empty() {
             return Err(RouterError::InvalidParam("key name required".into()));
@@ -136,6 +156,7 @@ impl KeyStore {
             created_at: created_at.clone(),
             last_used_at: None,
             revoked: false,
+            owner_user_id,
         };
         self.keys.push(rec);
         self.persist()?;
@@ -148,17 +169,11 @@ impl KeyStore {
         })
     }
 
-    pub fn revoke(&mut self, id: &str) -> Result<(), RouterError> {
-        let Some(k) = self.keys.iter_mut().find(|k| k.id == id) else {
-            return Err(RouterError::InvalidParam(format!("unknown key id {id}")));
-        };
-        k.revoked = true;
-        self.persist()?;
-        Ok(())
-    }
-
-    /// Verify secret; on success update last_used_at and return (id, name).
-    pub fn authenticate(&mut self, secret: &str) -> Result<(String, String), RouterError> {
+    /// Verify secret; on success update last_used_at and return (id, name, owner_user_id).
+    pub fn authenticate(
+        &mut self,
+        secret: &str,
+    ) -> Result<(String, String, Option<String>), RouterError> {
         let hash = sha256_hex(secret.trim());
         let Some(k) = self.keys.iter_mut().find(|k| k.secret_sha256 == hash) else {
             return Err(RouterError::Unauthorized("invalid api key".into()));
@@ -169,8 +184,25 @@ impl KeyStore {
         k.last_used_at = Some(now_rfc3339());
         let id = k.id.clone();
         let name = k.name.clone();
+        let owner = k.owner_user_id.clone();
         let _ = self.persist();
-        Ok((id, name))
+        Ok((id, name, owner))
+    }
+
+    pub fn owner_of(&self, id: &str) -> Option<Option<String>> {
+        self.keys
+            .iter()
+            .find(|k| k.id == id)
+            .map(|k| k.owner_user_id.clone())
+    }
+
+    pub fn revoke(&mut self, id: &str) -> Result<(), RouterError> {
+        let Some(k) = self.keys.iter_mut().find(|k| k.id == id) else {
+            return Err(RouterError::InvalidParam(format!("unknown key id {id}")));
+        };
+        k.revoked = true;
+        self.persist()?;
+        Ok(())
     }
 }
 
@@ -219,7 +251,7 @@ mod tests {
         let mut store = KeyStore::empty(path);
         let created = store.create("ci").unwrap();
         assert!(created.secret.starts_with(SECRET_PREFIX));
-        let (id, name) = store.authenticate(&created.secret).unwrap();
+        let (id, name, _) = store.authenticate(&created.secret).unwrap();
         assert_eq!(id, created.id);
         assert_eq!(name, "ci");
         store.revoke(&created.id).unwrap();

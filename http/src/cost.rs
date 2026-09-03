@@ -12,6 +12,14 @@ pub struct CostEvent {
     pub user: String,
     pub key_id: Option<String>,
     pub key_name: Option<String>,
+    #[serde(default)]
+    pub identity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serve_user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serve_email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serve_site: Option<String>,
     pub session: String,
     pub entrypoint: String,
     pub layer: String,
@@ -50,6 +58,8 @@ pub struct CostLedger {
     by_layer: HashMap<String, Bucket>,
     by_entrypoint: HashMap<String, Bucket>,
     by_key: HashMap<String, Bucket>,
+    by_local_user: HashMap<String, Bucket>,
+    by_serve_user: HashMap<String, Bucket>,
 }
 
 impl CostLedger {
@@ -79,6 +89,21 @@ impl CostLedger {
                 ev.key_name.as_deref().unwrap_or("")
             );
             Self::add_bucket(self.by_key.entry(label).or_default(), ev);
+        }
+        if ev.identity == "local_user" || (ev.identity == "local" && !ev.user.is_empty()) {
+            if ev.identity == "local_user" {
+                Self::add_bucket(self.by_local_user.entry(ev.user.clone()).or_default(), ev);
+            }
+        }
+        if ev.identity == "serve" {
+            let label = format!(
+                "{}|{}",
+                ev.serve_site.as_deref().unwrap_or("unknown"),
+                ev.serve_email
+                    .as_deref()
+                    .unwrap_or(ev.user.as_str())
+            );
+            Self::add_bucket(self.by_serve_user.entry(label).or_default(), ev);
         }
     }
 
@@ -178,6 +203,9 @@ impl CostLedger {
             "by_layer": map_buckets(&self.by_layer),
             "by_entrypoint": map_buckets(&self.by_entrypoint),
             "by_key": map_buckets(&self.by_key),
+            "by_local_user": map_buckets(&self.by_local_user),
+            "by_serve_user": map_buckets(&self.by_serve_user),
+            "serve_users": self.by_serve_user.len(),
             "recent": self.events.iter().rev().take(n).cloned().collect::<Vec<_>>(),
         })
     }

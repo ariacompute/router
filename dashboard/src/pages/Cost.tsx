@@ -95,6 +95,8 @@ export default function Cost() {
 
       <BucketTable title="By model" rows={bucketRows(data.by_model)} />
       <BucketTable title="By layer" rows={bucketRows(data.by_layer)} />
+      <BucketTable title="Local users" rows={bucketRows(data.by_local_user)} />
+      <BucketTable title="OAuth users" rows={bucketRows(data.by_serve_user)} />
       <BucketTable title="By API key" rows={bucketRows(data.by_key)} />
 
       <h2 className={styles.h1}>Recent events</h2>

@@ -19,7 +19,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `bin/`：`aria-router`（setup / validate / serve）
 - `ffi/`：`ariacompute-router-ffi`（`libaria-router_ffi`）
 - `bindings/`：rust / python / go / typescript / react-native / flutter / swift / kotlin
-- `dashboard/`：管理面 SPA（Overview / Config / Topology / Providers / Replay / Playground）
+- `dashboard/`：管理面 SPA（Login/Account/Keys/Users/Cost + Overview…）
 - 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
 
 ## 开发规范
@@ -39,8 +39,8 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `./scripts/run-binding-tests.sh`
 
 ## 进行中需求
-Spec 见 `requirements.md`。阶段 A–G 已落地（含 G-cost：六因子账本、Dashboard API 密钥、`require_api_key`）。
-engine 去 hybrid，可选 `--router` / `--router-api-key` 注册为 provider。
+Spec 见 `requirements.md`。阶段 A–H 已落地（含本地用户、OAuth Account、`bfvk`、cost 分桶、CLI 分段）。
+engine 去 hybrid；`--router` / `--router-api-key` 注册；可选 `serve_api_key` 仅存储。
 
 ## 注意事项
 - 黄金路径：keyword decision → static 转发 mock/engine；agent builtin JSON 决策。

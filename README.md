@@ -35,11 +35,13 @@ Examples (English comments in every file):
 | [`ffi.yaml`](config/examples/ffi.yaml) | gold `fast-response` plus the same catalog recipe |
 
 ```bash
-# Setup — writes ~/.ariacompute/router.yml (semantic starter by default).
-# Prompts whether to require API keys on the data plane (and provider registration).
-# Secrets are issued only in Dashboard → API keys (not by CLI).
+# Setup — two credential sections (do not mix prefixes):
+#   [1/2] Local (router Dashboard) — admin user/password; sk-aria_ keys minted in Dashboard → Keys
+#   [2/2] OAuth (Aria Compute)     — optional bfvk-… into ~/.ariacompute/router-serve.json
 aria-router setup
 aria-router setup --status
+# Non-interactive Local flags: --admin-user --admin-password --allow-register --require-api-key
+# Non-interactive OAuth flags: --serve-site com|cn --serve-api-key bfvk-…
 
 # Validate (default path, or pass --config)
 aria-router validate
@@ -49,10 +51,6 @@ cargo run -p aria-router -- validate --config config/examples/semantic-tiny.yaml
 # management defaults to 127.0.0.1:8080. Omit --config after setup.
 cargo run -p aria-router -- serve --config config/examples/semantic-tiny.yaml
 aria-router serve --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090
-
-# Serve — data plane from YAML listeners (semantic-tiny: 127.0.0.1:8899);
-# management defaults to 127.0.0.1:8080
-cargo run -p aria-router -- serve --config config/examples/semantic-tiny.yaml
 
 # Explicit binds (keep mgmt off engine's 8080 if you will register aria-engine)
 cargo run -p aria-router -- serve \
@@ -70,7 +68,14 @@ cargo run -p aria-router -- serve \
 
 ## Dashboard
 
-The management listener serves a Vite React SPA (Overview / Cost / API keys / Config / Topology / Providers / Replay / Playground) at `http://{mgmt}/` when `dashboard/dist` exists. Build it first:
+The management listener serves a Vite React SPA at `http://{mgmt}/` when `dashboard/dist` exists. After `aria-router setup`, open **Login** (local username/password). Pages:
+
+| Section title (same as CLI) | Pages |
+|-----------------------------|--------|
+| **Local (router Dashboard)** | Login / Register · API keys (`sk-aria_…`) · Users (admin) |
+| **OAuth (Aria Compute)** | Account — linked user, `bfvk-…` reveal/paste/OAuth |
+
+Cost splits **Local users** vs **OAuth users**. Build:
 
 ```bash
 npm --prefix dashboard ci
@@ -82,14 +87,15 @@ cargo run -p aria-router -- serve \
 # open http://127.0.0.1:8090/
 ```
 
-`--no-dashboard` serves JSON APIs only (keys/cost CRUD still work via curl). There is no Grafana, ML wizard, or login; bind `127.0.0.1` unless you accept an open admin port.
+`--no-dashboard` serves JSON APIs only (keys/cost CRUD still work via curl). There is no Grafana or ML wizard; local Login is required when users exist. Bind `127.0.0.1` unless you accept an open admin port.
 
 ### API keys and cost
 
 1. Open Dashboard → **API keys** → Generate (`sk-aria_…` shown once). Or `POST /v1/router/keys`.
 2. `aria-router setup` → enable `global.require_api_key` when you want chat and `PUT /v1/router/providers` to require Bearer.
-3. Clients and `aria-engine` pass `Authorization: Bearer sk-aria_…` (engine: `router_api_key` / `--router-api-key`).
-4. **Cost** page / `GET /v1/router/cost` shows six-factor spend and `by_key` (YAML `pricing.input_per_mtok` / `output_per_mtok`).
+3. Clients and `aria-engine` use the same **Local** secret (`router_api_key` / `--router-api-key`; never paste `bfvk-` there).
+4. **Cost** page / `GET /v1/router/cost` shows six-factor spend plus `by_local_user` / `by_serve_user` / `by_key` (YAML `pricing.input_per_mtok` / `output_per_mtok`).
+5. OAuth: Dashboard → Account or `aria-router setup` [2/2] for `bfvk-…`.
 
 ```bash
 # Chat with API key (when require_api_key: true)

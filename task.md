@@ -101,3 +101,21 @@
 - [x] Dashboard：Cost 页 + API 密钥页
 - [x] engine：`router_api_key` / `--router-api-key`；`register_with_router` 带 Authorization
 - [x] 单测：usage 计费、401、CRUD、by_key、engine Bearer
+
+## 阶段 H — 本地用户 + OAuth
+
+### T14 — Spec
+- [x] `requirements.md` 阶段 H；§2.1 / §3.1 / §3.5；serve router-link；engine `serve_*`
+- [x] 本清单与 AGENTS / README
+
+### T15 — 本地用户
+- [x] `router-users.json` argon2；register/login/session；`allow_register`；admin Users
+- [x] keys `owner_user_id`；mgmt session 门控
+
+### T16 — OAuth 账户
+- [x] serve `/api/router-link/*`；`router-serve.json`；mgmt serve/account APIs
+- [x] Dashboard Account 展示；Cost `by_local_user` / `by_serve_user`；dual Bearer
+
+### T17 — CLI
+- [x] `aria-router setup` 分段 Local vs OAuth；`--status` 分组
+- [x] `aria-engine setup` 同名两段；`serve_site` / `serve_api_key`；前缀互斥

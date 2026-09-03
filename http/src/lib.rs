@@ -3,11 +3,15 @@
 mod topology;
 mod keys;
 mod cost;
+mod users;
+mod serve_account;
+mod auth_api;
 
 use aria_router_agent::{task_from, AgentExtension, BuiltinExtension, FakeExtension};
 use aria_router_algorithm::{hard_filter, select, RuntimeStats};
 use aria_router_config::{
-    resolve_keys_path, ExtensionCfg, Recipe, RouterDocument,
+    resolve_keys_path, resolve_serve_account_path, resolve_users_path, ExtensionCfg, Recipe,
+    RouterDocument,
 };
 use aria_router_core::{
     ChatRequest, RouteDecision, RouterError, RouterKind,
@@ -25,11 +29,15 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use cost::{cost_usd, estimate_tokens, now_rfc3339, CostEvent, CostLedger};
 use keys::{extract_bearer, KeyStore};
+use users::{UserRole, UserStore};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
+
+pub use serve_account::{validate_bfvk, ServeAccountStore};
+pub use users::UserStore as LocalUserStore;
 
 pub struct AppState {
     pub doc: Mutex<RouterDocument>,
@@ -41,6 +49,8 @@ pub struct AppState {
     pub fake_agents: Mutex<HashMap<String, RouteDecision>>,
     pub keys: Mutex<KeyStore>,
     pub cost: Mutex<CostLedger>,
+    pub users: Mutex<UserStore>,
+    pub serve: Mutex<ServeAccountStore>,
 }
 
 impl AppState {
@@ -58,7 +68,28 @@ impl AppState {
                 resolve_keys_path("~/.ariacompute/router-keys.json")
                     .unwrap_or_else(|_| PathBuf::from("router-keys.json"))
             });
+        let users_path = doc
+            .global
+            .users_path
+            .as_deref()
+            .map(|p| resolve_users_path(p).unwrap_or_else(|_| PathBuf::from(p)))
+            .unwrap_or_else(|| {
+                resolve_users_path("~/.ariacompute/router-users.json")
+                    .unwrap_or_else(|_| PathBuf::from("router-users.json"))
+            });
+        let serve_path = doc
+            .global
+            .serve_account_path
+            .as_deref()
+            .map(|p| resolve_serve_account_path(p).unwrap_or_else(|_| PathBuf::from(p)))
+            .unwrap_or_else(|| {
+                resolve_serve_account_path("~/.ariacompute/router-serve.json")
+                    .unwrap_or_else(|_| PathBuf::from("router-serve.json"))
+            });
         let keys = KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path));
+        let users = UserStore::load(&users_path).unwrap_or_else(|_| UserStore::empty(users_path));
+        let serve =
+            ServeAccountStore::load(&serve_path).unwrap_or_else(|_| ServeAccountStore::empty(serve_path));
         Self {
             doc: Mutex::new(doc),
             config_path,
@@ -69,6 +100,8 @@ impl AppState {
             fake_agents: Mutex::new(HashMap::new()),
             keys: Mutex::new(keys),
             cost: Mutex::new(CostLedger::default()),
+            users: Mutex::new(users),
+            serve: Mutex::new(serve),
         }
     }
 
@@ -124,6 +157,24 @@ pub fn resolve_dashboard_dir() -> Option<PathBuf> {
 fn mgmt_api_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/v1/router/auth/register-status", get(auth_api::register_status))
+        .route("/v1/router/auth/register", post(auth_api::register))
+        .route("/v1/router/auth/login", post(auth_api::login))
+        .route("/v1/router/auth/logout", post(auth_api::logout))
+        .route("/v1/router/auth/me", get(auth_api::me))
+        .route("/v1/router/auth/password", post(auth_api::change_password))
+        .route("/v1/router/users", get(auth_api::list_users))
+        .route("/v1/router/users/{id}/disabled", put(auth_api::set_user_disabled))
+        .route(
+            "/v1/router/settings/allow_register",
+            put(auth_api::set_allow_register),
+        )
+        .route("/v1/router/serve/account", get(auth_api::serve_account_get).delete(auth_api::serve_account_delete))
+        .route("/v1/router/serve/account/secret", get(auth_api::serve_account_secret))
+        .route("/v1/router/serve/link/start", post(auth_api::serve_link_start))
+        .route("/v1/router/serve/link/callback", get(auth_api::serve_link_callback))
+        .route("/v1/router/serve/api-key", put(auth_api::serve_put_api_key))
+        .route("/v1/router/serve/api-keys", post(auth_api::serve_create_api_key))
         .route("/v1/router/validate", post(validate_ep))
         .route("/v1/router/replay", get(replay_ep))
         .route("/v1/router/providers", put(upsert_provider).get(list_providers))
@@ -197,6 +248,13 @@ fn auth_provider_upsert(st: &AppState, headers: &HeaderMap) -> Result<(), Router
     let require = st.require_api_key();
     match extract_bearer(headers) {
         Some(secret) => {
+            if secret.starts_with("bfvk-") {
+                let serve = st.serve.lock().unwrap();
+                if serve.authenticate_bfvk(&secret).is_some() {
+                    return Ok(());
+                }
+                return Err(RouterError::Unauthorized("invalid api key".into()));
+            }
             let mut keys = st.keys.lock().unwrap();
             keys.authenticate(&secret)?;
             Ok(())
@@ -326,6 +384,8 @@ fn replace_config(st: &AppState, doc: RouterDocument, raw: &str) -> Result<(), R
 async fn overview_ep(State(st): State<Arc<AppState>>) -> Json<Value> {
     let doc = snapshot_doc(&st);
     let (active, revoked) = st.keys.lock().unwrap().counts();
+    let (admin_n, user_n) = st.users.lock().unwrap().counts();
+    let serve = st.serve.lock().unwrap().public();
     let cost = st.cost.lock().unwrap().summary();
     Json(json!({
         "status": "ok",
@@ -335,6 +395,9 @@ async fn overview_ep(State(st): State<Arc<AppState>>) -> Json<Value> {
         "last_route": st.last_route.lock().unwrap().clone(),
         "cost": cost,
         "api_keys": { "active": active, "revoked": revoked },
+        "local_users": { "admin": admin_n, "user": user_n },
+        "serve_account": serve,
+        "allow_register": doc.global.allow_register,
     }))
 }
 
@@ -348,8 +411,17 @@ async fn cost_ep(State(st): State<Arc<AppState>>, Query(q): Query<CostQ>) -> Jso
     Json(st.cost.lock().unwrap().report(n))
 }
 
-async fn list_keys(State(st): State<Arc<AppState>>) -> Json<Value> {
-    Json(json!({"keys": st.keys.lock().unwrap().list_public()}))
+async fn list_keys(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AppError> {
+    let session = auth_api::gate_if_users(&st, &headers).map_err(AppError)?;
+    let keys = st.keys.lock().unwrap();
+    let list = match session {
+        Some(u) => keys.list_for_owner(&u.id, matches!(u.role, UserRole::Admin)),
+        None => keys.list_public(),
+    };
+    Ok(Json(json!({"keys": list})))
 }
 
 #[derive(Deserialize)]
@@ -359,21 +431,40 @@ struct CreateKeyBody {
 
 async fn create_key(
     State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(body): Json<CreateKeyBody>,
 ) -> Result<Json<Value>, AppError> {
+    let session = auth_api::gate_if_users(&st, &headers).map_err(AppError)?;
+    let owner = session.map(|u| u.id);
     let created = st
         .keys
         .lock()
         .unwrap()
-        .create(&body.name)
+        .create_for(&body.name, owner)
         .map_err(AppError)?;
     Ok(Json(serde_json::to_value(created).unwrap()))
 }
 
 async fn revoke_key(
     State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    let session = auth_api::gate_if_users(&st, &headers).map_err(AppError)?;
+    if let Some(u) = session {
+        if !matches!(u.role, UserRole::Admin) {
+            let owner = st.keys.lock().unwrap().owner_of(&id);
+            match owner {
+                Some(Some(oid)) if oid == u.id => {}
+                Some(None) => {}
+                _ => {
+                    return Err(AppError(RouterError::Unauthorized(
+                        "cannot revoke another user's key".into(),
+                    )));
+                }
+            }
+        }
+    }
     st.keys.lock().unwrap().revoke(&id).map_err(AppError)?;
     Ok(Json(json!({"ok": true, "id": id})))
 }
@@ -424,15 +515,32 @@ async fn chat_inner(
     playground: bool,
 ) -> Response {
     let auth = if playground {
-        Ok((
-            "playground".to_string(),
-            None,
-            None,
-        ))
+        let sess_user = auth_api::optional_user(&st, &headers);
+        if let Some(u) = sess_user {
+            Ok(ChatAuth {
+                user: u.username,
+                key_id: None,
+                key_name: None,
+                identity: "local_user".into(),
+                serve_user_id: None,
+                serve_email: None,
+                serve_site: None,
+            })
+        } else {
+            Ok(ChatAuth {
+                user: "playground".into(),
+                key_id: None,
+                key_name: None,
+                identity: "playground".into(),
+                serve_user_id: None,
+                serve_email: None,
+                serve_site: None,
+            })
+        }
     } else {
         resolve_chat_auth(&st, &headers, &body)
     };
-    let (user, key_id, key_name) = match auth {
+    let auth = match auth {
         Ok(v) => v,
         Err(e) => return AppError(e).into_response(),
     };
@@ -452,9 +560,13 @@ async fn chat_inner(
         want_stream,
         metadata,
         CostCtx {
-            user,
-            key_id,
-            key_name,
+            user: auth.user,
+            key_id: auth.key_id,
+            key_name: auth.key_name,
+            identity: auth.identity,
+            serve_user_id: auth.serve_user_id,
+            serve_email: auth.serve_email,
+            serve_site: auth.serve_site,
             session,
             entrypoint,
         },
@@ -466,10 +578,24 @@ async fn chat_inner(
     }
 }
 
+struct ChatAuth {
+    user: String,
+    key_id: Option<String>,
+    key_name: Option<String>,
+    identity: String,
+    serve_user_id: Option<String>,
+    serve_email: Option<String>,
+    serve_site: Option<String>,
+}
+
 struct CostCtx {
     user: String,
     key_id: Option<String>,
     key_name: Option<String>,
+    identity: String,
+    serve_user_id: Option<String>,
+    serve_email: Option<String>,
+    serve_site: Option<String>,
     session: String,
     entrypoint: String,
 }
@@ -486,12 +612,52 @@ fn resolve_chat_auth(
     st: &AppState,
     headers: &HeaderMap,
     body: &Value,
-) -> Result<(String, Option<String>, Option<String>), RouterError> {
+) -> Result<ChatAuth, RouterError> {
     let require = st.require_api_key();
     if let Some(secret) = extract_bearer(headers) {
+        if secret.starts_with("bfvk-") {
+            let serve = st.serve.lock().unwrap();
+            if let Some((kid, email)) = serve.authenticate_bfvk(&secret) {
+                let site = serve.public().site;
+                let email = email.unwrap_or_else(|| kid.clone());
+                let uid = serve
+                    .public()
+                    .user
+                    .as_ref()
+                    .map(|u| u.id.to_string());
+                return Ok(ChatAuth {
+                    user: email.clone(),
+                    key_id: Some(kid),
+                    key_name: serve.public().api_key_name.clone(),
+                    identity: "serve".into(),
+                    serve_user_id: uid,
+                    serve_email: Some(email),
+                    serve_site: site,
+                });
+            }
+            return Err(RouterError::Unauthorized("invalid api key".into()));
+        }
         let mut keys = st.keys.lock().unwrap();
-        let (id, name) = keys.authenticate(&secret)?;
-        return Ok((name.clone(), Some(id), Some(name)));
+        let (id, name, owner) = keys.authenticate(&secret)?;
+        drop(keys);
+        let (user, identity) = if let Some(oid) = owner {
+            if let Some(u) = st.users.lock().unwrap().get(&oid) {
+                (u.username.clone(), "local_user".into())
+            } else {
+                (name.clone(), "local".into())
+            }
+        } else {
+            (name.clone(), "local".into())
+        };
+        return Ok(ChatAuth {
+            user,
+            key_id: Some(id),
+            key_name: Some(name),
+            identity,
+            serve_user_id: None,
+            serve_email: None,
+            serve_site: None,
+        });
     }
     if require {
         return Err(RouterError::Unauthorized("api key required".into()));
@@ -507,7 +673,15 @@ fn resolve_chat_auth(
                 .map(|s| s.to_string())
         })
         .unwrap_or_else(|| "anonymous".into());
-    Ok((user, None, None))
+    Ok(ChatAuth {
+        user,
+        key_id: None,
+        key_name: None,
+        identity: "anonymous".into(),
+        serve_user_id: None,
+        serve_email: None,
+        serve_site: None,
+    })
 }
 
 fn session_id(headers: &HeaderMap, req: &ChatRequest) -> String {
@@ -655,6 +829,10 @@ fn record_cost(st: &AppState, ctx: &CostCtx, decision: &RouteDecision, usage: Co
         user: ctx.user.clone(),
         key_id: ctx.key_id.clone(),
         key_name: ctx.key_name.clone(),
+        identity: ctx.identity.clone(),
+        serve_user_id: ctx.serve_user_id.clone(),
+        serve_email: ctx.serve_email.clone(),
+        serve_site: ctx.serve_site.clone(),
         session: ctx.session.clone(),
         entrypoint: ctx.entrypoint.clone(),
         layer: decision.layer.clone(),

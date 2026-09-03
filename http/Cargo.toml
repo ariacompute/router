@@ -28,6 +28,10 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
 chrono = { workspace = true }
+argon2 = { workspace = true }
+password-hash = { workspace = true }
+subtle = { workspace = true }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

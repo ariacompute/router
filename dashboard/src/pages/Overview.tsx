@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getJson, type Overview as OverviewT } from '../api';
 import styles from './page.module.css';
 
@@ -14,6 +15,8 @@ export default function Overview() {
 
   if (err) return <p className={styles.err}>{err}</p>;
   if (!data) return <p>Loading…</p>;
+
+  const serve = data.serve_account;
 
   return (
     <>
@@ -42,11 +45,27 @@ export default function Overview() {
           </div>
         </div>
         <div className={styles.card}>
-          <div className={styles.label}>API keys</div>
+          <div className={styles.label}>Local API keys</div>
           <div className={styles.value}>
             {data.api_keys
               ? `${data.api_keys.active} active / ${data.api_keys.revoked} revoked`
               : '—'}
+          </div>
+        </div>
+        <div className={styles.card}>
+          <div className={styles.label}>OAuth (Aria Compute)</div>
+          <div className={styles.value} style={{ fontSize: '1rem' }}>
+            {serve ? (
+              <>
+                {serve.linked ? 'linked' : serve.api_key_configured ? 'key only' : 'not linked'}
+                {serve.user?.email ? ` · ${serve.user.email}` : ''}
+                {serve.api_key_prefix ? ` · ${serve.api_key_prefix}` : ''}
+                {' · '}
+                <Link to="/account">Account</Link>
+              </>
+            ) : (
+              '—'
+            )}
           </div>
         </div>
       </div>

@@ -1,5 +1,39 @@
+const TOKEN_KEY = 'aria_router_session_token';
+
+export function getSessionToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setSessionToken(token: string | null) {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+function authHeaders(extra?: HeadersInit): Headers {
+  const h = new Headers(extra);
+  const tok = getSessionToken();
+  if (tok && !h.has('authorization')) {
+    h.set('authorization', `Bearer ${tok}`);
+  }
+  return h;
+}
+
+async function errorMessage(res: Response): Promise<string> {
+  const text = await res.text();
+  try {
+    const v = JSON.parse(text) as { error?: { message?: string } | string };
+    if (typeof v.error === 'string') return v.error;
+    return v.error?.message ?? text ?? res.statusText;
+  } catch {
+    return text || res.statusText;
+  }
+}
+
 export async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await fetch(path, {
+    credentials: 'include',
+    headers: authHeaders(),
+  });
   if (!res.ok) {
     throw new Error(await errorMessage(res));
   }
@@ -13,7 +47,8 @@ export async function sendJson<T>(
 ): Promise<{ data: T; headers: Headers }> {
   const res = await fetch(path, {
     method,
-    headers: { 'content-type': 'application/json' },
+    credentials: 'include',
+    headers: authHeaders({ 'content-type': 'application/json' }),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -26,7 +61,8 @@ export async function sendJson<T>(
 export async function putText(path: string, body: string, contentType: string): Promise<void> {
   const res = await fetch(path, {
     method: 'PUT',
-    headers: { 'content-type': contentType },
+    credentials: 'include',
+    headers: authHeaders({ 'content-type': contentType }),
     body,
   });
   if (!res.ok) {
@@ -35,21 +71,45 @@ export async function putText(path: string, body: string, contentType: string): 
 }
 
 export async function deleteJson(path: string): Promise<void> {
-  const res = await fetch(path, { method: 'DELETE' });
+  const res = await fetch(path, {
+    method: 'DELETE',
+    credentials: 'include',
+    headers: authHeaders(),
+  });
   if (!res.ok) {
     throw new Error(await errorMessage(res));
   }
 }
 
-async function errorMessage(res: Response): Promise<string> {
-  const text = await res.text();
-  try {
-    const v = JSON.parse(text) as { error?: { message?: string } };
-    return v.error?.message ?? text ?? res.statusText;
-  } catch {
-    return text || res.statusText;
-  }
-}
+export type LocalUser = {
+  id: string;
+  username: string;
+  role: 'admin' | 'user';
+  created_at: string;
+  disabled: boolean;
+};
+
+export type RegisterStatus = {
+  allow_register: boolean;
+  needs_setup: boolean;
+};
+
+export type ServeAccount = {
+  linked: boolean;
+  site?: string | null;
+  site_url?: string | null;
+  gateway_url?: string | null;
+  user?: {
+    id: unknown;
+    email?: string | null;
+    role?: string | null;
+  } | null;
+  linked_at?: string | null;
+  api_key_name?: string | null;
+  api_key_prefix?: string | null;
+  api_key_configured: boolean;
+  status: string;
+};
 
 export type Overview = {
   status: string;
@@ -64,6 +124,9 @@ export type Overview = {
     avg_tokens_per_request: number;
   };
   api_keys?: { active: number; revoked: number };
+  local_users?: { admin: number; user: number };
+  serve_account?: ServeAccount;
+  allow_register?: boolean;
 };
 
 export type CostBucket = {
@@ -120,6 +183,8 @@ export type CostReport = {
   by_layer: Record<string, CostBucket>;
   by_entrypoint: Record<string, CostBucket>;
   by_key: Record<string, CostBucket>;
+  by_local_user?: Record<string, CostBucket>;
+  by_serve_user?: Record<string, CostBucket>;
   recent: CostEvent[];
 };
 
@@ -130,6 +195,7 @@ export type KeyPublic = {
   created_at: string;
   last_used_at?: string | null;
   revoked: boolean;
+  owner_user_id?: string | null;
 };
 
 export type KeyCreated = {

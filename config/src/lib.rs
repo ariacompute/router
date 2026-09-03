@@ -24,13 +24,36 @@ pub struct RouterDocument {
     pub global: GlobalCfg,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GlobalCfg {
     #[serde(default)]
     pub require_api_key: bool,
+    /// Allow Dashboard self-registration for local users (default true when written by setup).
+    #[serde(default = "default_allow_register")]
+    pub allow_register: bool,
     #[serde(default)]
     pub keys_path: Option<String>,
+    #[serde(default)]
+    pub users_path: Option<String>,
+    #[serde(default)]
+    pub serve_account_path: Option<String>,
+}
+
+impl Default for GlobalCfg {
+    fn default() -> Self {
+        Self {
+            require_api_key: false,
+            allow_register: true,
+            keys_path: None,
+            users_path: None,
+            serve_account_path: None,
+        }
+    }
+}
+
+fn default_allow_register() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -601,11 +624,19 @@ pub fn default_keys_path() -> Result<PathBuf, RouterError> {
     Ok(aria_home()?.join("router-keys.json"))
 }
 
+pub fn default_users_path() -> Result<PathBuf, RouterError> {
+    Ok(aria_home()?.join("router-users.json"))
+}
+
+pub fn default_serve_account_path() -> Result<PathBuf, RouterError> {
+    Ok(aria_home()?.join("router-serve.json"))
+}
+
 /// Expand `~/` or leave absolute/relative paths as-is under aria home resolution.
-pub fn resolve_keys_path(raw: &str) -> Result<PathBuf, RouterError> {
+pub fn resolve_home_path(raw: &str, default: fn() -> Result<PathBuf, RouterError>) -> Result<PathBuf, RouterError> {
     let t = raw.trim();
     if t.is_empty() {
-        return default_keys_path();
+        return default();
     }
     if let Some(rest) = t.strip_prefix("~/") {
         let home = dirs::home_dir().ok_or_else(|| {
@@ -619,17 +650,36 @@ pub fn resolve_keys_path(raw: &str) -> Result<PathBuf, RouterError> {
     Ok(aria_home()?.join(t))
 }
 
+/// Expand `~/` or leave absolute/relative paths as-is under aria home resolution.
+pub fn resolve_keys_path(raw: &str) -> Result<PathBuf, RouterError> {
+    resolve_home_path(raw, default_keys_path)
+}
+
+pub fn resolve_users_path(raw: &str) -> Result<PathBuf, RouterError> {
+    resolve_home_path(raw, default_users_path)
+}
+
+pub fn resolve_serve_account_path(raw: &str) -> Result<PathBuf, RouterError> {
+    resolve_home_path(raw, default_serve_account_path)
+}
+
 /// Write a v0.3 starter YAML to `~/.ariacompute/router.yml`.
 /// `kind` is `semantic` (default) or `agent`.
 pub fn write_default_config(kind: &str, overwrite: bool) -> Result<PathBuf, RouterError> {
-    write_default_config_with(kind, overwrite, false)
+    write_default_config_with(kind, overwrite, false, true)
 }
 
-/// Like [`write_default_config`], with optional `require_api_key` in `global:`.
+pub struct SetupGlobalOpts {
+    pub require_api_key: bool,
+    pub allow_register: bool,
+}
+
+/// Like [`write_default_config`], with local auth globals.
 pub fn write_default_config_with(
     kind: &str,
     overwrite: bool,
     require_api_key: bool,
+    allow_register: bool,
 ) -> Result<PathBuf, RouterError> {
     let path = default_config_path()?;
     if path.exists() && !overwrite {
@@ -648,7 +698,14 @@ pub fn write_default_config_with(
         }
     };
     let keys = default_keys_path()?;
-    let keys_disp = format!("~/.ariacompute/{}", keys.file_name().and_then(|s| s.to_str()).unwrap_or("router-keys.json"));
+    let users = default_users_path()?;
+    let serve = default_serve_account_path()?;
+    let disp = |p: &PathBuf| {
+        format!(
+            "~/.ariacompute/{}",
+            p.file_name().and_then(|s| s.to_str()).unwrap_or("file")
+        )
+    };
     let mut doc: serde_yaml::Value = serde_yaml::from_str(body).map_err(|e| {
         RouterError::Config(format!("embedded template: {e}"))
     })?;
@@ -659,8 +716,20 @@ pub fn write_default_config_with(
             serde_yaml::Value::Bool(require_api_key),
         );
         g.insert(
+            serde_yaml::Value::String("allow_register".into()),
+            serde_yaml::Value::Bool(allow_register),
+        );
+        g.insert(
             serde_yaml::Value::String("keys_path".into()),
-            serde_yaml::Value::String(keys_disp),
+            serde_yaml::Value::String(disp(&keys)),
+        );
+        g.insert(
+            serde_yaml::Value::String("users_path".into()),
+            serde_yaml::Value::String(disp(&users)),
+        );
+        g.insert(
+            serde_yaml::Value::String("serve_account_path".into()),
+            serde_yaml::Value::String(disp(&serve)),
         );
         map.insert(
             serde_yaml::Value::String("global".into()),
@@ -672,6 +741,9 @@ pub fn write_default_config_with(
     std::fs::write(&path, out)?;
     if !keys.exists() {
         std::fs::write(&keys, "{\n  \"keys\": []\n}\n")?;
+    }
+    if !users.exists() {
+        std::fs::write(&users, "{\n  \"users\": []\n}\n")?;
     }
     RouterDocument::load_path(&path)?;
     Ok(path)

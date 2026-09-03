@@ -35,10 +35,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 | [`ffi.yaml`](config/examples/ffi.yaml) | 黄金 `fast-response` + 同上 catalog recipe |
 
 ```bash
-# 写入 ~/.ariacompute/router.yml（默认 semantic 模板）。
-# 会询问是否在数据面（及 provider 注册）强制 API key；密钥只在 Dashboard「API 密钥」签发。
+# 写入配置 — 两段凭证（勿混用前缀）：
+#   [1/2] Local (router Dashboard) — 本地管理员；sk-aria_ 仅在 Dashboard → Keys 签发
+#   [2/2] OAuth (Aria Compute)     — 可选 bfvk-… → ~/.ariacompute/router-serve.json
 aria-router setup
 aria-router setup --status
+# Local flags: --admin-user --admin-password --allow-register --require-api-key
+# OAuth flags: --serve-site com|cn --serve-api-key bfvk-…
 
 # 校验（默认路径，或传 --config）
 aria-router validate
@@ -64,7 +67,14 @@ cargo run -p aria-router -- serve \
 
 ## Dashboard
 
-管理面在存在 `dashboard/dist` 时托管 Vite React SPA（Overview / Cost / API 密钥 / Config / Topology / Providers / Replay / Playground），地址为 `http://{mgmt}/`：
+管理面在存在 `dashboard/dist` 时托管 Vite React SPA，地址为 `http://{mgmt}/`。完成 `aria-router setup` 后先 **Login**（本地用户名/密码）：
+
+| 段落标题（与 CLI 同名） | 页面 |
+|------------------------|------|
+| **Local (router Dashboard)** | Login / Register · API 密钥（`sk-aria_…`）· Users（admin） |
+| **OAuth (Aria Compute)** | Account — 已关联用户、`bfvk-…` 展示/粘贴/OAuth |
+
+Cost 分 **Local users** 与 **OAuth users**。构建：
 
 ```bash
 npm --prefix dashboard ci
@@ -76,14 +86,15 @@ cargo run -p aria-router -- serve \
 # 打开 http://127.0.0.1:8090/
 ```
 
-`--no-dashboard` 只提供 JSON API（仍可用 curl 管理 keys/cost）。无 Grafana、ML wizard、登录；默认绑 `127.0.0.1`。
+`--no-dashboard` 只提供 JSON API（仍可用 curl 管理 keys/cost）。无 Grafana、ML wizard；默认绑 `127.0.0.1`。
 
 ### API 密钥与成本
 
 1. Dashboard → **API 密钥** → 生成（`sk-aria_…` 只显示一次），或 `POST /v1/router/keys`。
 2. `aria-router setup` 可打开 `global.require_api_key`，使 chat 与 `PUT /v1/router/providers` 需要 Bearer。
-3. 客户端与 `aria-engine` 使用同一把 secret（engine：`router_api_key` / `--router-api-key`）。
-4. **Cost** 页 / `GET /v1/router/cost` 展示六因子与 `by_key`（YAML `pricing`）。
+3. 客户端与 `aria-engine` 使用同一把 **Local** secret（engine：`router_api_key` / `--router-api-key`；勿粘贴 `bfvk-`）。
+4. **Cost** 页 / `GET /v1/router/cost` 展示六因子、`by_local_user` / `by_serve_user` / `by_key`（YAML `pricing`）。
+5. OAuth：Dashboard → Account 或 `aria-router setup` [2/2] 写入 `bfvk-…`。
 
 ```bash
 curl -s http://127.0.0.1:8899/v1/chat/completions \
