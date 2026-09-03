@@ -17,6 +17,8 @@ listeners:
     timeout: 300s
 
 # Named models and weighted backends. locality is a hard constraint (local|private|cloud).
+# Recipes below only reference local/*; private/cloud are catalog examples (bypass or
+# add to modelRefs when you want Location pruning to see them).
 providers:
   defaults:
     default_model: local/general
@@ -44,6 +46,36 @@ providers:
           protocol: http
           weight: 100
           api_key_env: ${ARIA_UPSTREAM_KEY:-}
+    # Private VPC / on-prem OpenAI-compatible endpoint (not loopback).
+    - name: private/general
+      provider_model_id: private-echo
+      locality: private
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 10.0.0.10:8000
+          protocol: http
+          weight: 100
+          api_key_env: ${ARIA_PRIVATE_KEY:-}
+      pricing:
+        input_per_mtok: 0.05
+        output_per_mtok: 0.15
+    # Public cloud API — prefer base_url + https; secrets via env expansion.
+    - name: cloud/general
+      provider_model_id: cloud-echo
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          base_url: https://api.example.com/v1
+          protocol: http
+          weight: 100
+          api_key_env: ${ARIA_CLOUD_KEY:-}
+      pricing:
+        input_per_mtok: 0.15
+        output_per_mtok: 0.60
 
 # Optional observability / classifier asset blob (unused by the gold path).
 global: {}
