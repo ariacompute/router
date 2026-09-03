@@ -90,10 +90,8 @@ impl CostLedger {
             );
             Self::add_bucket(self.by_key.entry(label).or_default(), ev);
         }
-        if ev.identity == "local_user" || (ev.identity == "local" && !ev.user.is_empty()) {
-            if ev.identity == "local_user" {
-                Self::add_bucket(self.by_local_user.entry(ev.user.clone()).or_default(), ev);
-            }
+        if ev.identity == "local_user" {
+            Self::add_bucket(self.by_local_user.entry(ev.user.clone()).or_default(), ev);
         }
         if ev.identity == "serve" {
             let label = format!(
