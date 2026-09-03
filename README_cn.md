@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-Aria Compute 推理网关：OpenAI 兼容 HTTP，两种并列决策器（**semantic** YAML v0.3 与 **agent** extensions）。共享 providers、硬约束与转发。不走 Envoy。本地推理在独立 **engine** 仓（`aria-engine`）。Engine SDK 与本仓 SDK 是 **两套包**（`libaria_ffi` vs `libaria-router_ffi`）。
+Aria Compute 推理网关：OpenAI 兼容 HTTP，两种并列决策器（**semantic** YAML v0.3 与 **agent** extensions）。共享 providers、硬约束与转发。
 
 ## 构建 / 测试
 

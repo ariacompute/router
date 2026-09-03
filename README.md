@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-Aria Compute inference gateway: OpenAI-compatible HTTP, two parallel routers (**semantic** YAML v0.3 and **agent** via extensions). Shared providers, hard constraints, and forwarding. Not Envoy. Local inference lives in the **engine** repo (`aria-engine`). Engine SDK and this SDK are **two package families** (`libaria_ffi` vs `libaria-router_ffi`).
+Aria Compute inference gateway: OpenAI-compatible HTTP, two parallel routers (**semantic** YAML v0.3 and **agent** via extensions). Shared providers, hard constraints, and forwarding.
 
 ## Build / Test
 
