@@ -193,6 +193,46 @@ pub async fn set_allow_register(
     Ok(Json(json!({"ok": true, "allow_register": body.allow_register})))
 }
 
+#[derive(Deserialize)]
+pub struct EmailBody {
+    pub email: Option<String>,
+}
+
+/// Set the current user's email (used as the serve OAuth account on link).
+/// Empty string or null clears it.
+pub async fn set_my_email(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<EmailBody>,
+) -> Result<Json<Value>, AppError> {
+    let u = require_user(&st, &headers).map_err(AppError)?;
+    st.users
+        .lock()
+        .unwrap()
+        .set_email(&u.id, body.email)
+        .map_err(AppError)?;
+    Ok(Json(json!({"ok": true})))
+}
+
+/// Admin: set another user's email.
+pub async fn set_user_email(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<EmailBody>,
+) -> Result<Json<Value>, AppError> {
+    let u = require_user(&st, &headers).map_err(AppError)?;
+    if !matches!(u.role, UserRole::Admin) {
+        return Err(AppError(RouterError::Unauthorized("admin required".into())));
+    }
+    st.users
+        .lock()
+        .unwrap()
+        .set_email(&id, body.email)
+        .map_err(AppError)?;
+    Ok(Json(json!({"ok": true, "id": id})))
+}
+
 pub async fn serve_account_get(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -201,49 +241,38 @@ pub async fn serve_account_get(
     Ok(Json(st.keys.lock().unwrap().oauth_public()))
 }
 
-pub async fn serve_account_secret(
-    State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<Value>, AppError> {
-    let _ = gate_if_users(&st, &headers).map_err(AppError)?;
-    let secret = st.keys.lock().unwrap().oauth_reveal_secret();
-    Ok(Json(json!({"api_key": secret})))
-}
-
-pub async fn serve_account_delete(
-    State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<Value>, AppError> {
-    let _ = gate_if_users(&st, &headers).map_err(AppError)?;
-    st.keys.lock().unwrap().oauth_clear().map_err(AppError)?;
-    Ok(Json(json!({"ok": true})))
-}
-
 #[derive(Deserialize)]
-pub struct LinkStartBody {
-    pub site: String,
+pub struct OAuthStartBody {
+    #[serde(default)]
+    pub site: Option<String>,
 }
 
-pub async fn serve_link_start(
+/// Public OAuth login entry point (no session required). Starts the Aria
+/// Compute (serve) handshake and returns the authorize URL. The browser is
+/// redirected to serve; after the user authenticates, serve calls back to
+/// `/v1/router/auth/oauth/callback`, which upserts the serve identity as a
+/// router dashboard user and issues a session.
+pub async fn oauth_start(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(body): Json<LinkStartBody>,
+    Json(body): Json<OAuthStartBody>,
 ) -> Result<Json<Value>, AppError> {
-    let _ = gate_if_users(&st, &headers).map_err(AppError)?;
+    let site = body
+        .site
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| st.doc.lock().unwrap().global.serve_site.clone());
     let (tpl, state, site_url) = st
         .keys
         .lock()
         .unwrap()
-        .begin_link(&body.site)
+        .begin_link(&site, None, None, None)
         .map_err(AppError)?;
-    // Caller substitutes callback; we also return a ready URL if Host present.
     let host = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("127.0.0.1:8080");
-    let callback = format!("http://{host}/v1/router/serve/link/callback");
+    let callback = format!("http://{host}/v1/router/auth/oauth/callback");
     let authorize_url = tpl.replace("{callback}", &urlencoding_encode(&callback));
-    let _ = st.keys.lock().unwrap().oauth_set_site(&body.site);
     Ok(Json(json!({
         "authorize_url": authorize_url,
         "state": state,
@@ -272,21 +301,25 @@ pub struct LinkCallbackQ {
     pub error: Option<String>,
 }
 
-pub async fn serve_link_callback(
+pub async fn oauth_callback(
     State(st): State<Arc<AppState>>,
     Query(q): Query<LinkCallbackQ>,
 ) -> Response {
     if let Some(err) = q.error {
-        return Redirect::temporary(&format!("/account?error={}", urlencoding_encode(&err)))
-            .into_response();
+        return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&err))).into_response();
     }
     let (Some(code), Some(state)) = (q.code, q.state) else {
-        return Redirect::temporary("/account?error=missing_code").into_response();
+        return Redirect::temporary("/?error=missing_code").into_response();
     };
-    let (site, site_url) = match st.keys.lock().unwrap().take_pending(&state) {
+    let (site, site_url, _owner_user_id, _owner_email) = match st
+        .keys
+        .lock()
+        .unwrap()
+        .take_pending(&state)
+    {
         Ok(v) => v,
         Err(e) => {
-            return Redirect::temporary(&format!("/account?error={}", urlencoding_encode(&e.to_string())))
+            return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
                 .into_response();
         }
     };
@@ -294,7 +327,7 @@ pub async fn serve_link_callback(
     let client = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build() {
         Ok(c) => c,
         Err(e) => {
-            return Redirect::temporary(&format!("/account?error={}", urlencoding_encode(&e.to_string())))
+            return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
                 .into_response();
         }
     };
@@ -307,12 +340,12 @@ pub async fn serve_link_callback(
         Ok(r) => match r.json().await {
             Ok(v) => v,
             Err(e) => {
-                return Redirect::temporary(&format!("/account?error={}", urlencoding_encode(&e.to_string())))
+                return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
                     .into_response();
             }
         },
         Err(e) => {
-            return Redirect::temporary(&format!("/account?error={}", urlencoding_encode(&e.to_string())))
+            return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
                 .into_response();
         }
     };
@@ -321,23 +354,58 @@ pub async fn serve_link_callback(
             .get("error")
             .and_then(|v| v.as_str())
             .unwrap_or("exchange_failed");
-        return Redirect::temporary(&format!("/account?error={}", urlencoding_encode(msg)))
+        return Redirect::temporary(&format!("/?error={}", urlencoding_encode(msg)))
             .into_response();
     }
-    let user = ServeUserInfo {
-        id: body
-            .pointer("/user/id")
-            .cloned()
-            .unwrap_or(json!(null)),
-        email: body
-            .pointer("/user/email")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        role: body
-            .pointer("/user/role")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+    // The serve exchange resolves (and, if needed, creates) the serve oauth
+    // user. Use its identity to upsert a router dashboard user + decide role.
+    let serve_user = body.get("user").and_then(|v| v.as_object()).cloned();
+    let serve_id = serve_user
+        .as_ref()
+        .and_then(|u| u.get("id"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let serve_id_str = match &serve_id {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => return Redirect::temporary("/?error=missing_serve_id").into_response(),
     };
+    let serve_email = serve_user
+        .as_ref()
+        .and_then(|u| u.get("email"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let serve_name = serve_user
+        .as_ref()
+        .and_then(|u| u.get("name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let serve_role = serve_user
+        .as_ref()
+        .and_then(|u| u.get("role"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let display = ServeUserInfo {
+        id: serve_id.clone(),
+        email: serve_email.clone(),
+        role: serve_role,
+    };
+    // Upsert the serve identity as a router dashboard user (role by whitelist /
+    // first-admin bootstrap). The serve role is intentionally NOT mirrored.
+    let admin_emails = st.doc.lock().unwrap().global.admin_emails.clone();
+    let user = match st
+        .users
+        .lock()
+        .unwrap()
+        .upsert_serve_user(&serve_id_str, serve_email.clone(), serve_name, &admin_emails)
+    {
+        Ok(u) => u,
+        Err(e) => {
+            return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
+                .into_response();
+        }
+    };
+    // Store the serve account globally (api key / link_token) for LLM proxying.
     let link_token = body
         .get("link_token")
         .and_then(|v| v.as_str())
@@ -346,123 +414,29 @@ pub async fn serve_link_callback(
         .get("expires_at")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let site_label = body
-        .get("site")
-        .and_then(|v| v.as_str())
-        .unwrap_or(&site);
+    let site_label = body.get("site").and_then(|v| v.as_str()).unwrap_or(&site);
     if let Err(e) = st.keys.lock().unwrap().apply_exchange(
         site_label,
         &site_url,
-        user,
+        display,
         link_token,
         expires_at,
         None,
+        Some(user.id.clone()),
     ) {
-        return Redirect::temporary(&format!("/account?error={}", urlencoding_encode(&e.to_string())))
+        return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
             .into_response();
     }
-    Redirect::temporary("/account?linked=1").into_response()
-}
-
-#[derive(Deserialize)]
-pub struct ServeApiKeyBody {
-    pub api_key: String,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub site: Option<String>,
-}
-
-pub async fn serve_put_api_key(
-    State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(body): Json<ServeApiKeyBody>,
-) -> Result<Json<Value>, AppError> {
-    let _ = gate_if_users(&st, &headers).map_err(AppError)?;
-    let mut keys = st.keys.lock().unwrap();
-    if let Some(site) = body.site.as_deref() {
-        keys.oauth_set_site(site).map_err(AppError)?;
-    }
-    keys.oauth_set_api_key(&body.api_key, body.name.as_deref())
-        .map_err(AppError)?;
-    Ok(Json(json!({"ok": true, "account": keys.oauth_public()})))
-}
-
-#[derive(Deserialize)]
-pub struct CreateServeKeyBody {
-    #[serde(default = "default_key_name")]
-    pub name: String,
-}
-
-fn default_key_name() -> String {
-    "aria-router".into()
-}
-
-pub async fn serve_create_api_key(
-    State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(body): Json<CreateServeKeyBody>,
-) -> Result<Json<Value>, AppError> {
-    let _ = gate_if_users(&st, &headers).map_err(AppError)?;
-    let (site_url, token) = {
-        let keys = st.keys.lock().unwrap();
-        (
-            keys.oauth_site_url().ok_or_else(|| {
-                AppError(RouterError::InvalidParam(
-                    "link OAuth account or set site first".into(),
-                ))
-            })?,
-            keys.oauth_link_token().ok_or_else(|| {
-                AppError(RouterError::Unauthorized(
-                    "OAuth link_token missing; re-link account".into(),
-                ))
-            })?,
-        )
+    // Issue a router dashboard session for the upserted user.
+    let token = match st.users.lock().unwrap().issue_session(&user.id) {
+        Ok(t) => t,
+        Err(e) => {
+            return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
+                .into_response();
+        }
     };
-    let url = format!("{}/api/api-keys", site_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| AppError(RouterError::Upstream(e.to_string())))?;
-    let resp = client
-        .post(&url)
-        .bearer_auth(&token)
-        .json(&json!({"name": body.name}))
-        .send()
-        .await
-        .map_err(|e| AppError(RouterError::Upstream(e.to_string())))?;
-    if !resp.status().is_success() {
-        let t = resp.text().await.unwrap_or_default();
-        return Err(AppError(RouterError::Upstream(format!(
-            "create api key failed: {t}"
-        ))));
-    }
-    let v: Value = resp
-        .json()
-        .await
-        .map_err(|e| AppError(RouterError::Upstream(e.to_string())))?;
-    let secret = v
-        .get("key")
-        .or_else(|| v.get("value"))
-        .or_else(|| v.get("api_key"))
-        .and_then(|x| x.as_str())
-        .ok_or_else(|| {
-            AppError(RouterError::Upstream(
-                "create api key response missing secret".into(),
-            ))
-        })?;
-    let name = v
-        .get("name")
-        .and_then(|x| x.as_str())
-        .unwrap_or(&body.name);
-    st.keys
-        .lock()
-        .unwrap()
-        .oauth_set_api_key(secret, Some(name))
-        .map_err(AppError)?;
-    Ok(Json(json!({
-        "ok": true,
-        "api_key": secret,
-        "account": st.keys.lock().unwrap().oauth_public(),
-    })))
+    let mut res = Redirect::temporary("/?oauth=1").into_response();
+    res.headers_mut()
+        .insert(header::SET_COOKIE, session_cookie(&token).parse().unwrap());
+    res
 }

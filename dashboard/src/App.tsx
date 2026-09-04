@@ -84,7 +84,7 @@ function Sidebar({ user }: { user: LocalUser }) {
     <nav className={styles.nav}>
       <div className={styles.brand}>
         <span className={styles.brandMark}>A</span>
-        <span className={styles.brandText}>aria-router</span>
+        <span className={styles.brandText}>Aria Router</span>
       </div>
       {groups.map((g) => (
         <div key={g.title}>
@@ -115,7 +115,7 @@ function Sidebar({ user }: { user: LocalUser }) {
         {build && (
           <span
             className={styles.version}
-            title={`aria-router v${build.version} @ ${build.commit}`}
+            title={`Aria Router v${build.version} @ ${build.commit}`}
           >
             v{build.version}@{build.commit}
           </span>
@@ -188,7 +188,7 @@ export default function App() {
         <nav className={styles.nav}>
           <div className={styles.brand}>
             <span className={styles.brandMark}>A</span>
-            <span className={styles.brandText}>aria-router</span>
+            <span className={styles.brandText}>Aria Router</span>
           </div>
         </nav>
         <main className={styles.main}>
@@ -221,7 +221,7 @@ export default function App() {
       <div className={styles.authShell}>
         <div className={styles.brandCenter}>
           <span className={styles.brandMark}>A</span>
-          <span className={styles.brandText}>aria-router</span>
+          <span className={styles.brandText}>Aria Router</span>
         </div>
         {routes}
         <VersionBadge className={styles.authVersion} />

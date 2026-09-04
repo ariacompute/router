@@ -76,6 +76,8 @@ struct PendingLink {
     site: String,
     site_url: String,
     expires_unix: u64,
+    owner_user_id: Option<String>,
+    owner_email: Option<String>,
 }
 
 #[derive(Debug)]
@@ -602,28 +604,60 @@ impl KeyStore {
         self.persist()
     }
 
-    pub fn begin_link(&self, site: &str) -> Result<(String, String, String), RouterError> {
+    fn pct_encode(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        for b in s.bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    out.push(b as char)
+                }
+                _ => out.push_str(&format!("%{b:02X}")),
+            }
+        }
+        out
+    }
+
+    pub fn begin_link(
+        &self,
+        site: &str,
+        owner_user_id: Option<String>,
+        owner_email: Option<String>,
+        owner_name: Option<String>,
+    ) -> Result<(String, String, String), RouterError> {
         let (site_id, site_url, _gw) = normalize_site(site)?;
         let mut rnd = [0u8; 16];
         rand::thread_rng().fill_bytes(&mut rnd);
         let state = hex::encode(rnd);
         let expires_unix = now_unix() + LINK_STATE_TTL_SECS;
+        let email_part = match owner_email.as_deref() {
+            Some(e) if !e.is_empty() => format!("&email={}", Self::pct_encode(e)),
+            _ => String::new(),
+        };
+        let name_part = match owner_name.as_deref() {
+            Some(n) if !n.is_empty() => format!("&name={}", Self::pct_encode(n)),
+            _ => String::new(),
+        };
         self.pending.lock().unwrap().insert(
             state.clone(),
             PendingLink {
                 site: site_id,
                 site_url: site_url.clone(),
                 expires_unix,
+                owner_user_id,
+                owner_email,
             },
         );
         let authorize_url = format!(
-            "{}/api/router-link/start?callback={{callback}}&state={state}",
+            "{}/api/router-link/start?callback={{callback}}&state={state}{email_part}{name_part}",
             site_url.trim_end_matches('/')
         );
         Ok((authorize_url, state, site_url))
     }
 
-    pub fn take_pending(&self, state: &str) -> Result<(String, String), RouterError> {
+    pub fn take_pending(
+        &self,
+        state: &str,
+    ) -> Result<(String, String, Option<String>, Option<String>), RouterError> {
         let mut map = self.pending.lock().unwrap();
         let Some(p) = map.remove(state) else {
             return Err(RouterError::Unauthorized("invalid oauth state".into()));
@@ -631,7 +665,7 @@ impl KeyStore {
         if p.expires_unix < now_unix() {
             return Err(RouterError::Unauthorized("oauth state expired".into()));
         }
-        Ok((p.site, p.site_url))
+        Ok((p.site, p.site_url, p.owner_user_id, p.owner_email))
     }
 
     pub fn apply_exchange(
@@ -642,6 +676,7 @@ impl KeyStore {
         link_token: Option<String>,
         expires_at: Option<String>,
         api_key: Option<(String, String)>,
+        owner_user_id: Option<String>,
     ) -> Result<(), RouterError> {
         let (site_id, site_url_n, gateway_url) = match normalize_site(site) {
             Ok(v) => v,
@@ -688,6 +723,7 @@ impl KeyStore {
         k.linked_at = Some(now_rfc3339());
         k.link_token = link_token;
         k.link_expires_at = expires_at;
+        k.owner_user_id = owner_user_id;
         if let Some((name, key)) = api_key {
             validate_bfvk(&key)?;
             let prefix: String = key.chars().take(16).collect();
@@ -839,5 +875,26 @@ mod tests {
         ));
         assert!(store.resolve_bearer("bfvk-wrong").is_err());
         assert!(validate_bfvk("sk-aria_abc").is_err());
+    }
+
+    #[test]
+    fn oauth_link_carries_owner_identity() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        let store = KeyStore::empty(path);
+        let (_, state, _) = store
+            .begin_link(
+                "com",
+                Some("user-123".into()),
+                Some("jia@ariacompute.com".into()),
+                None,
+            )
+            .unwrap();
+        let (site, _site_url, owner_id, owner_email) = store.take_pending(&state).unwrap();
+        assert_eq!(site, "intl");
+        assert_eq!(owner_id.as_deref(), Some("user-123"));
+        assert_eq!(owner_email.as_deref(), Some("jia@ariacompute.com"));
+        // Consumed once; second take must fail.
+        assert!(store.take_pending(&state).is_err());
     }
 }

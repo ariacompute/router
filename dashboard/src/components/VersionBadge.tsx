@@ -25,7 +25,7 @@ export default function VersionBadge({ className }: { className?: string }) {
   return (
     <span
       className={className}
-      title={`aria-router v${build.version} @ ${build.commit}`}
+      title={`Aria Router v${build.version} @ ${build.commit}`}
       style={{
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         fontSize: '0.7rem',

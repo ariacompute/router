@@ -1,6 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { sendJson, setSessionToken, type LocalUser } from '../api';
+import { sendJson, setSessionToken, startAriaOAuth, type LocalUser } from '../api';
 
 export default function Login() {
   const nav = useNavigate();
@@ -8,6 +8,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [oauthBusy, setOauthBusy] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -25,6 +26,18 @@ export default function Login() {
       setErr((ex as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onOAuth() {
+    setOauthBusy(true);
+    setErr(null);
+    try {
+      const { authorize_url } = await startAriaOAuth();
+      window.location.href = authorize_url;
+    } catch (ex) {
+      setErr((ex as Error).message);
+      setOauthBusy(false);
     }
   }
 
@@ -72,6 +85,32 @@ export default function Login() {
           Sign in
         </button>
       </form>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          margin: '1.5rem 0',
+        }}
+      >
+        <div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
+        <span className="muted" style={{ fontSize: '0.8rem' }}>
+          or
+        </span>
+        <div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
+      </div>
+
+      <button
+        type="button"
+        className="btn-primary"
+        onClick={onOAuth}
+        disabled={oauthBusy}
+        style={{ width: '100%' }}
+      >
+        {oauthBusy ? 'Redirecting…' : 'Sign in with Aria Compute'}
+      </button>
+
       {err ? (
         <p className="alert alert-err" style={{ marginTop: '1rem' }}>
           {err}

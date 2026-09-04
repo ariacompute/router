@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getJson, sendJson, type LocalUser, type Overview } from '../api';
+import { getJson, sendJson, setUserEmail, type LocalUser, type Overview } from '../api';
 import styles from './page.module.css';
 
 export default function Users() {
@@ -7,6 +7,7 @@ export default function Users() {
   const [allowRegister, setAllowRegister] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [emailEdits, setEmailEdits] = useState<Record<string, string>>({});
 
   function load() {
     setErr(null);
@@ -22,6 +23,20 @@ export default function Users() {
   }
 
   useEffect(load, []);
+
+  async function saveUserEmail(u: LocalUser) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const v = (emailEdits[u.id] ?? u.email ?? '').trim();
+      await setUserEmail(u.id, v === '' ? null : v);
+      load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function toggleDisabled(u: LocalUser) {
     setBusy(true);
@@ -70,6 +85,7 @@ export default function Users() {
         <thead>
           <tr>
             <th>Username</th>
+            <th>Email</th>
             <th>Role</th>
             <th>Created</th>
             <th>Status</th>
@@ -80,6 +96,27 @@ export default function Users() {
           {users.map((u) => (
             <tr key={u.id}>
               <td>{u.username}</td>
+              <td>
+                <div className={styles.row}>
+                  <input
+                    className="input-field"
+                    value={emailEdits[u.id] ?? u.email ?? ''}
+                    placeholder="—"
+                    onChange={(e) =>
+                      setEmailEdits((m) => ({ ...m, [u.id]: e.target.value }))
+                    }
+                    disabled={busy}
+                  />
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm"
+                    onClick={() => saveUserEmail(u)}
+                    disabled={busy}
+                  >
+                    Save
+                  </button>
+                </div>
+              </td>
               <td>
                 <span className="badge badge-accent">{u.role}</span>
               </td>

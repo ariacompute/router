@@ -39,6 +39,15 @@ pub struct GlobalCfg {
     /// Deprecated: OAuth keys live in `keys_path` (`kind: oauth`). Kept for YAML compat.
     #[serde(default)]
     pub serve_account_path: Option<String>,
+    /// Emails (case-insensitive) that become router dashboard admins when they
+    /// sign in via Aria Compute (serve) OAuth. When empty, the first OAuth user
+    /// (only if no admin exists yet) is promoted to admin; everyone else is a
+    /// regular user. The serve role is never mirrored to the router role.
+    #[serde(default)]
+    pub admin_emails: Vec<String>,
+    /// Default Aria Compute (serve) site used by the OAuth login flow: "com" or "cn".
+    #[serde(default = "default_serve_site")]
+    pub serve_site: String,
 }
 
 impl Default for GlobalCfg {
@@ -49,6 +58,8 @@ impl Default for GlobalCfg {
             keys_path: None,
             users_path: None,
             serve_account_path: None,
+            admin_emails: Vec::new(),
+            serve_site: default_serve_site(),
         }
     }
 }
@@ -59,6 +70,10 @@ fn default_require_api_key() -> bool {
 
 fn default_allow_register() -> bool {
     true
+}
+
+fn default_serve_site() -> String {
+    "com".into()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -722,6 +737,14 @@ pub fn write_default_config_with(
         g.insert(
             serde_yaml::Value::String("users_path".into()),
             serde_yaml::Value::String(disp(&users)),
+        );
+        g.insert(
+            serde_yaml::Value::String("serve_site".into()),
+            serde_yaml::Value::String(default_serve_site()),
+        );
+        g.insert(
+            serde_yaml::Value::String("admin_emails".into()),
+            serde_yaml::Value::Sequence(vec![]),
         );
         map.insert(
             serde_yaml::Value::String("global".into()),

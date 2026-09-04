@@ -81,12 +81,40 @@ export async function deleteJson(path: string): Promise<void> {
   }
 }
 
+export async function setMyEmail(email: string | null): Promise<void> {
+  await sendJson('/v1/router/auth/email', 'PUT', { email });
+}
+
+export async function setUserEmail(id: string, email: string | null): Promise<void> {
+  await sendJson(`/v1/router/users/${encodeURIComponent(id)}/email`, 'PUT', { email });
+}
+
+/// Begin the public Aria Compute (serve) OAuth login handshake. Returns the
+/// URL the browser should be redirected to in order to authenticate at serve.
+export async function startAriaOAuth(site?: string): Promise<OAuthStart> {
+  const { data } = await sendJson<OAuthStart>(
+    '/v1/router/auth/oauth/start',
+    'POST',
+    site ? { site } : {},
+  );
+  return data;
+}
+
 export type LocalUser = {
   id: string;
   username: string;
+  email?: string | null;
   role: 'admin' | 'user';
   created_at: string;
   disabled: boolean;
+  name?: string | null;
+};
+
+export type OAuthStart = {
+  authorize_url: string;
+  state: string;
+  site_url: string | null;
+  callback: string;
 };
 
 export type RegisterStatus = {
