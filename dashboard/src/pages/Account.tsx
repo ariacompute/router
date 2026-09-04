@@ -28,10 +28,6 @@ export default function Account() {
   return (
     <>
       <h1 className={styles.h1}>Account</h1>
-      <p>
-        Your router dashboard identity. Sign in with <strong>Aria Compute</strong> from the login
-        page to connect your serve account for LLM proxying.
-      </p>
       {err ? <p className={styles.err}>{err}</p> : null}
 
       {me ? (

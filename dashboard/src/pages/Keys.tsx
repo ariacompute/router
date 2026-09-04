@@ -57,13 +57,7 @@ export default function Keys() {
 
   return (
     <>
-      <h1 className={styles.h1}>Local (router Dashboard) — API keys</h1>
-      <p>
-        Issue local secrets here only (<code>sk-aria_…</code>). Use the same key for data-plane chat
-        Bearer and for <code>aria-engine setup</code> [1/2] / <code>--router-api-key</code>. OAuth{' '}
-        <code>bfvk-</code> keys belong on <a href="/account">Account</a>, not here. Plaintext is shown
-        once; disk stores hashes only.
-      </p>
+      <h1 className={styles.h1}>API keys</h1>
       <div className={styles.row}>
         <input
           className="input-field"
