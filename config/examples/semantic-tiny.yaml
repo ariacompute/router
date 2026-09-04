@@ -58,3 +58,7 @@ recipes:
                 name: needs_explain
           modelRefs:
             - model: local/general
+
+# Gold-path demos: no Bearer required (setup default is require_api_key: true).
+global:
+  require_api_key: false

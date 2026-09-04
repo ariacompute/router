@@ -4,7 +4,7 @@ use aria_router_config::{
 };
 use aria_router_http::{
     data_router, ensure_extensions_startable, mgmt_router, mgmt_router_with_dashboard,
-    resolve_dashboard_dir, validate_bfvk, AppState, KeyStore, LocalUserStore,
+    resolve_dashboard_dir, AppState, KeyStore, LocalUserStore,
 };
 use clap::{ArgAction, Parser, Subcommand};
 use std::io::{self, BufRead, Write};
@@ -31,35 +31,23 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Write router.yml (Local + optional OAuth)
+    /// Write router.yml and create admin user
     Setup {
         /// Show config status
         #[arg(long)]
         status: bool,
-        /// Remove router.yml (optional local/OAuth files)
+        /// Remove router.yml (optional keys/users files)
         #[arg(long)]
         clear: bool,
         /// Template: semantic | agent
         #[arg(long)]
         template: Option<String>,
-        /// Local admin username
+        /// Admin username
         #[arg(long)]
         admin_user: Option<String>,
-        /// Local admin password
+        /// Admin password
         #[arg(long)]
         admin_password: Option<String>,
-        /// Allow Dashboard self-registration (true|false)
-        #[arg(long)]
-        allow_register: Option<String>,
-        /// Require local API key on data plane
-        #[arg(long, action = ArgAction::SetTrue)]
-        require_api_key: bool,
-        /// OAuth site URL
-        #[arg(long)]
-        serve_site: Option<String>,
-        /// OAuth Serve API key (bfvk-…)
-        #[arg(long)]
-        serve_api_key: Option<String>,
     },
     /// Validate router YAML
     Validate {
@@ -119,10 +107,6 @@ fn cmd_setup(
     template: Option<String>,
     admin_user: Option<String>,
     admin_password: Option<String>,
-    allow_register_flag: Option<String>,
-    require_api_key_flag: bool,
-    serve_site: Option<String>,
-    serve_api_key: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if status {
         return setup_status();
@@ -130,11 +114,6 @@ fn cmd_setup(
     if clear {
         return setup_clear();
     }
-
-    eprintln!("── [1/2] Local (router Dashboard) ─────────────────────────");
-    eprintln!("  Local users: Dashboard username/password.");
-    eprintln!("  Local API keys: sk-aria_… (Dashboard → Keys only; CLI does not mint).");
-    eprintln!();
 
     let raw = template.unwrap_or_else(|| {
         prompt("template [semantic|agent] (default: semantic): ").unwrap_or_default()
@@ -149,7 +128,7 @@ fn cmd_setup(
     }
 
     let admin_user = admin_user.unwrap_or_else(|| {
-        let u = prompt("local admin username [admin]: ").unwrap_or_default();
+        let u = prompt("admin username [admin]: ").unwrap_or_default();
         if u.is_empty() {
             "admin".into()
         } else {
@@ -157,7 +136,7 @@ fn cmd_setup(
         }
     });
     let admin_pass = admin_password.unwrap_or_else(|| {
-        let p1 = prompt("local admin password: ").unwrap_or_default();
+        let p1 = prompt("admin password: ").unwrap_or_default();
         let p2 = prompt("confirm password: ").unwrap_or_default();
         if p1 != p2 {
             eprintln!("passwords do not match");
@@ -167,41 +146,6 @@ fn cmd_setup(
     });
     if admin_pass.len() < 8 {
         return Err("password must be at least 8 characters".into());
-    }
-
-    let allow_register = if let Some(v) = allow_register_flag {
-        matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "y" | "yes")
-    } else {
-        let ans = prompt("allow Dashboard self-registration for local users? [Y/n]: ")?;
-        !matches!(ans.to_ascii_lowercase().as_str(), "n" | "no")
-    };
-
-    let require_api_key = if require_api_key_flag {
-        true
-    } else {
-        let ans = prompt("require local API key (sk-aria_) on data plane? [y/N]: ")?;
-        matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes")
-    };
-    eprintln!("  (note) After serve: Dashboard → register/login → Keys → mint sk-aria_.");
-    eprintln!();
-
-    eprintln!("── [2/2] OAuth (Aria Compute) ───────────────────────");
-    eprintln!("  Optional. Cloud account on ariacompute.com or .cn.");
-    eprintln!("  Serve API keys: bfvk-… (NOT sk-aria_).");
-    eprintln!("  OAuth link: Dashboard → Account (CLI only pastes the key).");
-    eprintln!();
-
-    let mut serve_site = serve_site;
-    let mut serve_key = serve_api_key;
-    if serve_site.is_none() && serve_key.is_none() {
-        let ans = prompt("configure OAuth API key now? [y/N]: ")?;
-        if matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes") {
-            let site =
-                prompt("Serve site [1] https://ariacompute.com  [2] https://ariacompute.cn: ")?;
-            serve_site = Some(site);
-            let key = prompt("Serve API key (bfvk-…): ")?;
-            serve_key = Some(key);
-        }
     }
 
     let path = default_config_path()?;
@@ -216,33 +160,21 @@ fn cmd_setup(
         return Ok(());
     }
 
-    let written =
-        aria_router_config::write_default_config_with(&kind, true, require_api_key, allow_register)?;
+    // Defaults: allow_register=true, require_api_key=true (edit YAML or Dashboard later).
+    let written = aria_router_config::write_default_config_with(&kind, true, true, true)?;
     println!("wrote {}", written.display());
 
     let users_path = default_users_path()?;
     match LocalUserStore::create_admin(&users_path, &admin_user, &admin_pass) {
-        Ok(_) => println!("Local admin user '{admin_user}' created"),
+        Ok(_) => println!("admin user '{admin_user}' created"),
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("already exist") {
-                eprintln!("Local users already present; kept existing (use --clear to reset)");
+                eprintln!("users already present; kept existing (use --clear to reset)");
             } else {
                 return Err(msg.into());
             }
         }
-    }
-
-    if let (Some(site), Some(key)) = (serve_site, serve_key) {
-        validate_bfvk(&key).map_err(|e| e.to_string())?;
-        let keys_path = default_keys_path()?;
-        let mut store =
-            KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path.clone()));
-        store.oauth_set_site(&site).map_err(|e| e.to_string())?;
-        store
-            .oauth_set_api_key(&key, Some("aria-router"))
-            .map_err(|e| e.to_string())?;
-        println!("OAuth key saved to {}", keys_path.display());
     }
 
     Ok(())
@@ -250,25 +182,23 @@ fn cmd_setup(
 
 fn setup_status() -> Result<(), Box<dyn std::error::Error>> {
     let path = default_config_path()?;
-    println!("Local (router Dashboard):");
-    println!("  config: {}", path.display());
-    if path.exists() {
+    println!("config: {}", path.display());
+    let kp = if path.exists() {
         let doc = RouterDocument::load_path(&path)?;
-        println!("  ok");
-        println!("  require_api_key: {}", doc.global.require_api_key);
-        println!("  allow_register: {}", doc.global.allow_register);
+        println!("require_api_key: {}", doc.global.require_api_key);
+        println!("allow_register: {}", doc.global.allow_register);
         let kp = doc
             .global
             .keys_path
             .clone()
             .unwrap_or_else(|| "~/.ariacompute/router-keys.json".into());
-        println!("  keys_path: {kp}");
+        println!("keys_path: {kp}");
         let resolved = resolve_keys_path(&kp)?;
         if resolved.exists() {
             let (a, r) = aria_router_http::load_keys_for_status(&resolved)?;
-            println!("  local_api_keys: active={a} revoked={r}");
+            println!("local_api_keys: active={a} revoked={r}");
         } else {
-            println!("  local_api_keys: (file missing)");
+            println!("local_api_keys: (file missing)");
         }
         let up = doc
             .global
@@ -279,47 +209,42 @@ fn setup_status() -> Result<(), Box<dyn std::error::Error>> {
         if ures.exists() {
             let store = LocalUserStore::load(&ures)?;
             let (admin, user) = store.counts();
-            println!("  users: admin={admin} user={user}");
+            println!("users: admin={admin} user={user}");
         } else {
-            println!("  users: (file missing)");
+            println!("users: (file missing)");
         }
+        kp
     } else {
-        println!("  (missing; run aria-router setup)");
-    }
-
-    println!("OAuth (Aria Compute):");
-    let kp = if path.exists() {
-        let doc = RouterDocument::load_path(&path).ok();
-        doc.and_then(|d| d.global.keys_path)
-            .unwrap_or_else(|| "~/.ariacompute/router-keys.json".into())
-    } else {
+        println!("(missing; run aria-router setup)");
         "~/.ariacompute/router-keys.json".into()
     };
     let kpath = resolve_keys_path(&kp)?;
     if kpath.exists() {
         let store = KeyStore::load(&kpath).map_err(|e| e.to_string())?;
         let pubu = store.oauth_public();
-        println!("  site: {}", pubu.site.as_deref().unwrap_or("(none)"));
+        println!("site: {}", pubu.site.as_deref().unwrap_or("(none)"));
         if let Some(u) = &pubu.user {
             println!(
-                "  linked_user: {}",
+                "linked_user: {}",
                 u.email.as_deref().unwrap_or("(no email)")
             );
         } else if pubu.api_key_configured {
-            println!("  linked_user: (not linked — key only)");
+            println!("linked_user: (not linked — key only)");
         } else {
-            println!("  linked_user: (none)");
+            println!("linked_user: (none)");
         }
         if pubu.api_key_configured {
             println!(
-                "  oauth_api_key: configured ({})",
+                "oauth_api_key: configured ({})",
                 pubu.api_key_prefix.as_deref().unwrap_or("bfvk-…")
             );
         } else {
-            println!("  oauth_api_key: missing");
+            println!("oauth_api_key: missing");
         }
     } else {
-        println!("  oauth_api_key: missing");
+        println!("site: (none)");
+        println!("linked_user: (none)");
+        println!("oauth_api_key: missing");
     }
     Ok(())
 }
@@ -348,21 +273,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             template,
             admin_user,
             admin_password,
-            allow_register,
-            require_api_key,
-            serve_site,
-            serve_api_key,
-        } => cmd_setup(
-            status,
-            clear,
-            template,
-            admin_user,
-            admin_password,
-            allow_register,
-            require_api_key,
-            serve_site,
-            serve_api_key,
-        )?,
+        } => cmd_setup(status, clear, template, admin_user, admin_password)?,
         Command::Validate { config } => {
             let config = resolve_config(config)?;
             RouterDocument::load_path(&config)?;

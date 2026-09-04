@@ -25,7 +25,7 @@
 | **E** | SDK | C ABI + 八语言；`cases.json`；`run-binding-tests.sh` |
 | **F-dashboard** | 运维面 | 管理面 SPA：Overview / Config（可写热重载）/ Topology / Providers / Replay / Playground |
 | **G-cost** | 成本 + API key | 六因子成本账本；YAML `pricing`；Dashboard「API 密钥」签发；数据面 / provider 注册 Bearer；engine 传 `router_api_key` |
-| **H-accounts** | 本地用户 + OAuth | Dashboard 注册/登录（密码）；本地 `sk-aria_` 归属用户；OAuth（Aria Compute）关联 + `bfvk`；cost `by_local_user` / `by_serve_user`；CLI 分段 Local vs OAuth |
+| **H-accounts** | 本地用户 + OAuth | Dashboard 注册/登录（密码）；本地 `sk-aria_` 归属用户；OAuth（Aria Compute）关联 + `bfvk`；cost `by_local_user` / `by_serve_user`；CLI 扁平 setup |
 
 未达阶段的 YAML 能力须 `Unsupported`，禁止静默空实现。
 
@@ -53,7 +53,7 @@
 | 9 | **cost** | 内存六因子账本；`GET /v1/router/cost`；按 model/layer/entrypoint/key/`local_user`/`serve_user` 分桶 |
 | 10 | **api-keys** | Dashboard 签发 `sk-aria_`（`owner_user_id`）；`keys_path` 只存 sha256；数据面与 `PUT /providers` Bearer；`require_api_key` |
 | 11 | **local-users** | `users_path` argon2；Register/Login session；`allow_register`；admin 管用户 |
-| 12 | **oauth-account** | OAuth 为 `router-keys.json` 中 `kind: oauth` 条目；关联 ariacompute.com/cn；`bfvk` 存储/展示；CLI 可粘贴 |
+| 12 | **oauth-account** | OAuth 为 `router-keys.json` 中 `kind: oauth` 条目；关联 ariacompute.com/cn；`bfvk` 存储/展示（Dashboard Account） |
 
 ### 2.1 非目标
 
@@ -104,7 +104,7 @@ recipes:
       signals: { keywords: [...] }
       decisions: [...]
 global:
-  require_api_key: false          # true → 数据面 chat 与 PUT providers 须 Bearer（sk-aria_ 或已配置 bfvk）
+  require_api_key: true           # default true；false → 数据面可不带 Bearer
   allow_register: true            # Dashboard 普通用户自助注册
   keys_path: ~/.ariacompute/router-keys.json   # keys[]：kind=local (sk-aria_) | kind=oauth (bfvk)
   users_path: ~/.ariacompute/router-users.json
@@ -169,7 +169,7 @@ Extensions：
 
 管理面默认只绑 `127.0.0.1`。本地密钥明文只在 POST 响应出现一次；`keys_path` 只存 sha256；密码 argon2id。
 
-CLI：`aria-router setup` **分段** `[1/2] Local (router Dashboard)`（admin、`allow_register`、`require_api_key`）与 `[2/2] OAuth (Aria Compute)`（site + `bfvk` 写入 `keys[]` `kind=oauth`）；**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 从 `keys[]` 分组展示 Local vs OAuth。`--clear` 可删 `router-keys.json` / `router-users.json`。CLI help 由 **clap** derive 生成（对齐 memo：`about` / `Usage` / `Commands` / `Options`；支持 `aria-router <cmd> --help`）。无参调用打印 help 并 exit **2**；`-v` / `--version` / 子命令 `version` 打印版本。
+CLI：`aria-router setup` 仅 template + admin（默认 `allow_register=true`、`require_api_key=true`；OAuth/`bfvk` 与开关改 YAML 或 Dashboard）。flags：`--status` / `--clear` / `--template` / `--admin-user` / `--admin-password`。**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 扁平 `key: value`。`--clear` 可删 `router-keys.json` / `router-users.json`。CLI help 由 **clap** derive 生成（对齐 memo：`about` / `Usage` / `Commands` / `Options`；支持 `aria-router <cmd> --help`）。无参调用打印 help 并 exit **2**；`-v` / `--version` / 子命令 `version` 打印版本。
 
 **与 engine**：单一 `router_api_key` 字段可传 `sk-aria_` 或 `bfvk-`；router 按前缀解析 `keys[]`（`kind: local|oauth`）。
 

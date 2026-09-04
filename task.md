@@ -117,7 +117,7 @@
 - [x] Dashboard Account 展示；Cost `by_local_user` / `by_serve_user`；dual Bearer
 
 ### T17 — CLI
-- [x] `aria-router setup` 分段 Local vs OAuth；`--status` 分组
+- [x] `aria-router setup` 仅 template + admin；`--status` 扁平字段
 - [x] `aria-engine setup`；`router_api_key` 双前缀；router `keys[]` kind local|oauth
 
 ## CLI help 对齐 memo（clap）

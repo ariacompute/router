@@ -44,3 +44,7 @@ recipes:
       fallback: local/general
       prompt: |
         Choose one eligible model for this request.
+
+# Gold-path demos: no Bearer required (setup default is require_api_key: true).
+global:
+  require_api_key: false

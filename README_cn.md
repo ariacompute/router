@@ -35,13 +35,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 | [`ffi.yaml`](config/examples/ffi.yaml) | 黄金 `fast-response` + 同上 catalog recipe |
 
 ```bash
-# 写入配置 — 两段凭证：
-#   [1/2] Local (router Dashboard) — 本地管理员；sk-aria_ 仅在 Dashboard → Keys 签发
-#   [2/2] OAuth (Aria Compute)     — 可选 bfvk-… 写入 keys[] kind=oauth（~/.ariacompute/router-keys.json）
+# 写入配置 — template + admin（require_api_key / allow_register / OAuth 改 YAML 或 Dashboard）
 aria-router setup
 aria-router setup --status
-# Local flags: --admin-user --admin-password --allow-register --require-api-key
-# OAuth flags: --serve-site com|cn --serve-api-key bfvk-…
+# Flags: --template --admin-user --admin-password
 
 # 校验（默认路径，或传 --config）
 aria-router validate
@@ -91,10 +88,10 @@ cargo run -p aria-router -- serve \
 ### API 密钥与成本
 
 1. Dashboard → **API 密钥** → 生成（`sk-aria_…` 只显示一次），或 `POST /v1/router/keys`。
-2. `aria-router setup` 可打开 `global.require_api_key`，使 chat 与 `PUT /v1/router/providers` 需要 Bearer。
-3. 客户端与 `aria-engine` 使用同一把 **Local** secret（engine：`router_api_key` / `--router-api-key`；勿粘贴 `bfvk-`）。
+2. setup 默认写入 `global.require_api_key: true`（chat 与 `PUT /v1/router/providers` 须 Bearer）。可在 YAML 改为 `false` 开放数据面。
+3. 客户端与 `aria-engine` 使用 Bearer `sk-aria_…` 或 `bfvk-…`（`router_api_key` / `--router-api-key`）。
 4. **Cost** 页 / `GET /v1/router/cost` 展示六因子、`by_local_user` / `by_serve_user` / `by_key`（YAML `pricing`）。
-5. OAuth：Dashboard → Account 或 `aria-router setup` [2/2] 写入 `bfvk-…`。
+5. OAuth：Dashboard → Account 配置 `bfvk-…`（关联 / 粘贴 / 展示）。
 
 ```bash
 curl -s http://127.0.0.1:8899/v1/chat/completions \

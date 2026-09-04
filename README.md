@@ -35,13 +35,10 @@ Examples (English comments in every file):
 | [`ffi.yaml`](config/examples/ffi.yaml) | gold `fast-response` plus the same catalog recipe |
 
 ```bash
-# Setup — two credential sections:
-#   [1/2] Local (router Dashboard) — admin user/password; sk-aria_ keys minted in Dashboard → Keys
-#   [2/2] OAuth (Aria Compute)     — optional bfvk-… as keys[] kind=oauth in ~/.ariacompute/router-keys.json
+# Setup — template + admin (require_api_key / allow_register / OAuth via YAML or Dashboard)
 aria-router setup
 aria-router setup --status
-# Non-interactive Local flags: --admin-user --admin-password --allow-register --require-api-key
-# Non-interactive OAuth flags: --serve-site com|cn --serve-api-key bfvk-…
+# Flags: --template --admin-user --admin-password
 
 # Validate (default path, or pass --config)
 aria-router validate
@@ -92,10 +89,10 @@ cargo run -p aria-router -- serve \
 ### API keys and cost
 
 1. Open Dashboard → **API keys** → Generate (`sk-aria_…` shown once). Or `POST /v1/router/keys`.
-2. `aria-router setup` → enable `global.require_api_key` when you want chat and `PUT /v1/router/providers` to require Bearer.
-3. Clients and `aria-engine` use the same **Local** secret (`router_api_key` / `--router-api-key`; never paste `bfvk-` there).
+2. Setup writes `global.require_api_key: true` by default (chat and `PUT /v1/router/providers` need Bearer). Set `false` in YAML to open the data plane.
+3. Clients and `aria-engine` use Bearer `sk-aria_…` or `bfvk-…` (`router_api_key` / `--router-api-key`).
 4. **Cost** page / `GET /v1/router/cost` shows six-factor spend plus `by_local_user` / `by_serve_user` / `by_key` (YAML `pricing.input_per_mtok` / `output_per_mtok`).
-5. OAuth: Dashboard → Account or `aria-router setup` [2/2] for `bfvk-…`.
+5. OAuth: Dashboard → Account for `bfvk-…` (link / paste / reveal).
 
 ```bash
 # Chat with API key (when require_api_key: true)

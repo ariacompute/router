@@ -78,7 +78,8 @@ providers:
         output_per_mtok: 0.60
 
 # Optional observability / classifier asset blob (unused by the gold path).
-global: {}
+global:
+  require_api_key: false
 
 # Virtual model names → recipe. Concrete provider names bypass recipes.
 entrypoints:

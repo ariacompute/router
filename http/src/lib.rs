@@ -1182,6 +1182,8 @@ recipes:
     agent:
       extension: builtin
       fallback: local/general
+global:
+  require_api_key: false
 "#
         )
     }

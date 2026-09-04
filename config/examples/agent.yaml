@@ -76,7 +76,8 @@ providers:
         output_per_mtok: 0.60
 
 # Optional observability / classifier asset blob.
-global: {}
+global:
+  require_api_key: false
 
 # All listed extension types are checked at serve start. Missing binary → no start.
 extensions:

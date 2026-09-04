@@ -27,7 +27,7 @@ pub struct RouterDocument {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GlobalCfg {
-    #[serde(default)]
+    #[serde(default = "default_require_api_key")]
     pub require_api_key: bool,
     /// Allow Dashboard self-registration for local users (default true when written by setup).
     #[serde(default = "default_allow_register")]
@@ -44,13 +44,17 @@ pub struct GlobalCfg {
 impl Default for GlobalCfg {
     fn default() -> Self {
         Self {
-            require_api_key: false,
+            require_api_key: true,
             allow_register: true,
             keys_path: None,
             users_path: None,
             serve_account_path: None,
         }
     }
+}
+
+fn default_require_api_key() -> bool {
+    true
 }
 
 fn default_allow_register() -> bool {
@@ -659,7 +663,7 @@ pub fn resolve_users_path(raw: &str) -> Result<PathBuf, RouterError> {
 /// Write a v0.3 starter YAML to `~/.ariacompute/router.yml`.
 /// `kind` is `semantic` (default) or `agent`.
 pub fn write_default_config(kind: &str, overwrite: bool) -> Result<PathBuf, RouterError> {
-    write_default_config_with(kind, overwrite, false, true)
+    write_default_config_with(kind, overwrite, true, true)
 }
 
 pub struct SetupGlobalOpts {

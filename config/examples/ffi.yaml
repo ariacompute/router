@@ -35,7 +35,8 @@ providers:
           protocol: http
           weight: 0
 
-global: {}
+global:
+  require_api_key: false
 
 extensions:
   - name: builtin
