@@ -556,6 +556,13 @@ fn serve_pick_api_key(list: &[Value]) -> Option<(String, String)> {
 /// Re-sync the linked serve account's API key metadata from serve. Prefers the
 /// stored serve API key (sk-bf-) as the credential and falls back to the
 /// (short-lived) link token. Returns the updated public serve account.
+///
+/// Deletion/revocation detection: if listing keys with the stored key returns
+/// 401/403, or the stored key's prefix is absent from the returned list, the
+/// key was deleted/revoked on serve. We then mark it deleted (clearing the
+/// stale secret) so the dashboard updates automatically and the router stops
+/// authenticating with a dead credential. Network/timeout failures leave the
+/// prior state untouched.
 pub async fn serve_account_sync(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -577,36 +584,49 @@ pub async fn serve_account_sync(
         )
     })?;
     let list_url = format!("{}/api/api-keys", site_url.trim_end_matches('/'));
-    let metas = serve_json(Method::GET, &list_url, &bearer, None)
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| RouterError::Upstream(format!("serve client: {e}")))?;
+    let resp = client
+        .get(&list_url)
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .send()
         .await
-        .map_err(AppError)?;
-    let arr = metas.as_array().cloned().unwrap_or_default();
-    let stored_prefix = st.keys.lock().unwrap().oauth_public().api_key_prefix.clone();
-    let chosen = arr
-        .iter()
-        .find(|m| {
-            stored_prefix
-                .as_deref()
-                .map(|p| m.get("prefix").and_then(|x| x.as_str()) == Some(p))
-                .unwrap_or(false)
-        })
-        .or_else(|| arr.first());
-    if let Some(m) = chosen {
-        let name = m
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("aria-router")
-            .to_string();
-        let prefix = m
-            .get("prefix")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        .map_err(|e| RouterError::Upstream(format!("serve request to {list_url}: {e}")))?;
+    let status = resp.status();
+    // A 401/403 with a stored (configured) key means the key was deleted or
+    // revoked on serve. Mark it so the dashboard updates automatically.
+    if (status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN)
+        && st.keys.lock().unwrap().oauth_api_key().is_some()
+    {
         st.keys
             .lock()
             .unwrap()
-            .oauth_set_api_key_meta(name, prefix)
+            .oauth_mark_api_key_deleted()
             .map_err(AppError)?;
+        return Ok(Json(st.keys.lock().unwrap().oauth_public()));
+    }
+    if !status.is_success() {
+        return Err(AppError(RouterError::Upstream(format!(
+            "serve {list_url}: status {status}"
+        ))));
+    }
+    let metas: Value = resp
+        .json()
+        .await
+        .map_err(|e| RouterError::Upstream(format!("serve json from {list_url}: {e}")))?;
+    let arr = metas.as_array().cloned().unwrap_or_default();
+    // A 200 means the bearer is still valid, so the stored key still exists on
+    // serve. Refresh display metadata from the most recently created active key
+    // and clear any prior deletion marker. (The key's full secret is never
+    // returned by serve, so the user pastes it once.)
+    if let Some((name, prefix)) = serve_pick_api_key(&arr) {
+        let mut keys = st.keys.lock().unwrap();
+        keys.oauth_set_api_key_meta(name, prefix).map_err(AppError)?;
+        if keys.oauth_public().api_key_deleted {
+            keys.oauth_unmark_api_key_deleted().map_err(AppError)?;
+        }
     }
     Ok(Json(st.keys.lock().unwrap().oauth_public()))
 }

@@ -151,6 +151,7 @@ export type ServeAccount = {
   api_key_name?: string | null;
   api_key_prefix?: string | null;
   api_key_configured: boolean;
+  api_key_deleted: boolean;
   status: string;
 };
 

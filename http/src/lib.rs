@@ -1149,6 +1149,8 @@ mod tests {
     use super::*;
     use aria_router_config::ExtensionCfg;
     use aria_router_ext::SubprocessExtension;
+    use crate::keys::ExchangeInput;
+    use crate::serve_account::ServeUserInfo;
     use axum::body::to_bytes;
     use axum::http::Request;
     use tower::ServiceExt;
@@ -1916,5 +1918,142 @@ global:
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    /// Spin up a mock Aria Compute serve that answers `GET /api/api-keys` with
+    /// `status` and `body`.
+    async fn spawn_serve(status: u16, body: Value) -> String {
+        let app = Router::new().route(
+            "/api/api-keys",
+            axum::routing::get(move || {
+                let body = body.clone();
+                async move { (StatusCode::from_u16(status).unwrap(), Json(body)) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://127.0.0.1:{}", addr.port())
+    }
+
+    /// Link a serve account with a pasted `sk-bf-` key and point its site_url at
+    /// `site_url` (bypassing `normalize_site` for tests).
+    fn link_with_key(st: &Arc<AppState>, key: &str, site_url: &str) {
+        let mut keys = st.keys.lock().unwrap();
+        let (_, state, _) = keys
+            .begin_link("com", Some("u1".into()), Some("a@b.com".into()), None)
+            .unwrap();
+        let _ = keys.take_pending(&state).unwrap();
+        keys.apply_exchange(ExchangeInput {
+            site: "https://ariacompute.com".into(),
+            site_url: "https://ariacompute.com".into(),
+            user: ServeUserInfo {
+                id: serde_json::Value::String("s1".into()),
+                email: Some("a@b.com".into()),
+                role: Some("user".into()),
+            },
+            link_token: Some("lt".into()),
+            expires_at: None,
+            api_key: Some(("aria-router".into(), key.into())),
+            owner_user_id: Some("u1".into()),
+        })
+        .unwrap();
+        keys.set_site_url_for_test(site_url);
+    }
+
+    #[tokio::test]
+    async fn serve_sync_detects_deleted_key_via_401() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let base = spawn_serve(401, json!({"error": "unauthorized"})).await;
+        link_with_key(&st, "sk-bf-ABCDEFGHIJKLMNOP", &base);
+
+        let app = mgmt_router(st.clone());
+        let (status, body) = oneshot_json(
+            app,
+            Request::post("/v1/router/serve/account/sync")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["api_key_deleted"], true);
+        assert_eq!(body["api_key_configured"], false);
+
+        // Persisted: GET /serve/account reflects the deletion without network.
+        let app2 = mgmt_router(st.clone());
+        let (_, body2) = oneshot_json(
+            app2,
+            Request::get("/v1/router/serve/account")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(body2["api_key_deleted"], true);
+    }
+
+    #[tokio::test]
+    async fn serve_sync_refreshes_meta_on_200_valid_bearer() {
+        // A 200 listing means the bearer is still valid (the key exists on
+        // serve), even if serve returns a longer prefix than the router stored.
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let base = spawn_serve(
+            200,
+            json!([{
+                "name": "other",
+                "prefix": "sk-bf-OTHERKEY12345",
+                "created_at": "2024-01-01T00:00:00Z"
+            }]),
+        )
+        .await;
+        link_with_key(&st, "sk-bf-ABCDEFGHIJKLMNOP", &base);
+
+        let app = mgmt_router(st.clone());
+        let (status, body) = oneshot_json(
+            app,
+            Request::post("/v1/router/serve/account/sync")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["api_key_deleted"], false);
+        assert_eq!(body["api_key_configured"], true);
+        // Metadata refreshed from the (only) serve key.
+        assert_eq!(body["api_key_name"], "other");
+    }
+
+    #[tokio::test]
+    async fn serve_sync_updates_meta_when_key_present() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let key = "sk-bf-ABCDEFGHIJKLMNOP";
+        let base = spawn_serve(
+            200,
+            json!([{
+                "name": "renamed",
+                "prefix": key,
+                "created_at": "2024-01-01T00:00:00Z"
+            }]),
+        )
+        .await;
+        link_with_key(&st, key, &base);
+
+        let app = mgmt_router(st.clone());
+        let (status, body) = oneshot_json(
+            app,
+            Request::post("/v1/router/serve/account/sync")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["api_key_deleted"], false);
+        assert_eq!(body["api_key_configured"], true);
+        assert_eq!(body["api_key_name"], "renamed");
     }
 }

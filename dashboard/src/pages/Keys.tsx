@@ -139,6 +139,22 @@ export default function Keys() {
           <p className="muted" style={{ marginBottom: '0.75rem' }}>
             Auto-synced from {serve.site_url ?? serve.site ?? 'Aria Compute'}.
           </p>
+          {serve.api_key_deleted ? (
+            <div
+              style={{
+                border: '1px solid #e0a800',
+                background: '#fff8e1',
+                color: '#7a5b00',
+                padding: '0.75rem 1rem',
+                borderRadius: '8px',
+                marginBottom: '0.75rem',
+              }}
+            >
+              This key was deleted or revoked on Aria Compute. Re-create it on
+              Aria Compute and paste it again in{' '}
+              <a href="/account">Account</a> to restore.
+            </div>
+          ) : null}
           <div className={styles.card} style={{ maxWidth: '40rem' }}>
             <div className={styles.label}>Name</div>
             <div className={styles.value}>{serve.api_key_name ?? '—'}</div>
@@ -147,6 +163,18 @@ export default function Keys() {
             </div>
             <div className={styles.value}>
               <code>{serve.api_key_prefix ?? '—'}</code>
+            </div>
+            <div className={styles.label} style={{ marginTop: '0.5rem' }}>
+              Status
+            </div>
+            <div className={styles.value}>
+              {serve.api_key_deleted ? (
+                <span style={{ color: '#b00020' }}>deleted on serve</span>
+              ) : serve.api_key_configured ? (
+                <span style={{ color: '#2e7d32' }}>active</span>
+              ) : (
+                'not configured'
+              )}
             </div>
           </div>
         </div>

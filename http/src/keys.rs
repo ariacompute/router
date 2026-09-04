@@ -83,6 +83,11 @@ pub struct KeyRecord {
     pub link_expires_at: Option<String>,
     #[serde(default)]
     pub link_token: Option<String>,
+    /// Set when a sync detects the stored serve API key is gone (deleted or
+    /// revoked) on serve. The stale secret is cleared, but name/prefix are kept
+    /// for display so the dashboard can show which key was removed.
+    #[serde(default)]
+    pub api_key_deleted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -139,6 +144,9 @@ pub struct ServeAccountPublic {
     pub api_key_name: Option<String>,
     pub api_key_prefix: Option<String>,
     pub api_key_configured: bool,
+    /// The stored serve API key was deleted/revoked on serve. The router keeps
+    /// the last-known name/prefix for display and clears the stale secret.
+    pub api_key_deleted: bool,
     pub status: String,
 }
 
@@ -262,6 +270,7 @@ impl KeyStore {
                 linked_at: data.linked_at,
                 link_expires_at: data.link_expires_at,
                 link_token: data.link_token,
+                api_key_deleted: false,
             };
             self.keys.push(rec);
             self.persist()?;
@@ -369,6 +378,7 @@ impl KeyStore {
             linked_at: None,
             link_expires_at: None,
             link_token: None,
+            api_key_deleted: false,
         };
         self.keys.push(rec);
         self.persist()?;
@@ -508,12 +518,16 @@ impl KeyStore {
                 api_key_name: None,
                 api_key_prefix: None,
                 api_key_configured: false,
+                api_key_deleted: false,
                 status: "not linked".into(),
             },
             Some(k) => {
                 let linked = k.user.is_some();
                 let configured = k.api_key.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
-                let status = if linked && configured {
+                let deleted = k.api_key_deleted;
+                let status = if deleted {
+                    "api key deleted on serve".into()
+                } else if linked && configured {
                     "linked".into()
                 } else if configured {
                     "key only, not linked".into()
@@ -532,6 +546,7 @@ impl KeyStore {
                     api_key_name: Some(k.name.clone()),
                     api_key_prefix: Some(k.prefix.clone()),
                     api_key_configured: configured,
+                    api_key_deleted: deleted,
                     status,
                 }
             }
@@ -562,6 +577,8 @@ impl KeyStore {
             k.api_key = Some(key.to_string());
             k.prefix = prefix;
             k.name = name;
+            // A freshly pasted key is valid again; clear any prior deletion mark.
+            k.api_key_deleted = false;
         } else {
             self.keys.push(KeyRecord {
                 kind: KeyKind::Oauth,
@@ -585,9 +602,40 @@ impl KeyStore {
                 linked_at: None,
                 link_expires_at: None,
                 link_token: None,
+                api_key_deleted: false,
             });
         }
         self.persist()
+    }
+
+    /// Mark the stored serve API key as deleted/revoked on serve: clear the
+    /// stale secret so the router stops authenticating with it, but keep the
+    /// name/prefix for display. Set when a sync detects the key is gone (a 401
+    /// on listing keys, or its prefix no longer in the serve key list).
+    pub fn oauth_mark_api_key_deleted(&mut self) -> Result<(), RouterError> {
+        let k = self
+            .active_oauth_mut()
+            .ok_or_else(|| RouterError::InvalidParam("no linked serve account".into()))?;
+        k.api_key_deleted = true;
+        k.api_key = None;
+        self.persist()
+    }
+
+    /// Clear the deleted marker (e.g. after the user pastes a fresh, valid key
+    /// or a sync re-finds the key on serve).
+    pub fn oauth_unmark_api_key_deleted(&mut self) -> Result<(), RouterError> {
+        let k = self
+            .active_oauth_mut()
+            .ok_or_else(|| RouterError::InvalidParam("no linked serve account".into()))?;
+        k.api_key_deleted = false;
+        self.persist()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_site_url_for_test(&mut self, url: &str) {
+        if let Some(k) = self.active_oauth_mut() {
+            k.site_url = Some(url.to_string());
+        }
     }
 
     pub fn oauth_set_site(&mut self, site: &str) -> Result<(), RouterError> {
@@ -619,6 +667,7 @@ impl KeyStore {
                 linked_at: None,
                 link_expires_at: None,
                 link_token: None,
+                api_key_deleted: false,
             });
         }
         self.persist()
@@ -733,6 +782,7 @@ pub fn apply_exchange(&mut self, inp: ExchangeInput) -> Result<(), RouterError> 
                 linked_at: None,
                 link_expires_at: None,
                 link_token: None,
+                api_key_deleted: false,
             });
         }
         let k = self.active_oauth_mut().expect("oauth row");
@@ -1059,5 +1109,49 @@ mod tests {
         // Linked with a key on the same account -> owner recorded.
         assert_eq!(store.oauth_owner_user_id().as_deref(), Some("user-1"));
         assert!(store.oauth_api_key().is_some());
+    }
+
+    #[test]
+    fn oauth_mark_api_key_deleted_clears_secret_and_flags() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        let mut store = KeyStore::empty(path.clone());
+        let (_, state, _) = store
+            .begin_link("com", Some("user-1".into()), Some("a@b.com".into()), None)
+            .unwrap();
+        let _ = store.take_pending(&state).unwrap();
+        store
+            .apply_exchange(ExchangeInput {
+                site: "https://ariacompute.com".into(),
+                site_url: "https://ariacompute.com".into(),
+                user: ServeUserInfo {
+                    id: serde_json::Value::String("serve-1".into()),
+                    email: Some("a@b.com".into()),
+                    role: Some("user".into()),
+                },
+                link_token: Some("lt".into()),
+                expires_at: None,
+                api_key: Some(("aria-router".into(), "sk-bf-ABCDEFGHIJKLMNOP".into())),
+                owner_user_id: Some("user-1".into()),
+            })
+            .unwrap();
+        assert!(store.oauth_public().api_key_configured);
+        assert!(!store.oauth_public().api_key_deleted);
+
+        // Marking deleted clears the stale secret but keeps name/prefix.
+        store.oauth_mark_api_key_deleted().unwrap();
+        let acct = store.oauth_public();
+        assert!(acct.api_key_deleted);
+        assert!(!acct.api_key_configured);
+        assert_eq!(acct.api_key_prefix.as_deref(), Some("sk-bf-ABCDEFGHIJ"));
+        assert!(store.oauth_api_key().is_none());
+
+        // Re-pasting a (fresh) key clears the deletion marker.
+        store
+            .oauth_set_api_key("sk-bf-NEWKEY1234567890", Some("k2"))
+            .unwrap();
+        let acct = store.oauth_public();
+        assert!(!acct.api_key_deleted);
+        assert!(acct.api_key_configured);
     }
 }

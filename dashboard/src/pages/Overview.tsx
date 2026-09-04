@@ -59,7 +59,13 @@ export default function Overview() {
           <div className={styles.value} style={{ fontSize: '1rem' }}>
             {serve ? (
               <>
-                {serve.linked ? 'linked' : serve.api_key_configured ? 'key only' : 'not linked'}
+                {serve.api_key_deleted
+                  ? 'key deleted on serve'
+                  : serve.linked
+                    ? 'linked'
+                    : serve.api_key_configured
+                      ? 'key only'
+                      : 'not linked'}
                 {serve.user?.email ? ` · ${serve.user.email}` : ''}
                 {serve.api_key_prefix ? ` · ${serve.api_key_prefix}` : ''}
                 {' · '}

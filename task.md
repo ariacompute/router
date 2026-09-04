@@ -140,3 +140,14 @@
 - [x] 链接时元数据同步放 detached `tokio::spawn`，避免 handler future 持有 !Send 局部变量导致 axum `Handler` trait 不满足
 - [x] `api.ts`：`syncServeAccount()`；`AppError: From<RouterError>`
 - [x] 验证：`cargo clippy -p aria-router-http`（`auth_api` 无新增告警）、`cargo test -p aria-router-http`（25/25）、`npm --prefix dashboard run build`
+
+## 阶段 J — OAuth API key 删除自动同步
+
+### T20 — Dashboard 自动感知 serve oauth 用户删除/吊销 API key
+- [x] 触发场景：serve oauth 用户在 Aria Compute 删除或吊销其 `sk-bf-` key 后，router dashboard 应自动更新，而非长期显示已失效的 key
+- [x] 检测信号：sync 用已存 `sk-bf-` 拉取 serve `/api/api-keys` 时收到 401/403 → 视为 key 已删除/吊销（`keys.rs` 新增 `oauth_mark_api_key_deleted`：清掉失效 secret、保留 name/prefix 用于展示、`api_key_deleted` 落盘持久化）；网络/超时失败不改状态
+- [x] `ServeAccountPublic` 新增 `api_key_deleted`；`oauth_public()` 状态改为 `api key deleted on serve`；`api_key_configured` 因 secret 清空而变 false，但 name/prefix 仍展示
+- [x] 重新粘贴 key（`oauth_set_api_key`）或 sync 拿到 200（bearer 仍有效）时清除 `api_key_deleted` 标记（`oauth_unmark_api_key_deleted`）
+- [x] Dashboard Account：每 30s 自动轮询 `serve/account/sync`；删除时显示醒目警告横幅 + 最后已知 key 信息 + 重新粘贴引导；Keys 与 Overview 同步展示 `deleted on serve`
+- [x] 单测：`keys.rs` 单测（mark 清 secret+flag / 重贴清 flag）、`lib.rs` 三条集成（`401→deleted` 且 GET 持久化、200 有效 bearer 仅刷新 meta 不误删、200 命中更新 name）
+- [x] 验证：`cargo clippy -p aria-router-http` 无告警、`cargo test -p aria-router-http`（33/33）、`npm --prefix dashboard run build` 通过

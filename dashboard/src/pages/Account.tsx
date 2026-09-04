@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   getJson,
   setServeApiKey,
@@ -31,6 +31,18 @@ export default function Account() {
       setErr(q.get('error'));
       window.history.replaceState({}, '', '/account');
     }
+  }, []);
+
+  // Auto-update: poll the serve account sync so a key deleted/revoked on Aria
+  // Compute surfaces on the dashboard without a manual refresh.
+  const acctRef = useRef<ServeAccount | null>(null);
+  acctRef.current = acct;
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!acctRef.current?.linked) return;
+      syncServeAccount().then(setAcct).catch(() => {});
+    }, 30000);
+    return () => clearInterval(id);
   }, []);
 
   async function sync() {
@@ -100,6 +112,27 @@ export default function Account() {
       ) : null}
 
       <h2 className={styles.h2}>Aria Compute connection</h2>
+      {acct?.api_key_deleted ? (
+        <div
+          style={{
+            border: '1px solid #e0a800',
+            background: '#fff8e1',
+            color: '#7a5b00',
+            padding: '0.75rem 1rem',
+            borderRadius: '8px',
+            marginBottom: '1rem',
+          }}
+        >
+          This API key was deleted or revoked on Aria Compute. Create a new key
+          there and paste it below to restore the connection.
+          {acct.api_key_prefix ? (
+            <div className="muted" style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
+              Last known key: {acct.api_key_name ?? 'aria-router'} (
+              {acct.api_key_prefix})
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <div className={styles.grid}>
         <div className={styles.card}>
           <div className={styles.label}>Status</div>
@@ -117,19 +150,25 @@ export default function Account() {
         ) : null}
         <div className={styles.card}>
           <div className={styles.label}>Serve API key</div>
-          {acct?.api_key_configured ? (
+          {acct?.api_key_configured || acct?.api_key_deleted ? (
             <div className={styles.value}>
               <div>{acct.api_key_name ?? 'aria-router'}</div>
               <div className="muted" style={{ fontSize: '0.8rem' }}>
                 {acct.api_key_prefix ?? '—'}
               </div>
+              {acct.api_key_deleted ? (
+                <span style={{ color: '#b00020', fontSize: '0.8rem' }}>
+                  deleted on serve
+                </span>
+              ) : null}
             </div>
           ) : (
             <div className={styles.value}>—</div>
           )}
           <p className="muted" style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
-            Create this key yourself on Aria Compute, then paste it here once. Its
-            name/prefix are auto-synced from serve.
+            {acct?.api_key_deleted
+              ? 'The key above no longer exists on Aria Compute. Paste a new key to reconnect.'
+              : 'Create this key yourself on Aria Compute, then paste it here once. Its name/prefix are auto-synced from serve.'}
           </p>
           <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
             <input
