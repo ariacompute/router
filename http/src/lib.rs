@@ -28,7 +28,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use cost::{cost_usd, estimate_tokens, now_rfc3339, CostEvent, CostLedger};
-pub use keys::{extract_bearer, validate_bfvk, AuthIdentity, KeyStore};
+pub use keys::{extract_bearer, validate_oauth_key, AuthIdentity, KeyStore};
 use users::{UserRole, UserStore};
 use serde::Deserialize;
 use serde_json::{json, Value};

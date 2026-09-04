@@ -1,4 +1,4 @@
-//! Unified API key store: local (`sk-aria_`) and oauth (`bfvk-`) in one `router-keys.json`.
+//! Unified API key store: local (`sk-aria_`) and oauth (`sk-bf-`) in one `router-keys.json`.
 
 use aria_router_core::RouterError;
 use rand::RngCore;
@@ -11,10 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 
 const SECRET_PREFIX: &str = "sk-aria_";
-/// Prefixes that identify an Aria Compute (serve) OAuth API key pasted into the
-/// router. Serve issues keys as `sk-bf-…`; `bfvk-…` is kept for backward
-/// compatibility with earlier router assumptions.
-const OAUTH_KEY_PREFIXES: &[&str] = &["bfvk-", "sk-bf-"];
+/// Prefix that identifies an Aria Compute (serve) OAuth API key pasted into the
+/// router. Serve issues keys as `sk-bf-…`.
+const OAUTH_KEY_PREFIXES: &[&str] = &["sk-bf-"];
 
 fn is_oauth_key(secret: &str) -> bool {
     OAUTH_KEY_PREFIXES.iter().any(|p| secret.starts_with(p))
@@ -556,7 +555,7 @@ impl KeyStore {
         name: Option<&str>,
     ) -> Result<(), RouterError> {
         let key = api_key.trim();
-        validate_bfvk(key)?;
+        validate_oauth_key(key)?;
         let prefix: String = key.chars().take(16).collect();
         let name = name.unwrap_or("aria-router").to_string();
         if let Some(k) = self.active_oauth_mut() {
@@ -746,7 +745,7 @@ pub fn apply_exchange(&mut self, inp: ExchangeInput) -> Result<(), RouterError> 
         k.link_expires_at = expires_at;
         k.owner_user_id = owner_user_id;
         if let Some((name, key)) = api_key {
-            validate_bfvk(&key)?;
+            validate_oauth_key(&key)?;
             let prefix: String = key.chars().take(16).collect();
             k.api_key = Some(key);
             k.prefix = prefix;
@@ -763,7 +762,7 @@ pub fn apply_exchange(&mut self, inp: ExchangeInput) -> Result<(), RouterError> 
         self.active_oauth().and_then(|k| k.link_token.clone())
     }
 
-    /// The stored serve API key (`bfvk-`), if configured. Used as a durable
+    /// The stored serve API key (`sk-bf-`), if configured. Used as a durable
     /// credential to call back into serve (e.g. to sync key metadata) after the
     /// short-lived `link_token` has expired.
     pub fn oauth_api_key(&self) -> Option<String> {
@@ -794,7 +793,7 @@ pub fn apply_exchange(&mut self, inp: ExchangeInput) -> Result<(), RouterError> 
         self.persist()
     }
 
-    /// Clear the stored serve API key (bfvk-) without unlinking the account. Used
+    /// Clear the stored serve API key (sk-bf-) without unlinking the account. Used
     /// when re-linking a *different* serve account so the previous account's key is
     /// not reused for the new one.
     pub fn oauth_clear_api_key(&mut self) -> Result<(), RouterError> {
@@ -807,7 +806,7 @@ pub fn apply_exchange(&mut self, inp: ExchangeInput) -> Result<(), RouterError> 
     }
 }
 
-pub fn validate_bfvk(key: &str) -> Result<(), RouterError> {
+pub fn validate_oauth_key(key: &str) -> Result<(), RouterError> {
     if key.starts_with("sk-aria_") {
         return Err(RouterError::InvalidParam(
             "Local router key detected; use Dashboard → Keys".into(),
@@ -815,7 +814,7 @@ pub fn validate_bfvk(key: &str) -> Result<(), RouterError> {
     }
     if !is_oauth_key(key) {
         return Err(RouterError::InvalidParam(
-            "OAuth API key must start with bfvk- or sk-bf-".into(),
+            "OAuth API key must start with sk-bf-".into(),
         ));
     }
     if key.len() < 12 {
@@ -921,30 +920,30 @@ mod tests {
     }
 
     #[test]
-    fn oauth_bfvk_roundtrip_and_migrate() {
+    fn oauth_serve_key_roundtrip_and_migrate() {
         let dir = tempdir().unwrap();
         let keys_path = dir.path().join("router-keys.json");
         let legacy = dir.path().join("router-serve.json");
         std::fs::write(
             &legacy,
-            r#"{"site":"com","site_url":"https://ariacompute.com","api_key":"bfvk-abcdefghijklmnop","api_key_prefix":"bfvk-abcdefgh","api_key_name":"test"}"#,
+            r#"{"site":"com","site_url":"https://ariacompute.com","api_key":"sk-bf-abcdefghijklmnop","api_key_prefix":"sk-bf-abcdefgh","api_key_name":"test"}"#,
         )
         .unwrap();
         let mut store = KeyStore::load(&keys_path).unwrap();
         assert!(!legacy.exists());
         assert!(store.oauth_public().api_key_configured);
         assert!(matches!(
-            store.resolve_bearer("bfvk-abcdefghijklmnop").unwrap(),
+            store.resolve_bearer("sk-bf-abcdefghijklmnop").unwrap(),
             AuthIdentity::Oauth { .. }
         ));
-        assert!(store.resolve_bearer("bfvk-wrong").is_err());
-        assert!(validate_bfvk("sk-aria_abc").is_err());
+        assert!(store.resolve_bearer("sk-bf-wrong").is_err());
+        assert!(validate_oauth_key("sk-aria_abc").is_err());
     }
 
     #[test]
     fn serve_api_key_accepts_sk_bf_prefix() {
-        // Serve issues OAuth API keys with the `sk-bf-` prefix, not `bfvk-`.
-        assert!(validate_bfvk("sk-bf-59af311a-803d-41c0-8000-b82ee4d46b7c").is_ok());
+        // Serve issues OAuth API keys with the `sk-bf-` prefix.
+        assert!(validate_oauth_key("sk-bf-59af311a-803d-41c0-8000-b82ee4d46b7c").is_ok());
         assert!(is_oauth_key("sk-bf-59af311a-803d-41c0-8000-b82ee4d46b7c"));
         assert!(!is_oauth_key("sk-aria_abc"));
         // A `sk-bf-` key routes to OAuth (not local) authentication.
@@ -1014,11 +1013,11 @@ mod tests {
 
         // Sync metadata from serve without touching the stored secret.
         store
-            .oauth_set_api_key_meta("aria-router-pro".into(), "bfvk-ABCD1234".into())
+            .oauth_set_api_key_meta("aria-router-pro".into(), "sk-bf-ABCD1234".into())
             .unwrap();
         let after = store.oauth_public();
         assert_eq!(after.api_key_name.as_deref(), Some("aria-router-pro"));
-        assert_eq!(after.api_key_prefix.as_deref(), Some("bfvk-ABCD1234"));
+        assert_eq!(after.api_key_prefix.as_deref(), Some("sk-bf-ABCD1234"));
         // Secret was never set, so still not configured.
         assert!(!after.api_key_configured);
         assert!(store.oauth_reveal_secret().is_none());
@@ -1053,7 +1052,7 @@ mod tests {
                 },
                 link_token: Some("lt".into()),
                 expires_at: None,
-                api_key: Some(("aria-router".into(), "bfvk-ABCD1234EFGH5678".into())),
+                api_key: Some(("aria-router".into(), "sk-bf-ABCD1234EFGH5678".into())),
                 owner_user_id: Some("user-1".into()),
             })
             .unwrap();

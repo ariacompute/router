@@ -310,7 +310,7 @@ fn setup_status() -> Result<(), Box<dyn std::error::Error>> {
         if pubu.api_key_configured {
             println!(
                 "oauth_api_key: configured ({})",
-                pubu.api_key_prefix.as_deref().unwrap_or("bfvk-…")
+                pubu.api_key_prefix.as_deref().unwrap_or("sk-bf-…")
             );
         } else {
             println!("oauth_api_key: missing");

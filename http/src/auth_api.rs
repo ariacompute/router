@@ -418,7 +418,7 @@ pub async fn oauth_callback(
         .map(|s| s.to_string());
     // Link the serve account. The router does NOT create a serve API key on the
     // user's behalf; the oauth user creates their own key on serve, the dashboard
-    // auto-syncs its metadata, and the user pastes the bfvk- plaintext once.
+    // auto-syncs its metadata, and the user pastes the sk-bf- plaintext once.
     let site_label = body.get("site").and_then(|v| v.as_str()).unwrap_or(&site);
 
     let mut keys_guard = st.keys.lock().unwrap();
@@ -511,7 +511,7 @@ async fn serve_json(
 }
 
 /// Fetch the linked serve account's API keys (metadata only) from serve using a
-/// bearer credential (the stored bfvk- after link, or the short-lived link_token at
+/// bearer credential (the stored sk-bf- after link, or the short-lived link_token at
 /// link time). The secret is never returned by serve's list endpoint.
 async fn serve_fetch_api_keys(
     site_url: &str,
@@ -554,7 +554,7 @@ fn serve_pick_api_key(list: &[Value]) -> Option<(String, String)> {
 }
 
 /// Re-sync the linked serve account's API key metadata from serve. Prefers the
-/// stored serve API key (bfvk-) as the credential and falls back to the
+/// stored serve API key (sk-bf-) as the credential and falls back to the
 /// (short-lived) link token. Returns the updated public serve account.
 pub async fn serve_account_sync(
     State(st): State<Arc<AppState>>,
@@ -611,7 +611,7 @@ pub async fn serve_account_sync(
     Ok(Json(st.keys.lock().unwrap().oauth_public()))
 }
 
-/// Store the serve API key (bfvk-) the user created on serve, so the router can
+/// Store the serve API key (sk-bf-) the user created on serve, so the router can
 /// use it as a Bearer credential and call back into serve after the link token
 /// expires. Serve's list endpoint never returns the secret, so the user pastes it
 /// once; the key's name/prefix are synced separately via `serve_account_sync`.
