@@ -22,6 +22,7 @@ import Account from './pages/Account';
 import Users from './pages/Users';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import VersionBadge from './components/VersionBadge';
 
 type NavItem = { to: string; label: string; end?: boolean; admin?: boolean };
 type NavGroup = { title: string; items: NavItem[] };
@@ -223,6 +224,7 @@ export default function App() {
           <span className={styles.brandText}>aria-router</span>
         </div>
         {routes}
+        <VersionBadge className={styles.authVersion} />
       </div>
     );
   }

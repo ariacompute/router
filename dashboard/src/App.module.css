@@ -140,6 +140,7 @@
 
 /* Public auth (login / register) — centered, no sidebar */
 .authShell {
+  position: relative;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -156,6 +157,18 @@
   align-items: center;
   gap: 0.65rem;
   margin-bottom: 1.5rem;
+}
+
+/* version@commit, bottom-left of the auth page (mirrors sidebar footer) */
+.authVersion {
+  position: absolute;
+  left: 1.25rem;
+  bottom: 1.25rem;
+  font-size: 0.7rem;
+  color: var(--text-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.01em;
+  user-select: none;
 }
 
 @media (max-width: 720px) {
