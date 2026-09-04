@@ -151,3 +151,23 @@
 - [x] Dashboard Account：每 30s 自动轮询 `serve/account/sync`；删除时显示醒目警告横幅 + 最后已知 key 信息 + 重新粘贴引导；Keys 与 Overview 同步展示 `deleted on serve`
 - [x] 单测：`keys.rs` 单测（mark 清 secret+flag / 重贴清 flag）、`lib.rs` 三条集成（`401→deleted` 且 GET 持久化、200 有效 bearer 仅刷新 meta 不误删、200 命中更新 name）
 - [x] 验证：`cargo clippy -p aria-router-http` 无告警、`cargo test -p aria-router-http`（33/33）、`npm --prefix dashboard run build` 通过
+
+## 阶段 K — Router bench（ADR-040 + DRACO）
+
+### T21 — Spec
+- [x] `requirements.md` §6 路由评测；§5 目录含 `bench/`
+- [x] 本清单阶段 K；`AGENTS.md` 目录 + 命令；`README.md` / `README_cn.md` Bench 节
+
+### T22 — 骨架 + quality
+- [x] `bench/` 包：cli / http_client / prices / report / corpus tiny
+- [x] `quality`：label / overlap / judge / rubric
+- [x] unittest 壳（mock，无网络）
+
+### T23 — routing + research
+- [x] `routing`：矩阵、always/oracle/analyse、domain/knn、live router picks、`mode: router_routing`
+- [x] `research`：JSONL + always_X / aria_router、四轴、`mode: router_research`
+- [x] `download-draco`（失败 skip exit 0）
+
+### T24 — 文档与验收
+- [x] corpus README；Bench README 节验收说明
+- [x] `python -m unittest discover -s bench/tests -t .` 全绿（27/27）

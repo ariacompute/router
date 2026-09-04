@@ -306,6 +306,46 @@ chmod +x aria-router
 
 Cut a **GitHub Release** — language package publishes are **fail-pass** and do not block CLI / FFI assets. Version = release tag without leading `v`.
 
+## Bench
+
+Python ≥3.10 **report-only** harness under [`bench/`](bench/) (stdlib; aligns with `engine/bench`). Does **not** start `aria-router` or providers — start them yourself, then point `--router` / `--pool` at live OpenAI-compatible URLs. Reports always set `ci_fail: false`.
+
+| Subcommand | Purpose |
+|------------|---------|
+| `routing` | ADR-040 Q×M matrix + always / oracle / domain / knn / live `aria_router` ladder |
+| `research` | Perplexity DRACO-shaped JSONL + rubric axes vs always_X |
+| `list-corpus` | Print bundled tiny fixtures |
+| `download-draco` | Optional HF `perplexity-ai/draco` fetch (skip on network failure) |
+
+Quality modes (`--quality`): `label` (expected_model / expected_hits), `overlap` (Jaccard vs `--ref-model`), `judge` (needs `--judge-url`).
+
+```bash
+# Unit tests (mock HTTP; no network)
+python -m unittest discover -s bench/tests -t .
+
+# Routing ladder (label mode, tiny corpus)
+python -m bench routing \
+  --router http://127.0.0.1:8899 \
+  --pool small=http://127.0.0.1:9001 --pool large=http://127.0.0.1:9002 \
+  --model-id small=local/small --model-id large=local/large \
+  --entrypoint aria/semantic-auto \
+  --quality label \
+  --corpus bench/corpus/routing_tiny.json \
+  --report ./out/router_routing.json
+
+# Research rubric (label mode)
+python -m bench research \
+  --router http://127.0.0.1:8899 \
+  --pool large=http://127.0.0.1:9002 \
+  --model-id large=local/large \
+  --entrypoint aria/semantic-auto \
+  --quality label \
+  --corpus bench/corpus/research_tiny.jsonl \
+  --report ./out/router_research.json
+```
+
+See [`bench/corpus/README.md`](bench/corpus/README.md) for downloading the full DRACO set. Spec: [`requirements.md`](requirements.md) §6.
+
 ## Engineering Conventions
 
 This repository follows the Harness Engineering philosophy:

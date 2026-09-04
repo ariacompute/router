@@ -20,6 +20,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `ffi/`：`ariacompute-router-ffi`（`libaria-router_ffi`）
 - `bindings/`：rust / python / go / typescript / react-native / flutter / swift / kotlin
 - `dashboard/`：管理面 SPA（Login/Account/Keys/Users/Cost + Overview…）
+- `bench/`：Python report-only 路由矩阵（ADR-040）+ DRACO research 评测
 - 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
 
 ## 开发规范
@@ -37,9 +38,11 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `cargo run -p aria-router -- serve --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090`
 - `npm --prefix dashboard ci && npm --prefix dashboard run build`
 - `./scripts/run-binding-tests.sh`
+- `python -m unittest discover -s bench/tests -t .`
+- `python -m bench routing --corpus bench/corpus/routing_tiny.json --report ./out/r.json …`
 
 ## 进行中需求
-Spec 见 `requirements.md`。阶段 A–H 已落地（本地用户、OAuth 为 keys `kind=oauth`、cost 分桶、CLI）。
+Spec 见 `requirements.md`（含 **§6 bench**）。阶段 A–H / I–J 已落地；阶段 K = Router bench。
 engine 去 hybrid；`--router` / `--router-api-key`（sk-aria_ 或 sk-bf-）。
 
 ## 注意事项
@@ -47,3 +50,4 @@ engine 去 hybrid；`--router` / `--router-api-key`（sk-aria_ 或 sk-bf-）。
 - 四维：Models=候选路径；Compute=pool 排名；Location=硬剪枝；Preference=档位/信号。
 - 一次请求禁止串跑 semantic+agent。未知 extension type / 缺二进制 → 启动失败，不降级。
 - 移动端 `init` 仅 semantic + builtin；pi/dsh → `Unsupported`。
+- Bench report-only（`ci_fail: false`）；不启 router/provider；质量 `label|overlap|judge`。

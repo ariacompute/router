@@ -1,0 +1,26 @@
+[
+  {
+    "id": "sci-q1",
+    "domain": "sci",
+    "prompt": "Explain photosynthesis in one sentence.",
+    "expected_model": "local/large"
+  },
+  {
+    "id": "sci-q2",
+    "domain": "sci",
+    "prompt": "What is the boiling point of water at sea level in Celsius?",
+    "expected_model": "local/small"
+  },
+  {
+    "id": "tech-q1",
+    "domain": "tech",
+    "prompt": "Name one benefit of using an HTTP reverse proxy.",
+    "expected_model": "local/large"
+  },
+  {
+    "id": "tech-q2",
+    "domain": "tech",
+    "prompt": "What does CPU stand for?",
+    "expected_model": "local/small"
+  }
+]

@@ -1,0 +1,6 @@
+# bench/ uses Python ≥3.10 standard library only (urllib, argparse, unittest, json).
+# No pip packages required for CI or local report generation.
+#
+# Optional (not required):
+#   - Mode B judge: any OpenAI-compatible endpoint (--judge-url)
+#   - Full DRACO corpus: `python -m bench download-draco` (HF datasets CDN via urllib)

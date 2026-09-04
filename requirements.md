@@ -218,6 +218,74 @@ router/
   config/ signal/ decision/ algorithm/ plugin/ provider/ agent/ ext/ http/ bin/ ffi/
   dashboard/   # Vite React SPA；产物 dashboard/dist 由管理面托管
   bindings/{rust,python,go,typescript,react-native,flutter,swift,kotlin,testdata}/
+  bench/       # Python report-only 路由 / DRACO 评测（§6）
   config/examples/
   AGENTS.md requirements.md task.md README.md Cargo.toml
 ```
+
+## 6. 路由评测（`bench/`）
+
+对齐 `engine/bench`：Python ≥3.10、标准库为主、**report-only**（报告恒含 `ci_fail: false`）、不启动 router / provider 进程；不可达 → `skipped`，进程 exit 0；坏 CLI → exit 2。
+
+### 6.1 目标与非目标
+
+**目标**
+
+- **`routing`**（ADR-040）：对 corpus × pool 建 `(quality, tokens[, signal])` 矩阵；离线策略 `always_X` / `oracle_quality` / `oracle_cost_optimal(ε=0.03)` / 可选 `domain` / `knn`；live `aria_router` 取 pick；报告 quality、cost、$q/$、**% of oracle**。
+- **`research`**（Perplexity DRACO 形）：任务 completion + rubric 四轴加权 MET/UNMET；对比 `always_X` 与 `aria_router`。
+- **质量** `--quality label|overlap|judge`（Mode A 可离线 CI；Mode B 需 judge URL）。
+
+**非目标**
+
+- 不 vendoring 完整 HF DRACO（~100 题）或 OpenRouter 密钥；`download-draco` 失败则 skip。
+- 不因分数阈值让 CI 失败；不在 bench 内 `cargo run` / 拉起 mock upstream。
+- 不做 metaharness 全量 deep-research fusion / embedding 训练管线（k-NN / domain 仅为矩阵上 leave-one-out 可选 policy）。
+
+### 6.2 CLI
+
+```bash
+python -m bench routing \
+  --router http://127.0.0.1:8899 \
+  --pool small=http://127.0.0.1:9001 --pool large=http://127.0.0.1:9002 \
+  --model-id small=local/small --model-id large=local/large \
+  --entrypoint aria/semantic-auto \
+  --quality label \
+  --corpus bench/corpus/routing_tiny.json \
+  --report ./out/router_routing.json
+
+python -m bench research \
+  --router http://127.0.0.1:8899 \
+  --pool large=http://127.0.0.1:9002 \
+  --model-id large=local/large \
+  --entrypoint aria/semantic-auto \
+  --quality label \
+  --corpus bench/corpus/research_tiny.jsonl \
+  --report ./out/router_research.json
+
+python -m bench list-corpus
+python -m bench download-draco --out ./out/draco_test.jsonl
+```
+
+公共：`--prices JSON`、`--api-key`、`--timeout`、`--max-tokens`、`--ref-model`（overlap）、`--judge-url` / `--judge-model` / `--judge-api-key`（judge）、`--skip-probe`。
+
+### 6.3 字段契约
+
+| 模式 | 语料 | 报告 `mode` | 核心产出 |
+|------|------|-------------|----------|
+| routing | JSON list：`{id, prompt, expected_model?, domain?}` | `router_routing` | cells + ladder（policies）+ 可选 picks |
+| research | JSONL：`{id, domain, problem, answer}`（`answer`=rubric JSON 或对象；tiny 可含 `expected_hits`） | `router_research` | 系统×域均值、四轴 breakdown、相对 always 差 |
+
+- **label**：`expected_model` 命中 → quality 1.0 / 0.0；research tiny 用 `expected_hits` 关键词近似（非官方 DRACO）。
+- **overlap**：相对 `--ref-model` 空白分词 Jaccard（对齐 engine `token_overlap`）。
+- **judge**：routing 要 0–1 float；research 按 criterion MET/UNMET；无 `--judge-url` → skip/error，不崩溃。
+- **rubric**：四轴 `factual-accuracy` / `breadth-and-depth` / `presentation` / `citation`；加权聚合。
+- Live router：请求 `--entrypoint`；pick 来自 `x-aria-router-model` 或 body `model`；pick ∉ pool → `error` 行继续。
+- Cost：`prices.py` USD/MTok；`cost = tokens/1e6 * rate`。
+
+### 6.4 验收
+
+1. `python -m unittest discover -s bench/tests -t .` 全绿（无外网、无 live router；注入假 HTTP）。
+2. `routing` + `label` tiny → JSON+MD，含 oracle 与至少一行 always。
+3. `research` + `label` tiny → 含四轴字段。
+4. 缺 `--judge-url` 时 `judge` → 清晰 skip/error。
+5. `cargo test` 不受影响（纯 Python 包）。

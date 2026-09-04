@@ -299,6 +299,46 @@ chmod +x aria-router
 
 创建 **GitHub Release** — 语言包发布为 **fail-pass**，不阻塞 CLI / FFI 资产。版本号 = tag 去掉前缀 `v`。
 
+## Bench
+
+[`bench/`](bench/) 下 Python ≥3.10 **report-only** 评测（标准库；对齐 `engine/bench`）。**不**拉起 `aria-router` / provider——需自行 `serve` 后把 `--router` / `--pool` 指到 OpenAI 兼容 URL。报告恒含 `ci_fail: false`。
+
+| 子命令 | 用途 |
+|--------|------|
+| `routing` | ADR-040 Q×M 矩阵 + always / oracle / domain / knn / live `aria_router` ladder |
+| `research` | Perplexity DRACO 形 JSONL + rubric 四轴，对比 always_X |
+| `list-corpus` | 打印内置 tiny 语料 |
+| `download-draco` | 可选拉取 HF `perplexity-ai/draco`（网络失败则 skip） |
+
+质量模式（`--quality`）：`label`（expected_model / expected_hits）、`overlap`（相对 `--ref-model` 的 Jaccard）、`judge`（需 `--judge-url`）。
+
+```bash
+# 单测（假 HTTP；无外网）
+python -m unittest discover -s bench/tests -t .
+
+# 路由 ladder（label + tiny）
+python -m bench routing \
+  --router http://127.0.0.1:8899 \
+  --pool small=http://127.0.0.1:9001 --pool large=http://127.0.0.1:9002 \
+  --model-id small=local/small --model-id large=local/large \
+  --entrypoint aria/semantic-auto \
+  --quality label \
+  --corpus bench/corpus/routing_tiny.json \
+  --report ./out/router_routing.json
+
+# Research rubric（label）
+python -m bench research \
+  --router http://127.0.0.1:8899 \
+  --pool large=http://127.0.0.1:9002 \
+  --model-id large=local/large \
+  --entrypoint aria/semantic-auto \
+  --quality label \
+  --corpus bench/corpus/research_tiny.jsonl \
+  --report ./out/router_research.json
+```
+
+完整 DRACO 下载见 [`bench/corpus/README.md`](bench/corpus/README.md)。规格：[`requirements.md`](requirements.md) §6。
+
 ## 工程约定
 
 本仓库遵循 Harness Engineering：
