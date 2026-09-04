@@ -21,13 +21,25 @@ pub static DASHBOARD_HAS: bool = false;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    // Re-run when the explicit version override changes so the embedded
+    // version string stays in sync (matches bin/build.rs).
+    println!("cargo:rerun-if-env-changed=ARIA_ROUTER_VERSION");
 
     // Build metadata for the dashboard footer (version@commit), mirroring
     // harness/ariaterm's git tag + short commit hash scheme. Exposed via the
     // public /v1/router/version endpoint so the SPA can render it bottom-left.
-    let version = std::env::var("ARIA_ROUTER_VERSION")
-        .or_else(|_| std::env::var("CARGO_PKG_VERSION"))
-        .unwrap_or_else(|_| "0.0.0".to_string());
+    //
+    // Precedence: explicit ARIA_ROUTER_VERSION (set by CI from the release
+    // tag) > git tag pointing at HEAD (e.g. v0.10.0 -> 0.10.0) >
+    // CARGO_PKG_VERSION. The git-tag step lets a local `cargo build` on a
+    // tagged commit reflect the release version without manual env setup.
+    let version = if let Ok(v) = std::env::var("ARIA_ROUTER_VERSION") {
+        v
+    } else if let Some(tag) = git_tag_version() {
+        tag
+    } else {
+        std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".to_string())
+    };
     let version = version.strip_prefix('v').unwrap_or(&version).to_string();
     println!("cargo:rustc-env=ARIA_ROUTER_VERSION={version}");
     let commit = git_short_commit();
@@ -40,6 +52,10 @@ fn main() {
         let refs = Path::new(&git_dir).join("refs/heads");
         if refs.exists() {
             println!("cargo:rerun-if-changed={}", refs.display());
+        }
+        let tags = Path::new(&git_dir).join("refs/tags");
+        if tags.exists() {
+            println!("cargo:rerun-if-changed={}", tags.display());
         }
         let packed = Path::new(&git_dir).join("packed-refs");
         if packed.exists() {
@@ -154,6 +170,28 @@ fn git_short_commit() -> String {
             }
         }
         _ => "unknown".to_string(),
+    }
+}
+
+/// Version derived from a git tag pointing at HEAD (e.g. "v0.10.0"), or `None`
+/// when the current commit isn't tagged. Strips nothing here; the caller strips
+/// a leading "v". Returns `None` on any git error so callers fall back safely.
+fn git_tag_version() -> Option<String> {
+    let out = Command::new("git")
+        .args(["tag", "--points-at", "HEAD"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let tag = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .map(|s| s.trim().to_string())?;
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag)
     }
 }
 
