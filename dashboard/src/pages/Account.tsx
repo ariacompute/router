@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { getJson, type LocalUser, type ServeAccount } from '../api';
+import { getJson, syncServeAccount, type LocalUser, type ServeAccount } from '../api';
 import styles from './page.module.css';
 
 export default function Account() {
   const [me, setMe] = useState<LocalUser | null>(null);
   const [acct, setAcct] = useState<ServeAccount | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -24,6 +25,18 @@ export default function Account() {
       window.history.replaceState({}, '', '/account');
     }
   }, []);
+
+  async function sync() {
+    setBusy(true);
+    setErr(null);
+    try {
+      setAcct(await syncServeAccount());
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <>
@@ -82,7 +95,25 @@ export default function Account() {
         ) : null}
         <div className={styles.card}>
           <div className={styles.label}>Serve API key</div>
-          <div className={styles.value}>{acct?.api_key_configured ? 'configured' : '—'}</div>
+          {acct?.api_key_configured ? (
+            <div className={styles.value}>
+              <div>{acct.api_key_name ?? 'aria-router'}</div>
+              <div className="muted" style={{ fontSize: '0.8rem' }}>
+                {acct.api_key_prefix ?? '—'}
+              </div>
+            </div>
+          ) : (
+            <div className={styles.value}>—</div>
+          )}
+          <button
+            type="button"
+            className="btn-ghost btn-sm"
+            onClick={sync}
+            disabled={busy || !acct?.linked}
+            style={{ marginTop: '0.5rem' }}
+          >
+            {busy ? 'Syncing…' : 'Auto-update'}
+          </button>
         </div>
       </div>
     </>

@@ -1,7 +1,7 @@
 //! OpenAI data plane + management API + routing pipeline.
 
 mod topology;
-mod keys;
+pub(crate) mod keys;
 mod cost;
 mod users;
 mod serve_account;
@@ -162,6 +162,10 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
         .route("/v1/router/auth/oauth/start", post(auth_api::oauth_start))
         .route("/v1/router/auth/oauth/callback", get(auth_api::oauth_callback))
         .route("/v1/router/serve/account", get(auth_api::serve_account_get))
+        .route(
+            "/v1/router/serve/account/sync",
+            post(auth_api::serve_account_sync),
+        )
         .route("/v1/router/validate", post(validate_ep))
         .route("/v1/router/replay", get(replay_ep))
         .route("/v1/router/providers", put(upsert_provider).get(list_providers))
@@ -1096,6 +1100,12 @@ fn metadata_from_headers(h: &HeaderMap) -> HashMap<String, String> {
 }
 
 pub struct AppError(pub RouterError);
+
+impl From<RouterError> for AppError {
+    fn from(e: RouterError) -> Self {
+        AppError(e)
+    }
+}
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {

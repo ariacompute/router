@@ -362,6 +362,7 @@ impl UserStore {
     ///   - email matches `admin_emails` (case-insensitive) -> Admin
     ///   - otherwise, if no admin exists yet -> Admin (first-admin bootstrap)
     ///   - otherwise -> User
+    ///
     /// OAuth users have an empty `password_hash` and can only sign in via OAuth.
     pub fn upsert_serve_user(
         &mut self,
@@ -408,9 +409,7 @@ impl UserStore {
         rand::thread_rng().fill_bytes(&mut rnd);
         let id = format!("usr_{}", hex::encode(rnd));
         let created_at = now_rfc3339();
-        let role = if is_admin_email(email_norm.as_deref(), admin_emails) {
-            UserRole::Admin
-        } else if !self.has_admin() {
+        let role = if is_admin_email(email_norm.as_deref(), admin_emails) || !self.has_admin() {
             UserRole::Admin
         } else {
             UserRole::User

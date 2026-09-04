@@ -126,3 +126,14 @@
 - [x] `aria-router` 迁 clap derive；删除手写 `print_usage`
 - [x] `-v` / `--version` / `version`；无参 exit 2；子命令 `--help`
 - [x] `cargo test` + `--help` 冒烟
+
+## 阶段 I — Serve API Key 同步
+
+### T19 — 从 serve 同步 OAuth API key
+- [x] OAuth 回调：exchange 后若有 `link_token`，**同账户重新链接自动复用既有 serve 签名 key（按 owner_user_id 匹配，不新建、不累积）**；仅当无可用 key（首次链接或切换账户）时，才 `POST {site}/api/api-keys`（name `aria-router`）签发 serve `bfvk-` 并存入 oauth 记录（proxying/后续同步的持久凭据）；签发/复用失败则退化为仅存 exchange 返回的元数据
+- [x] `keys.rs`：`oauth_api_key()`（取 bfvk- 凭据）+ `oauth_set_api_key_meta(name,prefix)`（仅更新展示元数据，不动 secret）
+- [x] `POST /v1/router/serve/account/sync`：用已存 bfvk-（回退 link_token）`GET {site}/api/api-keys` 刷新 key 元数据并返回 `ServeAccountPublic`
+- [x] Dashboard Account：Serve API key 卡显示 name/prefix + 「Auto-update」按钮
+- [x] Dashboard Keys：链接后展示「Serve (Aria Compute) API key」（name/prefix，标注 auto-synced from serve）
+- [x] `api.ts`：`syncServeAccount()`；`AppError: From<RouterError>`
+- [x] 验证：`cargo clippy -p aria-router-http`（`auth_api` 无新增告警）、`cargo test -p aria-router-http`（25/25）、`npm --prefix dashboard run build`

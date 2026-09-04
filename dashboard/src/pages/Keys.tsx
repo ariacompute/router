@@ -5,11 +5,13 @@ import {
   sendJson,
   type KeyCreated,
   type KeyPublic,
+  type ServeAccount,
 } from '../api';
 import styles from './page.module.css';
 
 export default function Keys() {
   const [keys, setKeys] = useState<KeyPublic[]>([]);
+  const [serve, setServe] = useState<ServeAccount | null>(null);
   const [name, setName] = useState('default');
   const [created, setCreated] = useState<KeyCreated | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -20,6 +22,9 @@ export default function Keys() {
     getJson<{ keys: KeyPublic[] }>('/v1/router/keys')
       .then((p) => setKeys(p.keys))
       .catch((e: Error) => setErr(e.message));
+    getJson<ServeAccount>('/v1/router/serve/account')
+      .then(setServe)
+      .catch(() => setServe(null));
   }
 
   useEffect(load, []);
@@ -127,6 +132,25 @@ export default function Keys() {
           ))}
         </tbody>
       </table>
+
+      {serve?.linked ? (
+        <div style={{ marginTop: '2rem' }}>
+          <h2 className={styles.h2}>Serve (Aria Compute) API key</h2>
+          <p className="muted" style={{ marginBottom: '0.75rem' }}>
+            Auto-synced from {serve.site_url ?? serve.site ?? 'Aria Compute'}.
+          </p>
+          <div className={styles.card} style={{ maxWidth: '40rem' }}>
+            <div className={styles.label}>Name</div>
+            <div className={styles.value}>{serve.api_key_name ?? '—'}</div>
+            <div className={styles.label} style={{ marginTop: '0.5rem' }}>
+              Prefix
+            </div>
+            <div className={styles.value}>
+              <code>{serve.api_key_prefix ?? '—'}</code>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

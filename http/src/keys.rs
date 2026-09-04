@@ -31,6 +31,19 @@ pub struct ServeUserInfo {
     pub role: Option<String>,
 }
 
+/// Inputs for linking a serve (Aria Compute) account to the router. Bundled into
+/// a single struct so `KeyStore::apply_exchange` stays within clippy's
+/// argument-count limit.
+pub struct ExchangeInput {
+    pub site: String,
+    pub site_url: String,
+    pub user: ServeUserInfo,
+    pub link_token: Option<String>,
+    pub expires_at: Option<String>,
+    pub api_key: Option<(String, String)>,
+    pub owner_user_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyRecord {
     #[serde(default)]
@@ -668,28 +681,28 @@ impl KeyStore {
         Ok((p.site, p.site_url, p.owner_user_id, p.owner_email))
     }
 
-    pub fn apply_exchange(
-        &mut self,
-        site: &str,
-        site_url: &str,
-        user: ServeUserInfo,
-        link_token: Option<String>,
-        expires_at: Option<String>,
-        api_key: Option<(String, String)>,
-        owner_user_id: Option<String>,
-    ) -> Result<(), RouterError> {
-        let (site_id, site_url_n, gateway_url) = match normalize_site(site) {
-            Ok(v) => v,
-            Err(_) => (
-                if site.contains("cn") {
-                    "cn".into()
-                } else {
-                    "intl".into()
-                },
-                site_url.to_string(),
-                gateway_for_site(site),
-            ),
-        };
+pub fn apply_exchange(&mut self, inp: ExchangeInput) -> Result<(), RouterError> {
+    let ExchangeInput {
+        site,
+        site_url,
+        user,
+        link_token,
+        expires_at,
+        api_key,
+        owner_user_id,
+    } = inp;
+    let (site_id, site_url_n, gateway_url) = match normalize_site(&site) {
+        Ok(v) => v,
+        Err(_) => (
+            if site.contains("cn") {
+                "cn".into()
+            } else {
+                "intl".into()
+            },
+            site_url,
+            gateway_for_site(&site),
+        ),
+    };
         if self.active_oauth().is_none() {
             self.keys.push(KeyRecord {
                 kind: KeyKind::Oauth,
@@ -740,6 +753,37 @@ impl KeyStore {
 
     pub fn oauth_link_token(&self) -> Option<String> {
         self.active_oauth().and_then(|k| k.link_token.clone())
+    }
+
+    /// The stored serve API key (`bfvk-`), if configured. Used as a durable
+    /// credential to call back into serve (e.g. to sync key metadata) after the
+    /// short-lived `link_token` has expired.
+    pub fn oauth_api_key(&self) -> Option<String> {
+        self.active_oauth()
+            .and_then(|k| k.api_key.clone())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// The serve owner user id of the linked account, if known. Used to decide
+    /// whether a re-link targets the same account (so its existing serve key can
+    /// be reused) versus a different account (which needs a fresh key).
+    pub fn oauth_owner_user_id(&self) -> Option<String> {
+        self.active_oauth().and_then(|k| k.owner_user_id.clone())
+    }
+
+    /// Update the displayed serve API key name/prefix without touching the
+    /// stored secret. Used by the serve account sync flow.
+    pub fn oauth_set_api_key_meta(
+        &mut self,
+        name: String,
+        prefix: String,
+    ) -> Result<(), RouterError> {
+        let k = self
+            .active_oauth_mut()
+            .ok_or_else(|| RouterError::InvalidParam("no linked serve account".into()))?;
+        k.name = name;
+        k.prefix = prefix;
+        self.persist()
     }
 }
 
@@ -896,5 +940,84 @@ mod tests {
         assert_eq!(owner_email.as_deref(), Some("jia@ariacompute.com"));
         // Consumed once; second take must fail.
         assert!(store.take_pending(&state).is_err());
+    }
+
+    #[test]
+    fn oauth_set_api_key_meta_updates_display_without_secret() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        let mut store = KeyStore::empty(path.clone());
+        let (_, state, _) = store
+            .begin_link("com", Some("user-1".into()), Some("a@b.com".into()), None)
+            .unwrap();
+        let _ = store.take_pending(&state).unwrap();
+        store
+            .apply_exchange(ExchangeInput {
+                site: "https://ariacompute.com".into(),
+                site_url: "https://ariacompute.com".into(),
+                user: ServeUserInfo {
+                    id: serde_json::Value::String("serve-1".into()),
+                    email: Some("a@b.com".into()),
+                    role: Some("user".into()),
+                },
+                link_token: Some("lt".into()),
+                expires_at: None,
+                api_key: None,
+                owner_user_id: Some("user-1".into()),
+            })
+            .unwrap();
+
+        let before = store.oauth_public();
+        assert!(!before.api_key_configured);
+        assert_eq!(before.api_key_name.as_deref(), Some("aria-router"));
+
+        // Sync metadata from serve without touching the stored secret.
+        store
+            .oauth_set_api_key_meta("aria-router-pro".into(), "bfvk-ABCD1234".into())
+            .unwrap();
+        let after = store.oauth_public();
+        assert_eq!(after.api_key_name.as_deref(), Some("aria-router-pro"));
+        assert_eq!(after.api_key_prefix.as_deref(), Some("bfvk-ABCD1234"));
+        // Secret was never set, so still not configured.
+        assert!(!after.api_key_configured);
+        assert!(store.oauth_reveal_secret().is_none());
+    }
+
+    #[test]
+    fn oauth_set_api_key_meta_requires_link() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        let mut store = KeyStore::empty(path);
+        assert!(store.oauth_set_api_key_meta("x".into(), "y".into()).is_err());
+    }
+
+    #[test]
+    fn oauth_owner_user_id_tracks_linked_account() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        let mut store = KeyStore::empty(path.clone());
+        assert!(store.oauth_owner_user_id().is_none());
+        let (_, state, _) = store
+            .begin_link("com", Some("user-1".into()), Some("a@b.com".into()), None)
+            .unwrap();
+        let _ = store.take_pending(&state).unwrap();
+        store
+            .apply_exchange(ExchangeInput {
+                site: "https://ariacompute.com".into(),
+                site_url: "https://ariacompute.com".into(),
+                user: ServeUserInfo {
+                    id: serde_json::Value::String("serve-1".into()),
+                    email: Some("a@b.com".into()),
+                    role: Some("user".into()),
+                },
+                link_token: Some("lt".into()),
+                expires_at: None,
+                api_key: Some(("aria-router".into(), "bfvk-ABCD1234EFGH5678".into())),
+                owner_user_id: Some("user-1".into()),
+            })
+            .unwrap();
+        // Linked with a key on the same account -> owner recorded.
+        assert_eq!(store.oauth_owner_user_id().as_deref(), Some("user-1"));
+        assert!(store.oauth_api_key().is_some());
     }
 }

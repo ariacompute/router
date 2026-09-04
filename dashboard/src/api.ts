@@ -100,6 +100,12 @@ export async function startAriaOAuth(site?: string): Promise<OAuthStart> {
   return data;
 }
 
+/// Re-sync the linked serve account's API key metadata from serve.
+export async function syncServeAccount(): Promise<ServeAccount> {
+  const { data } = await sendJson<ServeAccount>('/v1/router/serve/account/sync', 'POST', {});
+  return data;
+}
+
 export type LocalUser = {
   id: string;
   username: string;

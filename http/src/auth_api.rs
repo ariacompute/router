@@ -1,11 +1,13 @@
 //! Management auth, users, and OAuth account HTTP handlers.
 
+use crate::keys::ExchangeInput;
 use crate::serve_account::{ServeAccountPublic, ServeUserInfo};
 use crate::users::{extract_session_token, UserPublic, UserRole};
 use crate::AppError;
 use crate::AppState;
 use aria_router_core::RouterError;
 use axum::extract::{Query, State};
+use reqwest::Method;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
@@ -414,18 +416,66 @@ pub async fn oauth_callback(
         .get("expires_at")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let api_keys = body
+        .get("api_keys")
+        .and_then(|v| v.as_array())
+        .cloned();
+    // Reuse the previously issued serve key when re-linking the same account so
+    // we don't accumulate duplicate serve keys. Otherwise provision a fresh one
+    // (bfvk-) which doubles as the durable credential for LLM proxying and later
+    // account syncs after link_token expires.
+    let can_reuse = {
+        let keys = st.keys.lock().unwrap();
+        match keys.oauth_api_key() {
+            Some(_) => keys.oauth_owner_user_id().as_deref() == Some(user.id.as_str()),
+            None => false,
+        }
+    };
+    let provisioned = if can_reuse {
+        None
+    } else {
+        match &link_token {
+            Some(token) => serve_provision_api_key(&site_url, token).await.ok(),
+            None => None,
+        }
+    };
     let site_label = body.get("site").and_then(|v| v.as_str()).unwrap_or(&site);
-    if let Err(e) = st.keys.lock().unwrap().apply_exchange(
-        site_label,
-        &site_url,
-        display,
+    let exchange = ExchangeInput {
+        site: site_label.to_string(),
+        site_url,
+        user: display,
         link_token,
         expires_at,
-        None,
-        Some(user.id.clone()),
-    ) {
+        api_key: provisioned.clone(),
+        owner_user_id: Some(user.id.clone()),
+    };
+    if let Err(e) = st.keys.lock().unwrap().apply_exchange(exchange) {
         return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
             .into_response();
+    }
+    // Fallback: if provisioning genuinely failed (not an intentional reuse), at
+    // least surface the key metadata serve returned so the dashboard can display
+    // the linked key (no secret stored).
+    if provisioned.is_none() && !can_reuse {
+        if let Some(arr) = &api_keys {
+            if let Some(first) = arr.first() {
+                let name = first
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("aria-router")
+                    .to_string();
+                let prefix = first
+                    .get("prefix")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let _ = st
+                    .keys
+                    .lock()
+                    .unwrap()
+                    .oauth_set_api_key_meta(name, prefix);
+            }
+        }
     }
     // Issue a router dashboard session for the upserted user.
     let token = match st.users.lock().unwrap().issue_session(&user.id) {
@@ -439,4 +489,127 @@ pub async fn oauth_callback(
     res.headers_mut()
         .insert(header::SET_COOKIE, session_cookie(&token).parse().unwrap());
     res
+}
+
+/// Call a serve JSON API endpoint authenticated with a Bearer token.
+async fn serve_json(
+    method: Method,
+    url: &str,
+    bearer: &str,
+    body: Option<Value>,
+) -> Result<Value, RouterError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| RouterError::Upstream(format!("serve client: {e}")))?;
+    let mut req = client
+        .request(method, url)
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+    if let Some(b) = body {
+        req = req.header(header::CONTENT_TYPE, "application/json").json(&b);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| RouterError::Upstream(format!("serve request to {url}: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(RouterError::Upstream(format!(
+            "serve {url}: status {}",
+            resp.status()
+        )));
+    }
+    resp.json()
+        .await
+        .map_err(|e| RouterError::Upstream(format!("serve json from {url}: {e}")))
+}
+
+/// Provision a brand-new serve API key (bfvk-) for the linked account using the
+/// short-lived `link_token`. Re-linking the same account reuses the previously
+/// issued key (handled by the caller) so this is only called when no usable key
+/// is already stored. Returns `(name, key)` if successful.
+async fn serve_provision_api_key(
+    site_url: &str,
+    link_token: &str,
+) -> Result<(String, String), RouterError> {
+    let url = format!("{}/api/api-keys", site_url.trim_end_matches('/'));
+    let v = serve_json(
+        Method::POST,
+        &url,
+        link_token,
+        Some(json!({ "name": "aria-router" })),
+    )
+    .await?;
+    let key = v
+        .get("key")
+        .and_then(|x| x.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("aria-router")
+        .to_string();
+    if key.starts_with("bfvk-") {
+        Ok((name, key))
+    } else {
+        Err(RouterError::Upstream("serve did not return an api key".into()))
+    }
+}
+
+/// Re-sync the linked serve account's API key metadata from serve. Prefers the
+/// stored serve API key (bfvk-) as the credential and falls back to the
+/// (short-lived) link token. Returns the updated public serve account.
+pub async fn serve_account_sync(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<ServeAccountPublic>, AppError> {
+    let _ = gate_if_users(&st, &headers).map_err(AppError)?;
+    let (site_url, bearer) = {
+        let keys = st.keys.lock().unwrap();
+        let acct = keys.oauth_public();
+        let url = acct
+            .site_url
+            .clone()
+            .ok_or_else(|| RouterError::InvalidParam("not linked to Aria Compute".into()))?;
+        let cred = keys.oauth_api_key().or_else(|| keys.oauth_link_token());
+        (url, cred)
+    };
+    let bearer = bearer.ok_or_else(|| {
+        RouterError::InvalidParam(
+            "no serve credential available; re-link your Aria Compute account".into(),
+        )
+    })?;
+    let list_url = format!("{}/api/api-keys", site_url.trim_end_matches('/'));
+    let metas = serve_json(Method::GET, &list_url, &bearer, None)
+        .await
+        .map_err(AppError)?;
+    let arr = metas.as_array().cloned().unwrap_or_default();
+    let stored_prefix = st.keys.lock().unwrap().oauth_public().api_key_prefix.clone();
+    let chosen = arr
+        .iter()
+        .find(|m| {
+            stored_prefix
+                .as_deref()
+                .map(|p| m.get("prefix").and_then(|x| x.as_str()) == Some(p))
+                .unwrap_or(false)
+        })
+        .or_else(|| arr.first());
+    if let Some(m) = chosen {
+        let name = m
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("aria-router")
+            .to_string();
+        let prefix = m
+            .get("prefix")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        st.keys
+            .lock()
+            .unwrap()
+            .oauth_set_api_key_meta(name, prefix)
+            .map_err(AppError)?;
+    }
+    Ok(Json(st.keys.lock().unwrap().oauth_public()))
 }
