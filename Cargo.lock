@@ -91,6 +91,7 @@ dependencies = [
  "aria-router-http",
  "axum",
  "clap",
+ "libc",
  "tokio",
 ]
 

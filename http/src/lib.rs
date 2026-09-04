@@ -1127,6 +1127,24 @@ mod tests {
     use axum::http::Request;
     use tower::ServiceExt;
 
+    /// Avoid loading the developer's real `~/.ariacompute/router-{keys,users}.json`.
+    fn isolated_state(mut doc: RouterDocument) -> (Arc<AppState>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        doc.global.keys_path = Some(dir.path().join("router-keys.json").display().to_string());
+        doc.global.users_path = Some(dir.path().join("router-users.json").display().to_string());
+        (Arc::new(AppState::new(doc)), dir)
+    }
+
+    fn isolated_state_with_path(
+        mut doc: RouterDocument,
+        config_path: PathBuf,
+    ) -> (Arc<AppState>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        doc.global.keys_path = Some(dir.path().join("router-keys.json").display().to_string());
+        doc.global.users_path = Some(dir.path().join("router-users.json").display().to_string());
+        (Arc::new(AppState::with_path(doc, config_path)), dir)
+    }
+
     fn tiny_yaml(backend: &str) -> String {
         format!(
             r#"
@@ -1221,7 +1239,7 @@ global:
     async fn semantic_keyword_hit() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         let app = data_router(st);
         let body = json!({
             "model": "aria/semantic-auto",
@@ -1250,7 +1268,7 @@ global:
     async fn concrete_bypass() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         let app = data_router(st);
         let body = json!({
             "model": "local/general",
@@ -1276,7 +1294,7 @@ global:
     async fn agent_builtin_and_isolation() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         st.set_fake_agent(
             "builtin",
             RouteDecision {
@@ -1327,7 +1345,7 @@ global:
     async fn agent_overreach_fail_closed() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         st.set_fake_agent(
             "builtin",
             RouteDecision {
@@ -1361,7 +1379,7 @@ global:
     async fn fail_closed_unknown() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         let app = data_router(st);
         let body = json!({
             "model": "nope",
@@ -1383,7 +1401,7 @@ global:
     async fn sse_and_upsert_and_missing_ext() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         let app = data_router(st.clone());
         let res = app
             .oneshot(
@@ -1463,7 +1481,7 @@ global:
         let path = std::env::temp_dir().join(format!("aria-router-put-bad-{}.yml", std::process::id()));
         std::fs::write(&path, &yaml).unwrap();
         let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
-        let st = Arc::new(AppState::with_path(doc, path.clone()));
+        let (st, _dir) = isolated_state_with_path(doc, path.clone());
         let before = snapshot_doc(&st);
         let admin = mgmt_router(st.clone());
         let (status, _) = oneshot_json(
@@ -1486,7 +1504,7 @@ global:
         let path = std::env::temp_dir().join(format!("aria-router-put-ok-{}.yml", std::process::id()));
         std::fs::write(&path, &yaml).unwrap();
         let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
-        let st = Arc::new(AppState::with_path(doc, path.clone()));
+        let (st, _dir) = isolated_state_with_path(doc, path.clone());
         let admin = mgmt_router(st.clone());
         let replaced = yaml.replace("aria/semantic-auto", "aria/semantic-renamed");
         let (status, body) = oneshot_json(
@@ -1514,7 +1532,7 @@ global:
     async fn topology_semantic_and_agent() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         let (status, body) = oneshot_json(
             mgmt_router(st),
             Request::get("/v1/router/topology").body(Body::empty()).unwrap(),
@@ -1539,7 +1557,7 @@ global:
     async fn playground_chat_and_providers_list() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         st.set_fake_agent(
             "builtin",
             RouteDecision {
@@ -1620,7 +1638,7 @@ global:
     async fn no_dashboard_root_is_404() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         let res = mgmt_router(st)
             .oneshot(Request::get("/").body(Body::empty()).unwrap())
             .await
@@ -1636,7 +1654,7 @@ global:
         }
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         let res = mgmt_router_with_dashboard(st, dir)
             .oneshot(Request::get("/").body(Body::empty()).unwrap())
             .await
@@ -1707,7 +1725,7 @@ global:
     async fn cost_ledger_usage_and_factors() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml_priced(&backend, false)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         let app = data_router(st.clone());
         let body = json!({
             "model": "aria/semantic-auto",
@@ -1738,7 +1756,7 @@ global:
     async fn api_key_required_401_and_by_key() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml_priced(&backend, true)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         let created = st.keys.lock().unwrap().create("ci").unwrap();
         let app = data_router(st.clone());
         let body = json!({
@@ -1791,7 +1809,7 @@ global:
     async fn keys_crud_and_provider_upsert_auth() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml_priced(&backend, true)).unwrap();
-        let st = Arc::new(AppState::new(doc));
+        let (st, _dir) = isolated_state(doc);
         let mgmt = mgmt_router(st.clone());
         let (status, created) = oneshot_json(
             mgmt.clone(),

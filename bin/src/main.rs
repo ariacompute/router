@@ -90,6 +90,80 @@ fn prompt(label: &str) -> io::Result<String> {
     Ok(line.trim().to_string())
 }
 
+/// Prompt for a secret: echo `*` per character (no plaintext). Falls back to
+/// plain read_line when stdin is not a TTY.
+fn prompt_password(label: &str) -> io::Result<String> {
+    eprint!("{label}");
+    io::stderr().flush()?;
+    #[cfg(unix)]
+    {
+        if unsafe { libc::isatty(libc::STDIN_FILENO) } != 0 {
+            let secret = read_password_masked()?;
+            eprintln!();
+            return Ok(secret);
+        }
+    }
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+}
+
+#[cfg(unix)]
+fn read_password_masked() -> io::Result<String> {
+    use std::io::Read;
+    use std::mem::MaybeUninit;
+    use std::os::fd::AsRawFd;
+
+    let stdin = io::stdin();
+    let fd = stdin.as_raw_fd();
+    let mut old = MaybeUninit::<libc::termios>::uninit();
+    if unsafe { libc::tcgetattr(fd, old.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let old = unsafe { old.assume_init() };
+    let mut raw = old;
+    raw.c_lflag &= !(libc::ECHO | libc::ICANON);
+    raw.c_cc[libc::VMIN] = 1;
+    raw.c_cc[libc::VTIME] = 0;
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    struct Restore(libc::termios);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.0) };
+        }
+    }
+    let _restore = Restore(old);
+
+    let mut out = String::new();
+    let mut stdin = stdin.lock();
+    let mut buf = [0u8; 1];
+    loop {
+        let n = stdin.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        match buf[0] {
+            b'\n' | b'\r' => break,
+            0x7f | 0x08 => {
+                if out.pop().is_some() {
+                    eprint!("\x08 \x08");
+                    io::stderr().flush()?;
+                }
+            }
+            c if c >= 0x20 && c != 0x7f => {
+                out.push(c as char);
+                eprint!("*");
+                io::stderr().flush()?;
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
 fn resolve_config(config: Option<String>) -> Result<String, Box<dyn std::error::Error>> {
     if let Some(p) = config {
         return Ok(p);
@@ -136,8 +210,8 @@ fn cmd_setup(
         }
     });
     let admin_pass = admin_password.unwrap_or_else(|| {
-        let p1 = prompt("admin password: ").unwrap_or_default();
-        let p2 = prompt("confirm password: ").unwrap_or_default();
+        let p1 = prompt_password("admin password: ").unwrap_or_default();
+        let p2 = prompt_password("confirm password: ").unwrap_or_default();
         if p1 != p2 {
             eprintln!("passwords do not match");
             std::process::exit(1);
