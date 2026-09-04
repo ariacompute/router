@@ -133,7 +133,7 @@ export default function Account() {
       </p>
       {err ? <p className={styles.err}>{err}</p> : null}
 
-      <h2 className={styles.h1}>Link status</h2>
+      <h2 className={styles.h2}>Link status</h2>
       <div className={styles.grid}>
         <div className={styles.card}>
           <div className={styles.label}>Status</div>
@@ -151,7 +151,7 @@ export default function Account() {
         </div>
       </div>
 
-      <h2 className={styles.h1}>Serve user</h2>
+      <h2 className={styles.h2}>Serve user</h2>
       {acct.linked ? (
         <div className={styles.card} style={{ marginBottom: '1rem' }}>
           <div className={styles.label}>email</div>
@@ -171,7 +171,7 @@ export default function Account() {
         </p>
       )}
 
-      <h2 className={styles.h1}>Serve API key</h2>
+      <h2 className={styles.h2}>Serve API key</h2>
       <div className={styles.card} style={{ marginBottom: '1rem' }}>
         <div className={styles.label}>configured</div>
         <div>{acct.api_key_configured ? 'true' : 'false'}</div>
@@ -185,11 +185,17 @@ export default function Account() {
           <pre className={styles.mono}>{reveal}</pre>
         ) : null}
         <div className={styles.row}>
-          <button type="button" onClick={doReveal} disabled={busy || !acct.api_key_configured}>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={doReveal}
+            disabled={busy || !acct.api_key_configured}
+          >
             Reveal
           </button>
           <button
             type="button"
+            className="btn-ghost"
             disabled={busy || !reveal}
             onClick={() => reveal && navigator.clipboard.writeText(reveal)}
           >
@@ -198,40 +204,52 @@ export default function Account() {
         </div>
       </div>
 
-      <h2 className={styles.h1}>Actions</h2>
+      <h2 className={styles.h2}>Actions</h2>
       <div className={styles.row}>
         <select value={site} onChange={(e) => setSite(e.target.value)} disabled={busy}>
           <option value="com">ariacompute.com</option>
           <option value="cn">ariacompute.cn</option>
         </select>
-        <button type="button" onClick={startOAuth} disabled={busy}>
+        <button type="button" className="btn-primary" onClick={startOAuth} disabled={busy}>
           Link with OAuth
         </button>
-        <button type="button" onClick={unlink} disabled={busy}>
+        <button type="button" className="btn-danger" onClick={unlink} disabled={busy}>
           Unlink
         </button>
-        <button type="button" onClick={createAttach} disabled={busy || !acct.linked}>
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={createAttach}
+          disabled={busy || !acct.linked}
+        >
           Create &amp; attach
         </button>
-        <button type="button" onClick={load} disabled={busy}>
+        <button type="button" className="btn-ghost" onClick={load} disabled={busy}>
           Refresh
         </button>
       </div>
       <div className={styles.row}>
         <input
+          className="input-field"
           value={pasteName}
           onChange={(e) => setPasteName(e.target.value)}
           placeholder="key name"
           disabled={busy}
         />
         <input
+          className="input-field"
           value={pasteKey}
           onChange={(e) => setPasteKey(e.target.value)}
           placeholder="Paste bfvk-… key"
           disabled={busy}
           style={{ minWidth: '16rem' }}
         />
-        <button type="button" onClick={paste} disabled={busy || !pasteKey.trim()}>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={paste}
+          disabled={busy || !pasteKey.trim()}
+        >
           Paste key
         </button>
       </div>

@@ -8,6 +8,7 @@ import {
   type LocalUser,
   type RegisterStatus,
 } from './api';
+import ThemeSwitch from './components/ThemeSwitch';
 import Overview from './pages/Overview';
 import Config from './pages/Config';
 import Topology from './pages/Topology';
@@ -21,27 +22,91 @@ import Users from './pages/Users';
 import Login from './pages/Login';
 import Register from './pages/Register';
 
-const links = [
-  { to: '/', label: 'Overview', end: true },
-  { to: '/account', label: 'Account' },
-  { to: '/cost', label: 'Cost' },
-  { to: '/keys', label: 'API keys' },
-  { to: '/users', label: 'Users', admin: true },
-  { to: '/config', label: 'Config' },
-  { to: '/topology', label: 'Topology' },
-  { to: '/providers', label: 'Providers' },
-  { to: '/replay', label: 'Replay' },
-  { to: '/playground', label: 'Playground' },
+type NavItem = { to: string; label: string; end?: boolean; admin?: boolean };
+type NavGroup = { title: string; items: NavItem[] };
+
+const groups: NavGroup[] = [
+  {
+    title: 'Monitor',
+    items: [
+      { to: '/', label: 'Overview', end: true },
+      { to: '/cost', label: 'Cost' },
+      { to: '/account', label: 'Account' },
+    ],
+  },
+  {
+    title: 'Manage',
+    items: [
+      { to: '/keys', label: 'API keys' },
+      { to: '/users', label: 'Users', admin: true },
+    ],
+  },
+  {
+    title: 'Routing',
+    items: [
+      { to: '/config', label: 'Config' },
+      { to: '/topology', label: 'Topology' },
+      { to: '/providers', label: 'Providers' },
+      { to: '/replay', label: 'Replay' },
+      { to: '/playground', label: 'Playground' },
+    ],
+  },
 ];
+
+function Sidebar({ user }: { user: LocalUser }) {
+  const nav = useNavigate();
+  async function logout() {
+    try {
+      await sendJson('/v1/router/auth/logout', 'POST', {});
+    } catch {
+      /* ignore */
+    }
+    setSessionToken(null);
+    nav('/login');
+  }
+  return (
+    <nav className={styles.nav}>
+      <div className={styles.brand}>
+        <span className={styles.brandMark}>A</span>
+        <span className={styles.brandText}>aria-router</span>
+      </div>
+      {groups.map((g) => (
+        <div key={g.title}>
+          <div className={styles.section}>{g.title}</div>
+          {g.items
+            .filter((l) => !l.admin || user.role === 'admin')
+            .map((l) => (
+              <NavLink
+                key={l.to}
+                to={l.to}
+                end={l.end}
+                className={({ isActive }) =>
+                  isActive ? `${styles.link} ${styles.active}` : styles.link
+                }
+              >
+                {l.label}
+              </NavLink>
+            ))}
+        </div>
+      ))}
+      <div className={styles.spacer} />
+      <div className={styles.footer}>
+        <ThemeSwitch />
+        <span className={styles.user}>{user.username}</span>
+        <button type="button" className={styles.logout} onClick={logout}>
+          Logout
+        </button>
+      </div>
+    </nav>
+  );
+}
 
 export default function App() {
   const loc = useLocation();
-  const nav = useNavigate();
   const [boot, setBoot] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
   const [user, setUser] = useState<LocalUser | null>(null);
-  const publicAuth =
-    loc.pathname === '/login' || loc.pathname === '/register';
+  const publicAuth = loc.pathname === '/login' || loc.pathname === '/register';
 
   useEffect(() => {
     let cancelled = false;
@@ -72,16 +137,22 @@ export default function App() {
     };
   }, [loc.pathname]);
 
-  async function logout() {
-    try {
-      await sendJson('/v1/router/auth/logout', 'POST', {});
-    } catch {
-      /* ignore */
-    }
-    setSessionToken(null);
-    setUser(null);
-    nav('/login');
-  }
+  const routes = (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      <Route path="/" element={<Overview />} />
+      <Route path="/account" element={<Account />} />
+      <Route path="/cost" element={<Cost />} />
+      <Route path="/keys" element={<Keys />} />
+      <Route path="/users" element={<Users />} />
+      <Route path="/config" element={<Config />} />
+      <Route path="/topology" element={<Topology />} />
+      <Route path="/providers" element={<Providers />} />
+      <Route path="/replay" element={<Replay />} />
+      <Route path="/playground" element={<Playground />} />
+    </Routes>
+  );
 
   if (boot) {
     return <div className={styles.main}>Loading…</div>;
@@ -91,16 +162,23 @@ export default function App() {
     return (
       <div className={styles.shell}>
         <nav className={styles.nav}>
-          <div className={styles.brand}>aria-router</div>
+          <div className={styles.brand}>
+            <span className={styles.brandMark}>A</span>
+            <span className={styles.brandText}>aria-router</span>
+          </div>
         </nav>
         <main className={styles.main}>
-          <h1>Local setup required</h1>
-          <p>
-            Run <code>aria-router setup</code> to create the first local admin, then open Login.
-          </p>
-          <p>
-            <NavLink to="/login">Login</NavLink>
-          </p>
+          <div className="page">
+            <h1 className="h1">Local setup required</h1>
+            <p className="muted">
+              Run <code>aria-router setup</code> to create the first local admin, then open Login.
+            </p>
+            <p style={{ marginTop: '0.75rem' }}>
+              <NavLink to="/login" style={{ color: 'var(--accent)' }}>
+                Login
+              </NavLink>
+            </p>
+          </div>
         </main>
       </div>
     );
@@ -114,47 +192,23 @@ export default function App() {
     return <Navigate to="/" replace />;
   }
 
+  if (publicAuth) {
+    return (
+      <div className={styles.authShell}>
+        <div className={styles.brandCenter}>
+          <span className={styles.brandMark}>A</span>
+          <span className={styles.brandText}>aria-router</span>
+        </div>
+        {routes}
+      </div>
+    );
+  }
+
   return (
     <div className={styles.shell}>
-      <nav className={styles.nav}>
-        <div className={styles.brand}>aria-router</div>
-        {user
-          ? links
-              .filter((l) => !l.admin || user.role === 'admin')
-              .map((l) => (
-                <NavLink
-                  key={l.to}
-                  to={l.to}
-                  end={l.end}
-                  className={({ isActive }) =>
-                    isActive ? `${styles.link} ${styles.active}` : styles.link
-                  }
-                >
-                  {l.label}
-                </NavLink>
-              ))
-          : null}
-        {user ? (
-          <button type="button" className={styles.link} onClick={logout} style={{ marginTop: '1rem', textAlign: 'start', background: 'none', border: 0, cursor: 'pointer' }}>
-            Logout ({user.username})
-          </button>
-        ) : null}
-      </nav>
+      <Sidebar user={user!} />
       <main className={styles.main}>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/" element={<Overview />} />
-          <Route path="/account" element={<Account />} />
-          <Route path="/cost" element={<Cost />} />
-          <Route path="/keys" element={<Keys />} />
-          <Route path="/users" element={<Users />} />
-          <Route path="/config" element={<Config />} />
-          <Route path="/topology" element={<Topology />} />
-          <Route path="/providers" element={<Providers />} />
-          <Route path="/replay" element={<Replay />} />
-          <Route path="/playground" element={<Playground />} />
-        </Routes>
+        <div className="page">{routes}</div>
       </main>
     </div>
   );

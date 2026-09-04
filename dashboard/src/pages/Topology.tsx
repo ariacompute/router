@@ -44,7 +44,7 @@ export default function Topology() {
           </div>
         ))}
       </div>
-      <h2 className={styles.h1}>Edges</h2>
+      <h2 className={styles.h2}>Edges</h2>
       <pre className={styles.mono}>
         {data.edges.map((e) => `${e.from} → ${e.to}`).join('\n')}
       </pre>

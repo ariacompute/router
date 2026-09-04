@@ -24,7 +24,9 @@ export default function Overview() {
       <div className={styles.grid}>
         <div className={styles.card}>
           <div className={styles.label}>Health</div>
-          <div className={styles.value}>{data.status}</div>
+          <span className="badge badge-accent" style={{ marginTop: '0.4rem' }}>
+            {data.status}
+          </span>
         </div>
         <div className={styles.card}>
           <div className={styles.label}>Entrypoints</div>
@@ -69,7 +71,7 @@ export default function Overview() {
           </div>
         </div>
       </div>
-      <h2 className={styles.h1}>Last route</h2>
+      <h2 className={styles.h2}>Last route</h2>
       <pre className={styles.mono}>
         {data.last_route ? JSON.stringify(data.last_route, null, 2) : 'none'}
       </pre>

@@ -20,10 +20,10 @@ export default function Replay() {
     <>
       <h1 className={styles.h1}>Replay</h1>
       <div className={styles.row}>
-        <button type="button" onClick={load}>
+        <button type="button" className="btn-ghost" onClick={load}>
           Refresh
         </button>
-        <span>{items.length} decisions</span>
+        <span className="muted">{items.length} decisions</span>
       </div>
       <table className={styles.table}>
         <thead>

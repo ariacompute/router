@@ -38,7 +38,7 @@ export default function Cost() {
         $/MTok. Pricing comes from YAML <code>providers.models[].pricing</code>.
       </p>
       <div className={styles.row}>
-        <button type="button" onClick={load}>
+        <button type="button" className="btn-ghost" onClick={load}>
           Refresh
         </button>
       </div>
@@ -61,7 +61,7 @@ export default function Cost() {
         </div>
       </div>
 
-      <h2 className={styles.h1}>Six factors</h2>
+      <h2 className={styles.h2}>Six factors</h2>
       <div className={styles.grid}>
         <div className={styles.card}>
           <div className={styles.label}>Users</div>
@@ -99,7 +99,7 @@ export default function Cost() {
       <BucketTable title="OAuth users" rows={bucketRows(data.by_serve_user)} />
       <BucketTable title="By API key" rows={bucketRows(data.by_key)} />
 
-      <h2 className={styles.h1}>Recent events</h2>
+      <h2 className={styles.h2}>Recent events</h2>
       <table className={styles.table}>
         <thead>
           <tr>
@@ -123,7 +123,13 @@ export default function Cost() {
               <td>
                 {ev.prompt_tokens}+{ev.completion_tokens}
               </td>
-              <td>{ev.priced ? money(ev.cost_usd) : 'unpriced'}</td>
+              <td>
+                {ev.priced ? (
+                  <span className="badge badge-ok">{money(ev.cost_usd)}</span>
+                ) : (
+                  <span className="muted">unpriced</span>
+                )}
+              </td>
               <td>{ev.tokens_source}</td>
             </tr>
           ))}
@@ -142,7 +148,7 @@ function BucketTable({
 }) {
   return (
     <>
-      <h2 className={styles.h1}>{title}</h2>
+      <h2 className={styles.h2}>{title}</h2>
       <table className={styles.table}>
         <thead>
           <tr>

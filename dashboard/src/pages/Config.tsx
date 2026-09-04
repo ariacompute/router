@@ -41,17 +41,25 @@ export default function Config() {
       <h1 className={styles.h1}>Config</h1>
       <p>Edit the in-memory YAML v0.3 document. Save validates, then writes the serve `--config` path.</p>
       <div className={styles.row}>
-        <button type="button" onClick={save} disabled={busy}>
+        <button type="button" className="btn-primary" onClick={save} disabled={busy}>
           Save
         </button>
-        <button type="button" onClick={load} disabled={busy}>
+        <button type="button" className="btn-ghost" onClick={load} disabled={busy}>
           Reload
         </button>
-        {msg ? <span className={styles.ok}>{msg}</span> : null}
-        {err ? <span className={styles.err}>{err}</span> : null}
+        {msg ? (
+          <span className="alert alert-ok" style={{ padding: '0.4rem 0.8rem' }}>
+            {msg}
+          </span>
+        ) : null}
+        {err ? (
+          <span className="alert alert-err" style={{ padding: '0.4rem 0.8rem' }}>
+            {err}
+          </span>
+        ) : null}
       </div>
       <textarea rows={22} value={yaml} onChange={(e) => setYaml(e.target.value)} spellCheck={false} />
-      <h2 className={styles.h1}>Parsed</h2>
+      <h2 className={styles.h2}>Parsed</h2>
       <pre className={styles.mono}>{doc ? JSON.stringify(doc, null, 2) : ''}</pre>
     </>
   );

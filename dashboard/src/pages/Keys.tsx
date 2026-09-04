@@ -66,15 +66,17 @@ export default function Keys() {
       </p>
       <div className={styles.row}>
         <input
+          className="input-field"
+          style={{ maxWidth: '16rem' }}
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="key name"
           disabled={busy}
         />
-        <button type="button" onClick={create} disabled={busy}>
+        <button type="button" className="btn-primary" onClick={create} disabled={busy}>
           Generate
         </button>
-        <button type="button" onClick={load} disabled={busy}>
+        <button type="button" className="btn-ghost" onClick={load} disabled={busy}>
           Refresh
         </button>
       </div>
@@ -108,10 +110,21 @@ export default function Keys() {
               </td>
               <td>{k.created_at}</td>
               <td>{k.last_used_at ?? '—'}</td>
-              <td>{k.revoked ? 'revoked' : 'active'}</td>
+              <td>
+                {k.revoked ? (
+                  <span className="badge badge-err">revoked</span>
+                ) : (
+                  <span className="badge badge-ok">active</span>
+                )}
+              </td>
               <td>
                 {!k.revoked ? (
-                  <button type="button" onClick={() => revoke(k.id)} disabled={busy}>
+                  <button
+                    type="button"
+                    className="btn-danger btn-sm"
+                    onClick={() => revoke(k.id)}
+                    disabled={busy}
+                  >
                     Revoke
                   </button>
                 ) : null}

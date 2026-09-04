@@ -43,20 +43,41 @@ export default function Playground() {
   return (
     <>
       <h1 className={styles.h1}>Playground</h1>
-      <label className={styles.label} htmlFor="model">
-        Model
-      </label>
-      <input id="model" value={model} onChange={(e) => setModel(e.target.value)} />
-      <label className={styles.label} htmlFor="prompt">
-        Message
-      </label>
-      <textarea id="prompt" rows={5} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-      <div className={styles.row}>
-        <button type="button" onClick={send} disabled={busy}>
-          Send
-        </button>
-        {hdrs ? <span>{hdrs}</span> : null}
-        {err ? <span className={styles.err}>{err}</span> : null}
+      <div className="stack" style={{ maxWidth: '42rem' }}>
+        <div className="stack" style={{ gap: '0.35rem' }}>
+          <label className="stat-label" htmlFor="model">
+            Model
+          </label>
+          <input
+            id="model"
+            className="input-field"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+          />
+        </div>
+        <div className="stack" style={{ gap: '0.35rem' }}>
+          <label className="stat-label" htmlFor="prompt">
+            Message
+          </label>
+          <textarea
+            id="prompt"
+            className="input-field"
+            rows={5}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+        </div>
+        <div className={styles.row}>
+          <button type="button" className="btn-primary" onClick={send} disabled={busy}>
+            Send
+          </button>
+          {hdrs ? <span className="badge badge-accent">{hdrs}</span> : null}
+          {err ? (
+            <span className="alert alert-err" style={{ padding: '0.4rem 0.8rem' }}>
+              {err}
+            </span>
+          ) : null}
+        </div>
       </div>
       <pre className={styles.mono}>{out}</pre>
     </>

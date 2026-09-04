@@ -35,8 +35,20 @@ export default function Providers() {
               <td>{r.provider_model_id}</td>
               <td>{r.locality}</td>
               <td>{r.backend_refs.map((b) => b.endpoint).join(', ')}</td>
-              <td>{r.latency_ms == null ? '—' : `${r.latency_ms.toFixed(1)} ms`}</td>
-              <td>{r.failures}</td>
+              <td>
+                {r.latency_ms == null ? (
+                  <span className="muted">—</span>
+                ) : (
+                  <span className="badge badge-blue">{r.latency_ms.toFixed(1)} ms</span>
+                )}
+              </td>
+              <td>
+                {r.failures > 0 ? (
+                  <span className="badge badge-err">{r.failures}</span>
+                ) : (
+                  <span className="muted">0</span>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

@@ -58,10 +58,10 @@ export default function Users() {
       <h1 className={styles.h1}>Local (router Dashboard) — Users</h1>
       <p>Admin-only. Self-register creates <code>user</code> role accounts.</p>
       <div className={styles.row}>
-        <button type="button" onClick={toggleAllow} disabled={busy}>
+        <button type="button" className="btn-ghost" onClick={toggleAllow} disabled={busy}>
           Self-registration: {allowRegister ? 'ON' : 'OFF'}
         </button>
-        <button type="button" onClick={load} disabled={busy}>
+        <button type="button" className="btn-ghost" onClick={load} disabled={busy}>
           Refresh
         </button>
       </div>
@@ -80,11 +80,24 @@ export default function Users() {
           {users.map((u) => (
             <tr key={u.id}>
               <td>{u.username}</td>
-              <td>{u.role}</td>
-              <td>{u.created_at}</td>
-              <td>{u.disabled ? 'disabled' : 'active'}</td>
               <td>
-                <button type="button" onClick={() => toggleDisabled(u)} disabled={busy}>
+                <span className="badge badge-accent">{u.role}</span>
+              </td>
+              <td className="muted">{u.created_at}</td>
+              <td>
+                {u.disabled ? (
+                  <span className="badge badge-err">disabled</span>
+                ) : (
+                  <span className="badge badge-ok">active</span>
+                )}
+              </td>
+              <td>
+                <button
+                  type="button"
+                  className={u.disabled ? 'btn-ghost btn-sm' : 'btn-danger btn-sm'}
+                  onClick={() => toggleDisabled(u)}
+                  disabled={busy}
+                >
                   {u.disabled ? 'Enable' : 'Disable'}
                 </button>
               </td>
