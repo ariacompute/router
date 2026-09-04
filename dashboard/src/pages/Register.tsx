@@ -4,10 +4,10 @@ import {
   getJson,
   sendJson,
   setSessionToken,
-  startAriaOAuth,
   type LocalUser,
   type RegisterStatus,
 } from '../api';
+import OAuthSignIn from '../components/OAuthSignIn';
 
 export default function Register() {
   const nav = useNavigate();
@@ -16,7 +16,6 @@ export default function Register() {
   const [password, setPassword] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [oauthBusy, setOauthBusy] = useState(false);
 
   useEffect(() => {
     getJson<RegisterStatus>('/v1/router/auth/register-status')
@@ -40,18 +39,6 @@ export default function Register() {
       setErr((ex as Error).message);
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function onOAuth() {
-    setOauthBusy(true);
-    setErr(null);
-    try {
-      const { authorize_url } = await startAriaOAuth();
-      window.location.href = authorize_url;
-    } catch (ex) {
-      setErr((ex as Error).message);
-      setOauthBusy(false);
     }
   }
 
@@ -149,15 +136,7 @@ export default function Register() {
         <div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
       </div>
 
-      <button
-        type="button"
-        className="btn-primary"
-        onClick={onOAuth}
-        disabled={oauthBusy}
-        style={{ width: '100%' }}
-      >
-        {oauthBusy ? 'Redirecting…' : 'Sign in with Aria Compute'}
-      </button>
+      <OAuthSignIn onError={setErr} />
 
       {err ? (
         <p className="alert alert-err" style={{ marginTop: '1rem' }}>
