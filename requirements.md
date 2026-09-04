@@ -53,7 +53,7 @@
 | 9 | **cost** | 内存六因子账本；`GET /v1/router/cost`；按 model/layer/entrypoint/key/`local_user`/`serve_user` 分桶 |
 | 10 | **api-keys** | Dashboard 签发 `sk-aria_`（`owner_user_id`）；`keys_path` 只存 sha256；数据面与 `PUT /providers` Bearer；`require_api_key` |
 | 11 | **local-users** | `users_path` argon2；Register/Login session；`allow_register`；admin 管用户 |
-| 12 | **oauth-account** | `serve_account_path`；OAuth 关联 ariacompute.com/cn；`bfvk` 存储/展示；CLI 可粘贴 |
+| 12 | **oauth-account** | OAuth 为 `router-keys.json` 中 `kind: oauth` 条目；关联 ariacompute.com/cn；`bfvk` 存储/展示；CLI 可粘贴 |
 
 ### 2.1 非目标
 
@@ -106,12 +106,11 @@ recipes:
 global:
   require_api_key: false          # true → 数据面 chat 与 PUT providers 须 Bearer（sk-aria_ 或已配置 bfvk）
   allow_register: true            # Dashboard 普通用户自助注册
-  keys_path: ~/.ariacompute/router-keys.json
+  keys_path: ~/.ariacompute/router-keys.json   # keys[]：kind=local (sk-aria_) | kind=oauth (bfvk)
   users_path: ~/.ariacompute/router-users.json
-  serve_account_path: ~/.ariacompute/router-serve.json
 ```
 
-密钥：`${VAR}` / `${VAR:-default}`。未知顶层块 → validate 失败。未知 `global` / `pricing` 子键 → validate 失败。`backend_refs.api_key` 仅转发上游，与 Dashboard 签发的客户端 key **不是同一把**。本地 `sk-aria_` 与 OAuth `bfvk-` **分文件、分配置键**。
+密钥：`${VAR}` / `${VAR:-default}`。未知顶层块 → validate 失败。未知 `global` / `pricing` 子键 → validate 失败。`backend_refs.api_key` 仅转发上游，与 Dashboard 签发的客户端 key **不是同一把**。本地 `sk-aria_` 与 OAuth `bfvk-` 同文件 `keys[]`，以 `kind` 区分（无独立 `router-serve.json`）。
 
 ### 3.2 Semantic signals
 
@@ -170,9 +169,9 @@ Extensions：
 
 管理面默认只绑 `127.0.0.1`。本地密钥明文只在 POST 响应出现一次；`keys_path` 只存 sha256；密码 argon2id。
 
-CLI：`aria-router setup` **分段** `[1/2] Local (router Dashboard)`（admin、`allow_register`、`require_api_key`）与 `[2/2] OAuth (Aria Compute)`（site + `bfvk`）；**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 分组输出。`--clear` 可分别删 local/serve 文件。
+CLI：`aria-router setup` **分段** `[1/2] Local (router Dashboard)`（admin、`allow_register`、`require_api_key`）与 `[2/2] OAuth (Aria Compute)`（site + `bfvk` 写入 `keys[]` `kind=oauth`）；**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 从 `keys[]` 分组展示 Local vs OAuth。`--clear` 可删 `router-keys.json` / `router-users.json`。
 
-**与 engine**：`router_api_key` = `sk-aria_`；`serve_api_key` = `bfvk`（分字段）；误填互拒。
+**与 engine**：单一 `router_api_key` 字段可传 `sk-aria_` 或 `bfvk-`；router 按前缀解析 `keys[]`（`kind: local|oauth`）。
 
 ### 3.6 错误
 
@@ -210,7 +209,7 @@ C API（`include/aria_router.h`）：
 - E：八语言跑通 `cases.json` 黄金项。
 - F：`PUT /v1/router/config` 非法 YAML 不改文档；合法 tiny YAML 热重载；topology 对 semantic-tiny / agent-tiny 有预期节点；`POST /v1/router/chat` 走 keyword / fake-agent 黄金路径；`--no-dashboard` 时 `/` 不提供 SPA。
 - G：带 `usage` 的 mock chat 计入账本；无 usage → estimate；无 pricing → `cost=0` 且 `priced=false`；`require_api_key: true` 无 Bearer 聊天与 PUT providers → 401；合法 key → 200 且 `by_key` 有 id；吊销后 401；Cost JSON 含六因子键。
-- H：register→login；`allow_register=false` 拒注册；无用户 register→503；session 门控 keys；OAuth account display；`bfvk` Bearer → `by_serve_user`；CLI 分段 status；engine `serve_api_key` 与 `router_api_key` 前缀互斥。
+- H：register→login；`allow_register=false` 拒注册；无用户 register→503；session 门控 keys；OAuth 为 keys `kind=oauth`；`bfvk` Bearer → `by_serve_user`；engine 单一 `router_api_key`（双前缀）。
 
 ## 5. 目录
 

@@ -198,7 +198,7 @@ pub async fn serve_account_get(
     headers: HeaderMap,
 ) -> Result<Json<ServeAccountPublic>, AppError> {
     let _ = gate_if_users(&st, &headers).map_err(AppError)?;
-    Ok(Json(st.serve.lock().unwrap().public()))
+    Ok(Json(st.keys.lock().unwrap().oauth_public()))
 }
 
 pub async fn serve_account_secret(
@@ -206,7 +206,7 @@ pub async fn serve_account_secret(
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     let _ = gate_if_users(&st, &headers).map_err(AppError)?;
-    let secret = st.serve.lock().unwrap().reveal_secret();
+    let secret = st.keys.lock().unwrap().oauth_reveal_secret();
     Ok(Json(json!({"api_key": secret})))
 }
 
@@ -215,7 +215,7 @@ pub async fn serve_account_delete(
     headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     let _ = gate_if_users(&st, &headers).map_err(AppError)?;
-    st.serve.lock().unwrap().clear().map_err(AppError)?;
+    st.keys.lock().unwrap().oauth_clear().map_err(AppError)?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -231,7 +231,7 @@ pub async fn serve_link_start(
 ) -> Result<Json<Value>, AppError> {
     let _ = gate_if_users(&st, &headers).map_err(AppError)?;
     let (tpl, state, site_url) = st
-        .serve
+        .keys
         .lock()
         .unwrap()
         .begin_link(&body.site)
@@ -243,7 +243,7 @@ pub async fn serve_link_start(
         .unwrap_or("127.0.0.1:8080");
     let callback = format!("http://{host}/v1/router/serve/link/callback");
     let authorize_url = tpl.replace("{callback}", &urlencoding_encode(&callback));
-    let _ = st.serve.lock().unwrap().set_site(&body.site);
+    let _ = st.keys.lock().unwrap().oauth_set_site(&body.site);
     Ok(Json(json!({
         "authorize_url": authorize_url,
         "state": state,
@@ -283,7 +283,7 @@ pub async fn serve_link_callback(
     let (Some(code), Some(state)) = (q.code, q.state) else {
         return Redirect::temporary("/account?error=missing_code").into_response();
     };
-    let (site, site_url) = match st.serve.lock().unwrap().take_pending(&state) {
+    let (site, site_url) = match st.keys.lock().unwrap().take_pending(&state) {
         Ok(v) => v,
         Err(e) => {
             return Redirect::temporary(&format!("/account?error={}", urlencoding_encode(&e.to_string())))
@@ -350,7 +350,7 @@ pub async fn serve_link_callback(
         .get("site")
         .and_then(|v| v.as_str())
         .unwrap_or(&site);
-    if let Err(e) = st.serve.lock().unwrap().apply_exchange(
+    if let Err(e) = st.keys.lock().unwrap().apply_exchange(
         site_label,
         &site_url,
         user,
@@ -379,14 +379,13 @@ pub async fn serve_put_api_key(
     Json(body): Json<ServeApiKeyBody>,
 ) -> Result<Json<Value>, AppError> {
     let _ = gate_if_users(&st, &headers).map_err(AppError)?;
-    let mut serve = st.serve.lock().unwrap();
+    let mut keys = st.keys.lock().unwrap();
     if let Some(site) = body.site.as_deref() {
-        serve.set_site(site).map_err(AppError)?;
+        keys.oauth_set_site(site).map_err(AppError)?;
     }
-    serve
-        .set_api_key(&body.api_key, body.name.as_deref())
+    keys.oauth_set_api_key(&body.api_key, body.name.as_deref())
         .map_err(AppError)?;
-    Ok(Json(json!({"ok": true, "account": serve.public()})))
+    Ok(Json(json!({"ok": true, "account": keys.oauth_public()})))
 }
 
 #[derive(Deserialize)]
@@ -406,14 +405,14 @@ pub async fn serve_create_api_key(
 ) -> Result<Json<Value>, AppError> {
     let _ = gate_if_users(&st, &headers).map_err(AppError)?;
     let (site_url, token) = {
-        let serve = st.serve.lock().unwrap();
+        let keys = st.keys.lock().unwrap();
         (
-            serve.site_url().ok_or_else(|| {
+            keys.oauth_site_url().ok_or_else(|| {
                 AppError(RouterError::InvalidParam(
                     "link OAuth account or set site first".into(),
                 ))
             })?,
-            serve.link_token().ok_or_else(|| {
+            keys.oauth_link_token().ok_or_else(|| {
                 AppError(RouterError::Unauthorized(
                     "OAuth link_token missing; re-link account".into(),
                 ))
@@ -456,14 +455,14 @@ pub async fn serve_create_api_key(
         .get("name")
         .and_then(|x| x.as_str())
         .unwrap_or(&body.name);
-    st.serve
+    st.keys
         .lock()
         .unwrap()
-        .set_api_key(secret, Some(name))
+        .oauth_set_api_key(secret, Some(name))
         .map_err(AppError)?;
     Ok(Json(json!({
         "ok": true,
         "api_key": secret,
-        "account": st.serve.lock().unwrap().public(),
+        "account": st.keys.lock().unwrap().oauth_public(),
     })))
 }

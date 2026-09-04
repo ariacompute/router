@@ -35,9 +35,9 @@ Examples (English comments in every file):
 | [`ffi.yaml`](config/examples/ffi.yaml) | gold `fast-response` plus the same catalog recipe |
 
 ```bash
-# Setup — two credential sections (do not mix prefixes):
+# Setup — two credential sections:
 #   [1/2] Local (router Dashboard) — admin user/password; sk-aria_ keys minted in Dashboard → Keys
-#   [2/2] OAuth (Aria Compute)     — optional bfvk-… into ~/.ariacompute/router-serve.json
+#   [2/2] OAuth (Aria Compute)     — optional bfvk-… as keys[] kind=oauth in ~/.ariacompute/router-keys.json
 aria-router setup
 aria-router setup --status
 # Non-interactive Local flags: --admin-user --admin-password --allow-register --require-api-key

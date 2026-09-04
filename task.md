@@ -113,9 +113,9 @@
 - [x] keys `owner_user_id`；mgmt session 门控
 
 ### T16 — OAuth 账户
-- [x] serve `/api/router-link/*`；`router-serve.json`；mgmt serve/account APIs
+- [x] serve `/api/router-link/*`；`router-keys.json` 含 `kind: oauth`；mgmt serve/account APIs
 - [x] Dashboard Account 展示；Cost `by_local_user` / `by_serve_user`；dual Bearer
 
 ### T17 — CLI
 - [x] `aria-router setup` 分段 Local vs OAuth；`--status` 分组
-- [x] `aria-engine setup` 同名两段；`serve_site` / `serve_api_key`；前缀互斥
+- [x] `aria-engine setup`；`router_api_key` 双前缀；router `keys[]` kind local|oauth

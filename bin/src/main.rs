@@ -1,11 +1,10 @@
 use aria_router_config::{
-    clear_default_config, default_config_path, default_keys_path, default_serve_account_path,
-    default_users_path, resolve_keys_path, resolve_serve_account_path, resolve_users_path,
-    RouterDocument,
+    clear_default_config, default_config_path, default_keys_path, default_users_path,
+    resolve_keys_path, resolve_users_path, RouterDocument,
 };
 use aria_router_http::{
     data_router, ensure_extensions_startable, mgmt_router, mgmt_router_with_dashboard,
-    resolve_dashboard_dir, validate_bfvk, AppState, LocalUserStore, ServeAccountStore,
+    resolve_dashboard_dir, validate_bfvk, AppState, KeyStore, LocalUserStore,
 };
 use std::path::PathBuf;
 use std::io::{self, BufRead, Write};
@@ -26,13 +25,7 @@ fn print_usage() {
         "\
 aria-router {ROUTER_VERSION}
 
-Credentials (two sections — do not mix):
-  [1/2] Local (router Dashboard)  — username/password; API keys sk-aria_…
-  [2/2] OAuth (Aria Compute)      — ariacompute.com/cn; API keys bfvk-…
-
 aria-router setup [--status|--clear]
-  Local flags:  --admin-user --admin-password --allow-register --require-api-key
-  OAuth flags:  --serve-site com|cn --serve-api-key bfvk-…
 aria-router validate [--config <file>]
 aria-router serve [--config <file>] [--bind HOST:PORT] [--mgmt-bind HOST:PORT] [--no-dashboard]
 aria-router -h | --help | help
@@ -175,17 +168,13 @@ fn cmd_setup(args: &mut Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
 
     if let (Some(site), Some(key)) = (serve_site, serve_key) {
         validate_bfvk(&key).map_err(|e| e.to_string())?;
-        let serve_path = default_serve_account_path()?;
-        let mut store = if serve_path.exists() {
-            ServeAccountStore::load(&serve_path).map_err(|e| e.to_string())?
-        } else {
-            ServeAccountStore::empty(serve_path.clone())
-        };
-        store.set_site(&site).map_err(|e| e.to_string())?;
+        let keys_path = default_keys_path()?;
+        let mut store = KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path.clone()));
+        store.oauth_set_site(&site).map_err(|e| e.to_string())?;
         store
-            .set_api_key(&key, Some("aria-router"))
+            .oauth_set_api_key(&key, Some("aria-router"))
             .map_err(|e| e.to_string())?;
-        println!("OAuth serve account key saved to {}", serve_path.display());
+        println!("OAuth key saved to {}", keys_path.display());
     }
 
     Ok(())
@@ -231,18 +220,17 @@ fn setup_status() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("OAuth (Aria Compute):");
-    let sp = default_serve_account_path()?;
-    let spath = if path.exists() {
+    let kp = if path.exists() {
         let doc = RouterDocument::load_path(&path).ok();
-        doc.and_then(|d| d.global.serve_account_path)
-            .map(|p| resolve_serve_account_path(&p).unwrap_or(sp.clone()))
-            .unwrap_or(sp)
+        doc.and_then(|d| d.global.keys_path)
+            .unwrap_or_else(|| "~/.ariacompute/router-keys.json".into())
     } else {
-        sp
+        "~/.ariacompute/router-keys.json".into()
     };
-    if spath.exists() {
-        let store = ServeAccountStore::load(&spath).map_err(|e| e.to_string())?;
-        let pubu = store.public();
+    let kpath = resolve_keys_path(&kp)?;
+    if kpath.exists() {
+        let store = KeyStore::load(&kpath).map_err(|e| e.to_string())?;
+        let pubu = store.oauth_public();
         println!("  site: {}", pubu.site.as_deref().unwrap_or("(none)"));
         if let Some(u) = &pubu.user {
             println!(
@@ -256,14 +244,14 @@ fn setup_status() -> Result<(), Box<dyn std::error::Error>> {
         }
         if pubu.api_key_configured {
             println!(
-                "  serve_api_key: configured ({})",
+                "  oauth_api_key: configured ({})",
                 pubu.api_key_prefix.as_deref().unwrap_or("bfvk-…")
             );
         } else {
-            println!("  serve_api_key: missing");
+            println!("  oauth_api_key: missing");
         }
     } else {
-        println!("  serve_api_key: missing");
+        println!("  oauth_api_key: missing");
     }
     Ok(())
 }
@@ -271,21 +259,13 @@ fn setup_status() -> Result<(), Box<dyn std::error::Error>> {
 fn setup_clear() -> Result<(), Box<dyn std::error::Error>> {
     let path = clear_default_config()?;
     println!("cleared {}", path.display());
-    let ans = prompt("also delete Local router-keys.json and router-users.json? [y/N]: ")?;
+    let ans = prompt("also delete router-keys.json and router-users.json? [y/N]: ")?;
     if matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes") {
         for p in [default_keys_path()?, default_users_path()?] {
             if p.exists() {
                 std::fs::remove_file(&p)?;
                 println!("cleared {}", p.display());
             }
-        }
-    }
-    let ans = prompt("also delete OAuth router-serve.json? [y/N]: ")?;
-    if matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes") {
-        let p = default_serve_account_path()?;
-        if p.exists() {
-            std::fs::remove_file(&p)?;
-            println!("cleared {}", p.display());
         }
     }
     Ok(())

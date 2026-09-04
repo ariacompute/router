@@ -1,19 +1,47 @@
-//! API key store: Dashboard-issued secrets, sha256 on disk.
+//! Unified API key store: local (`sk-aria_`) and oauth (`bfvk-`) in one `router-keys.json`.
 
 use aria_router_core::RouterError;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use subtle::ConstantTimeEq;
 
 const SECRET_PREFIX: &str = "sk-aria_";
+const BFVK_PREFIX: &str = "bfvk-";
+const LINK_STATE_TTL_SECS: u64 = 600;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyKind {
+    #[default]
+    Local,
+    Oauth,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServeUserInfo {
+    pub id: serde_json::Value,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyRecord {
+    #[serde(default)]
+    pub kind: KeyKind,
     pub id: String,
     pub name: String,
     pub prefix: String,
+    #[serde(default)]
     pub secret_sha256: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
     pub created_at: String,
     #[serde(default)]
     pub last_used_at: Option<String>,
@@ -21,6 +49,20 @@ pub struct KeyRecord {
     pub revoked: bool,
     #[serde(default)]
     pub owner_user_id: Option<String>,
+    #[serde(default)]
+    pub site: Option<String>,
+    #[serde(default)]
+    pub site_url: Option<String>,
+    #[serde(default)]
+    pub gateway_url: Option<String>,
+    #[serde(default)]
+    pub user: Option<ServeUserInfo>,
+    #[serde(default)]
+    pub linked_at: Option<String>,
+    #[serde(default)]
+    pub link_expires_at: Option<String>,
+    #[serde(default)]
+    pub link_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -30,9 +72,17 @@ struct KeyFile {
 }
 
 #[derive(Debug, Clone)]
+struct PendingLink {
+    site: String,
+    site_url: String,
+    expires_unix: u64,
+}
+
+#[derive(Debug)]
 pub struct KeyStore {
     path: PathBuf,
     keys: Vec<KeyRecord>,
+    pending: Mutex<HashMap<String, PendingLink>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +106,36 @@ pub struct KeyCreated {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ServeAccountPublic {
+    pub linked: bool,
+    pub site: Option<String>,
+    pub site_url: Option<String>,
+    pub gateway_url: Option<String>,
+    pub user: Option<ServeUserInfo>,
+    pub linked_at: Option<String>,
+    pub api_key_name: Option<String>,
+    pub api_key_prefix: Option<String>,
+    pub api_key_configured: bool,
+    pub status: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum AuthIdentity {
+    Local {
+        id: String,
+        name: String,
+        owner_user_id: Option<String>,
+    },
+    Oauth {
+        id: String,
+        name: Option<String>,
+        email: Option<String>,
+        site: Option<String>,
+        user_id: Option<String>,
+    },
+}
+
 impl KeyStore {
     pub fn load(path: &Path) -> Result<Self, RouterError> {
         let keys = if path.exists() {
@@ -69,17 +149,103 @@ impl KeyStore {
         } else {
             Vec::new()
         };
-        Ok(Self {
+        let mut store = Self {
             path: path.to_path_buf(),
             keys,
-        })
+            pending: Mutex::new(HashMap::new()),
+        };
+        store.migrate_legacy_serve()?;
+        Ok(store)
     }
 
     pub fn empty(path: PathBuf) -> Self {
         Self {
             path,
             keys: Vec::new(),
+            pending: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn legacy_serve_path(keys_path: &Path) -> PathBuf {
+        keys_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("router-serve.json")
+    }
+
+    fn migrate_legacy_serve(&mut self) -> Result<(), RouterError> {
+        if self.active_oauth().is_some() {
+            return Ok(());
+        }
+        let legacy = Self::legacy_serve_path(&self.path);
+        if !legacy.exists() {
+            return Ok(());
+        }
+        let raw = std::fs::read_to_string(&legacy).map_err(|e| {
+            RouterError::Io(format!("read {}: {e}", legacy.display()))
+        })?;
+        #[derive(Deserialize)]
+        struct LegacyServe {
+            #[serde(default)]
+            site: Option<String>,
+            #[serde(default)]
+            site_url: Option<String>,
+            #[serde(default)]
+            gateway_url: Option<String>,
+            #[serde(default)]
+            user: Option<ServeUserInfo>,
+            #[serde(default)]
+            linked_at: Option<String>,
+            #[serde(default)]
+            link_expires_at: Option<String>,
+            #[serde(default)]
+            link_token: Option<String>,
+            #[serde(default)]
+            api_key_name: Option<String>,
+            #[serde(default)]
+            api_key_prefix: Option<String>,
+            #[serde(default)]
+            api_key: Option<String>,
+        }
+        let data: LegacyServe = serde_json::from_str(&raw).map_err(|e| {
+            RouterError::Config(format!("legacy serve {}: {e}", legacy.display()))
+        })?;
+        let has_anything = data.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+            || data.user.is_some()
+            || data.site.is_some();
+        if has_anything {
+            let api_key = data.api_key.clone().unwrap_or_default();
+            let prefix = data.api_key_prefix.clone().unwrap_or_else(|| {
+                api_key.chars().take(16).collect()
+            });
+            let rec = KeyRecord {
+                kind: KeyKind::Oauth,
+                id: format!("oauth_{}", hex::encode({
+                    let mut r = [0u8; 8];
+                    rand::thread_rng().fill_bytes(&mut r);
+                    r
+                })),
+                name: data.api_key_name.unwrap_or_else(|| "aria-router".into()),
+                prefix,
+                secret_sha256: String::new(),
+                api_key: if api_key.is_empty() { None } else { Some(api_key) },
+                created_at: data.linked_at.clone().unwrap_or_else(now_rfc3339),
+                last_used_at: None,
+                revoked: false,
+                owner_user_id: None,
+                site: data.site,
+                site_url: data.site_url,
+                gateway_url: data.gateway_url,
+                user: data.user,
+                linked_at: data.linked_at,
+                link_expires_at: data.link_expires_at,
+                link_token: data.link_token,
+            };
+            self.keys.push(rec);
+            self.persist()?;
+        }
+        let _ = std::fs::remove_file(&legacy);
+        Ok(())
     }
 
     fn persist(&self) -> Result<(), RouterError> {
@@ -97,12 +263,26 @@ impl KeyStore {
         std::fs::write(&self.path, raw).map_err(|e| {
             RouterError::Io(format!("write {}: {e}", self.path.display()))
         })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600));
+        }
         Ok(())
+    }
+
+    fn is_local(k: &KeyRecord) -> bool {
+        matches!(k.kind, KeyKind::Local)
+    }
+
+    fn is_oauth(k: &KeyRecord) -> bool {
+        matches!(k.kind, KeyKind::Oauth)
     }
 
     pub fn list_public(&self) -> Vec<KeyPublic> {
         self.keys
             .iter()
+            .filter(|k| Self::is_local(k))
             .map(|k| KeyPublic {
                 id: k.id.clone(),
                 name: k.name.clone(),
@@ -123,8 +303,9 @@ impl KeyStore {
     }
 
     pub fn counts(&self) -> (usize, usize) {
-        let active = self.keys.iter().filter(|k| !k.revoked).count();
-        let revoked = self.keys.iter().filter(|k| k.revoked).count();
+        let local: Vec<_> = self.keys.iter().filter(|k| Self::is_local(k)).collect();
+        let active = local.iter().filter(|k| !k.revoked).count();
+        let revoked = local.iter().filter(|k| k.revoked).count();
         (active, revoked)
     }
 
@@ -149,14 +330,23 @@ impl KeyStore {
         let created_at = now_rfc3339();
         let prefix: String = secret.chars().take(12).collect();
         let rec = KeyRecord {
+            kind: KeyKind::Local,
             id: id.clone(),
             name: name.to_string(),
             prefix: prefix.clone(),
             secret_sha256: hash,
+            api_key: None,
             created_at: created_at.clone(),
             last_used_at: None,
             revoked: false,
             owner_user_id,
+            site: None,
+            site_url: None,
+            gateway_url: None,
+            user: None,
+            linked_at: None,
+            link_expires_at: None,
+            link_token: None,
         };
         self.keys.push(rec);
         self.persist()?;
@@ -169,13 +359,32 @@ impl KeyStore {
         })
     }
 
-    /// Verify secret; on success update last_used_at and return (id, name, owner_user_id).
+    /// Authenticate any router API key (local sha256 or oauth plaintext).
     pub fn authenticate(
         &mut self,
         secret: &str,
     ) -> Result<(String, String, Option<String>), RouterError> {
-        let hash = sha256_hex(secret.trim());
-        let Some(k) = self.keys.iter_mut().find(|k| k.secret_sha256 == hash) else {
+        match self.resolve_bearer(secret)? {
+            AuthIdentity::Local {
+                id,
+                name,
+                owner_user_id,
+            } => Ok((id, name, owner_user_id)),
+            AuthIdentity::Oauth { id, name, .. } => Ok((id, name.unwrap_or_default(), None)),
+        }
+    }
+
+    pub fn resolve_bearer(&mut self, secret: &str) -> Result<AuthIdentity, RouterError> {
+        let secret = secret.trim();
+        if secret.starts_with(BFVK_PREFIX) {
+            return self.authenticate_oauth(secret);
+        }
+        let hash = sha256_hex(secret);
+        let Some(k) = self
+            .keys
+            .iter_mut()
+            .find(|k| Self::is_local(k) && k.secret_sha256 == hash)
+        else {
             return Err(RouterError::Unauthorized("invalid api key".into()));
         };
         if k.revoked {
@@ -186,7 +395,47 @@ impl KeyStore {
         let name = k.name.clone();
         let owner = k.owner_user_id.clone();
         let _ = self.persist();
-        Ok((id, name, owner))
+        Ok(AuthIdentity::Local {
+            id,
+            name,
+            owner_user_id: owner,
+        })
+    }
+
+    fn authenticate_oauth(&mut self, secret: &str) -> Result<AuthIdentity, RouterError> {
+        let Some(idx) = self.keys.iter().position(|k| {
+            Self::is_oauth(k)
+                && !k.revoked
+                && k.api_key.as_deref().map(|s| {
+                    let a = secret.as_bytes();
+                    let b = s.as_bytes();
+                    a.len() == b.len() && bool::from(a.ct_eq(b))
+                })
+                .unwrap_or(false)
+        }) else {
+            return Err(RouterError::Unauthorized(
+                "OAuth key not linked; configure Dashboard Account or aria-router setup".into(),
+            ));
+        };
+        let k = &mut self.keys[idx];
+        k.last_used_at = Some(now_rfc3339());
+        let id = format!("serve:{}", k.prefix);
+        let name = Some(k.name.clone());
+        let email = k
+            .user
+            .as_ref()
+            .and_then(|u| u.email.clone())
+            .or_else(|| Some(id.clone()));
+        let site = k.site.clone();
+        let user_id = k.user.as_ref().map(|u| u.id.to_string());
+        let _ = self.persist();
+        Ok(AuthIdentity::Oauth {
+            id,
+            name,
+            email,
+            site,
+            user_id,
+        })
     }
 
     pub fn owner_of(&self, id: &str) -> Option<Option<String>> {
@@ -204,12 +453,325 @@ impl KeyStore {
         self.persist()?;
         Ok(())
     }
+
+    fn active_oauth(&self) -> Option<&KeyRecord> {
+        self.keys
+            .iter()
+            .find(|k| Self::is_oauth(k) && !k.revoked)
+    }
+
+    fn active_oauth_mut(&mut self) -> Option<&mut KeyRecord> {
+        self.keys
+            .iter_mut()
+            .find(|k| Self::is_oauth(k) && !k.revoked)
+    }
+
+    fn revoke_active_oauth(&mut self) {
+        for k in &mut self.keys {
+            if Self::is_oauth(k) && !k.revoked {
+                k.revoked = true;
+            }
+        }
+    }
+
+    pub fn oauth_public(&self) -> ServeAccountPublic {
+        match self.active_oauth() {
+            None => ServeAccountPublic {
+                linked: false,
+                site: None,
+                site_url: None,
+                gateway_url: None,
+                user: None,
+                linked_at: None,
+                api_key_name: None,
+                api_key_prefix: None,
+                api_key_configured: false,
+                status: "not linked".into(),
+            },
+            Some(k) => {
+                let linked = k.user.is_some();
+                let configured = k.api_key.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+                let status = if linked && configured {
+                    "linked".into()
+                } else if configured {
+                    "key only, not linked".into()
+                } else if linked {
+                    "linked, no api key".into()
+                } else {
+                    "not linked".into()
+                };
+                ServeAccountPublic {
+                    linked,
+                    site: k.site.clone(),
+                    site_url: k.site_url.clone(),
+                    gateway_url: k.gateway_url.clone(),
+                    user: k.user.clone(),
+                    linked_at: k.linked_at.clone(),
+                    api_key_name: Some(k.name.clone()),
+                    api_key_prefix: Some(k.prefix.clone()),
+                    api_key_configured: configured,
+                    status,
+                }
+            }
+        }
+    }
+
+    pub fn oauth_reveal_secret(&self) -> Option<String> {
+        self.active_oauth()
+            .and_then(|k| k.api_key.clone())
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn oauth_clear(&mut self) -> Result<(), RouterError> {
+        self.revoke_active_oauth();
+        self.persist()
+    }
+
+    pub fn oauth_set_api_key(
+        &mut self,
+        api_key: &str,
+        name: Option<&str>,
+    ) -> Result<(), RouterError> {
+        let key = api_key.trim();
+        validate_bfvk(key)?;
+        let prefix: String = key.chars().take(16).collect();
+        let name = name.unwrap_or("aria-router").to_string();
+        if let Some(k) = self.active_oauth_mut() {
+            k.api_key = Some(key.to_string());
+            k.prefix = prefix;
+            k.name = name;
+        } else {
+            self.keys.push(KeyRecord {
+                kind: KeyKind::Oauth,
+                id: format!("oauth_{}", {
+                    let mut r = [0u8; 8];
+                    rand::thread_rng().fill_bytes(&mut r);
+                    hex::encode(r)
+                }),
+                name,
+                prefix,
+                secret_sha256: String::new(),
+                api_key: Some(key.to_string()),
+                created_at: now_rfc3339(),
+                last_used_at: None,
+                revoked: false,
+                owner_user_id: None,
+                site: None,
+                site_url: None,
+                gateway_url: None,
+                user: None,
+                linked_at: None,
+                link_expires_at: None,
+                link_token: None,
+            });
+        }
+        self.persist()
+    }
+
+    pub fn oauth_set_site(&mut self, site: &str) -> Result<(), RouterError> {
+        let (site, site_url, gateway_url) = normalize_site(site)?;
+        if let Some(k) = self.active_oauth_mut() {
+            k.site = Some(site);
+            k.site_url = Some(site_url);
+            k.gateway_url = Some(gateway_url);
+        } else {
+            self.keys.push(KeyRecord {
+                kind: KeyKind::Oauth,
+                id: format!("oauth_{}", {
+                    let mut r = [0u8; 8];
+                    rand::thread_rng().fill_bytes(&mut r);
+                    hex::encode(r)
+                }),
+                name: "aria-router".into(),
+                prefix: String::new(),
+                secret_sha256: String::new(),
+                api_key: None,
+                created_at: now_rfc3339(),
+                last_used_at: None,
+                revoked: false,
+                owner_user_id: None,
+                site: Some(site),
+                site_url: Some(site_url),
+                gateway_url: Some(gateway_url),
+                user: None,
+                linked_at: None,
+                link_expires_at: None,
+                link_token: None,
+            });
+        }
+        self.persist()
+    }
+
+    pub fn begin_link(&self, site: &str) -> Result<(String, String, String), RouterError> {
+        let (site_id, site_url, _gw) = normalize_site(site)?;
+        let mut rnd = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut rnd);
+        let state = hex::encode(rnd);
+        let expires_unix = now_unix() + LINK_STATE_TTL_SECS;
+        self.pending.lock().unwrap().insert(
+            state.clone(),
+            PendingLink {
+                site: site_id,
+                site_url: site_url.clone(),
+                expires_unix,
+            },
+        );
+        let authorize_url = format!(
+            "{}/api/router-link/start?callback={{callback}}&state={state}",
+            site_url.trim_end_matches('/')
+        );
+        Ok((authorize_url, state, site_url))
+    }
+
+    pub fn take_pending(&self, state: &str) -> Result<(String, String), RouterError> {
+        let mut map = self.pending.lock().unwrap();
+        let Some(p) = map.remove(state) else {
+            return Err(RouterError::Unauthorized("invalid oauth state".into()));
+        };
+        if p.expires_unix < now_unix() {
+            return Err(RouterError::Unauthorized("oauth state expired".into()));
+        }
+        Ok((p.site, p.site_url))
+    }
+
+    pub fn apply_exchange(
+        &mut self,
+        site: &str,
+        site_url: &str,
+        user: ServeUserInfo,
+        link_token: Option<String>,
+        expires_at: Option<String>,
+        api_key: Option<(String, String)>,
+    ) -> Result<(), RouterError> {
+        let (site_id, site_url_n, gateway_url) = match normalize_site(site) {
+            Ok(v) => v,
+            Err(_) => (
+                if site.contains("cn") {
+                    "cn".into()
+                } else {
+                    "intl".into()
+                },
+                site_url.to_string(),
+                gateway_for_site(site),
+            ),
+        };
+        if self.active_oauth().is_none() {
+            self.keys.push(KeyRecord {
+                kind: KeyKind::Oauth,
+                id: format!("oauth_{}", {
+                    let mut r = [0u8; 8];
+                    rand::thread_rng().fill_bytes(&mut r);
+                    hex::encode(r)
+                }),
+                name: "aria-router".into(),
+                prefix: String::new(),
+                secret_sha256: String::new(),
+                api_key: None,
+                created_at: now_rfc3339(),
+                last_used_at: None,
+                revoked: false,
+                owner_user_id: None,
+                site: None,
+                site_url: None,
+                gateway_url: None,
+                user: None,
+                linked_at: None,
+                link_expires_at: None,
+                link_token: None,
+            });
+        }
+        let k = self.active_oauth_mut().expect("oauth row");
+        k.site = Some(site_id);
+        k.site_url = Some(site_url_n);
+        k.gateway_url = Some(gateway_url);
+        k.user = Some(user);
+        k.linked_at = Some(now_rfc3339());
+        k.link_token = link_token;
+        k.link_expires_at = expires_at;
+        if let Some((name, key)) = api_key {
+            validate_bfvk(&key)?;
+            let prefix: String = key.chars().take(16).collect();
+            k.api_key = Some(key);
+            k.prefix = prefix;
+            k.name = name;
+        }
+        self.persist()
+    }
+
+    pub fn oauth_site_url(&self) -> Option<String> {
+        self.active_oauth().and_then(|k| k.site_url.clone())
+    }
+
+    pub fn oauth_link_token(&self) -> Option<String> {
+        self.active_oauth().and_then(|k| k.link_token.clone())
+    }
+}
+
+pub fn validate_bfvk(key: &str) -> Result<(), RouterError> {
+    if key.starts_with("sk-aria_") {
+        return Err(RouterError::InvalidParam(
+            "Local router key detected; use Dashboard → Keys".into(),
+        ));
+    }
+    if !key.starts_with(BFVK_PREFIX) {
+        return Err(RouterError::InvalidParam(
+            "OAuth API key must start with bfvk-".into(),
+        ));
+    }
+    if key.len() < 12 {
+        return Err(RouterError::InvalidParam("OAuth API key too short".into()));
+    }
+    Ok(())
+}
+
+pub fn normalize_site(site: &str) -> Result<(String, String, String), RouterError> {
+    let s = site.trim().to_ascii_lowercase();
+    match s.as_str() {
+        "intl" | "com" | "1" | "https://ariacompute.com" | "ariacompute.com" => Ok((
+            "intl".into(),
+            "https://ariacompute.com".into(),
+            "https://gateway.ariacompute.com".into(),
+        )),
+        "cn" | "2" | "https://ariacompute.cn" | "ariacompute.cn" => Ok((
+            "cn".into(),
+            "https://ariacompute.cn".into(),
+            "https://gateway.ariacompute.cn".into(),
+        )),
+        other if other.contains("ariacompute.cn") => Ok((
+            "cn".into(),
+            "https://ariacompute.cn".into(),
+            "https://gateway.ariacompute.cn".into(),
+        )),
+        other if other.contains("ariacompute.com") => Ok((
+            "intl".into(),
+            "https://ariacompute.com".into(),
+            "https://gateway.ariacompute.com".into(),
+        )),
+        _ => Err(RouterError::InvalidParam(
+            "serve site must be com|cn (ariacompute.com / ariacompute.cn)".into(),
+        )),
+    }
+}
+
+fn gateway_for_site(site: &str) -> String {
+    if site.contains("cn") {
+        "https://gateway.ariacompute.cn".into()
+    } else {
+        "https://gateway.ariacompute.com".into()
+    }
 }
 
 fn sha256_hex(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
     hex::encode(h.finalize())
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_secs()
 }
 
 fn now_rfc3339() -> String {
@@ -256,5 +818,26 @@ mod tests {
         assert_eq!(name, "ci");
         store.revoke(&created.id).unwrap();
         assert!(store.authenticate(&created.secret).is_err());
+    }
+
+    #[test]
+    fn oauth_bfvk_roundtrip_and_migrate() {
+        let dir = tempdir().unwrap();
+        let keys_path = dir.path().join("router-keys.json");
+        let legacy = dir.path().join("router-serve.json");
+        std::fs::write(
+            &legacy,
+            r#"{"site":"com","site_url":"https://ariacompute.com","api_key":"bfvk-abcdefghijklmnop","api_key_prefix":"bfvk-abcdefgh","api_key_name":"test"}"#,
+        )
+        .unwrap();
+        let mut store = KeyStore::load(&keys_path).unwrap();
+        assert!(!legacy.exists());
+        assert!(store.oauth_public().api_key_configured);
+        assert!(matches!(
+            store.resolve_bearer("bfvk-abcdefghijklmnop").unwrap(),
+            AuthIdentity::Oauth { .. }
+        ));
+        assert!(store.resolve_bearer("bfvk-wrong").is_err());
+        assert!(validate_bfvk("sk-aria_abc").is_err());
     }
 }

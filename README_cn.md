@@ -35,9 +35,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 | [`ffi.yaml`](config/examples/ffi.yaml) | 黄金 `fast-response` + 同上 catalog recipe |
 
 ```bash
-# 写入配置 — 两段凭证（勿混用前缀）：
+# 写入配置 — 两段凭证：
 #   [1/2] Local (router Dashboard) — 本地管理员；sk-aria_ 仅在 Dashboard → Keys 签发
-#   [2/2] OAuth (Aria Compute)     — 可选 bfvk-… → ~/.ariacompute/router-serve.json
+#   [2/2] OAuth (Aria Compute)     — 可选 bfvk-… 写入 keys[] kind=oauth（~/.ariacompute/router-keys.json）
 aria-router setup
 aria-router setup --status
 # Local flags: --admin-user --admin-password --allow-register --require-api-key

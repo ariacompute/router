@@ -10,8 +10,7 @@ mod auth_api;
 use aria_router_agent::{task_from, AgentExtension, BuiltinExtension, FakeExtension};
 use aria_router_algorithm::{hard_filter, select, RuntimeStats};
 use aria_router_config::{
-    resolve_keys_path, resolve_serve_account_path, resolve_users_path, ExtensionCfg, Recipe,
-    RouterDocument,
+    resolve_keys_path, resolve_users_path, ExtensionCfg, Recipe, RouterDocument,
 };
 use aria_router_core::{
     ChatRequest, RouteDecision, RouterError, RouterKind,
@@ -28,7 +27,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use cost::{cost_usd, estimate_tokens, now_rfc3339, CostEvent, CostLedger};
-use keys::{extract_bearer, KeyStore};
+pub use keys::{extract_bearer, validate_bfvk, AuthIdentity, KeyStore};
 use users::{UserRole, UserStore};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -36,7 +35,6 @@ use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
 
-pub use serve_account::{validate_bfvk, ServeAccountStore};
 pub use users::UserStore as LocalUserStore;
 
 pub struct AppState {
@@ -50,7 +48,6 @@ pub struct AppState {
     pub keys: Mutex<KeyStore>,
     pub cost: Mutex<CostLedger>,
     pub users: Mutex<UserStore>,
-    pub serve: Mutex<ServeAccountStore>,
 }
 
 impl AppState {
@@ -77,19 +74,8 @@ impl AppState {
                 resolve_users_path("~/.ariacompute/router-users.json")
                     .unwrap_or_else(|_| PathBuf::from("router-users.json"))
             });
-        let serve_path = doc
-            .global
-            .serve_account_path
-            .as_deref()
-            .map(|p| resolve_serve_account_path(p).unwrap_or_else(|_| PathBuf::from(p)))
-            .unwrap_or_else(|| {
-                resolve_serve_account_path("~/.ariacompute/router-serve.json")
-                    .unwrap_or_else(|_| PathBuf::from("router-serve.json"))
-            });
         let keys = KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path));
         let users = UserStore::load(&users_path).unwrap_or_else(|_| UserStore::empty(users_path));
-        let serve =
-            ServeAccountStore::load(&serve_path).unwrap_or_else(|_| ServeAccountStore::empty(serve_path));
         Self {
             doc: Mutex::new(doc),
             config_path,
@@ -101,7 +87,6 @@ impl AppState {
             keys: Mutex::new(keys),
             cost: Mutex::new(CostLedger::default()),
             users: Mutex::new(users),
-            serve: Mutex::new(serve),
         }
     }
 
@@ -248,15 +233,8 @@ fn auth_provider_upsert(st: &AppState, headers: &HeaderMap) -> Result<(), Router
     let require = st.require_api_key();
     match extract_bearer(headers) {
         Some(secret) => {
-            if secret.starts_with("bfvk-") {
-                let serve = st.serve.lock().unwrap();
-                if serve.authenticate_bfvk(&secret).is_some() {
-                    return Ok(());
-                }
-                return Err(RouterError::Unauthorized("invalid api key".into()));
-            }
             let mut keys = st.keys.lock().unwrap();
-            keys.authenticate(&secret)?;
+            keys.resolve_bearer(&secret)?;
             Ok(())
         }
         None if require => Err(RouterError::Unauthorized("api key required".into())),
@@ -385,7 +363,7 @@ async fn overview_ep(State(st): State<Arc<AppState>>) -> Json<Value> {
     let doc = snapshot_doc(&st);
     let (active, revoked) = st.keys.lock().unwrap().counts();
     let (admin_n, user_n) = st.users.lock().unwrap().counts();
-    let serve = st.serve.lock().unwrap().public();
+    let serve = st.keys.lock().unwrap().oauth_public();
     let cost = st.cost.lock().unwrap().summary();
     Json(json!({
         "status": "ok",
@@ -615,49 +593,53 @@ fn resolve_chat_auth(
 ) -> Result<ChatAuth, RouterError> {
     let require = st.require_api_key();
     if let Some(secret) = extract_bearer(headers) {
-        if secret.starts_with("bfvk-") {
-            let serve = st.serve.lock().unwrap();
-            if let Some((kid, email)) = serve.authenticate_bfvk(&secret) {
-                let site = serve.public().site;
-                let email = email.unwrap_or_else(|| kid.clone());
-                let uid = serve
-                    .public()
-                    .user
-                    .as_ref()
-                    .map(|u| u.id.to_string());
-                return Ok(ChatAuth {
+        let mut keys = st.keys.lock().unwrap();
+        let identity = keys.resolve_bearer(&secret)?;
+        drop(keys);
+        return match identity {
+            AuthIdentity::Oauth {
+                id,
+                name,
+                email,
+                site,
+                user_id,
+            } => {
+                let email = email.unwrap_or_else(|| id.clone());
+                Ok(ChatAuth {
                     user: email.clone(),
-                    key_id: Some(kid),
-                    key_name: serve.public().api_key_name.clone(),
+                    key_id: Some(id),
+                    key_name: name,
                     identity: "serve".into(),
-                    serve_user_id: uid,
+                    serve_user_id: user_id,
                     serve_email: Some(email),
                     serve_site: site,
-                });
+                })
             }
-            return Err(RouterError::Unauthorized("invalid api key".into()));
-        }
-        let mut keys = st.keys.lock().unwrap();
-        let (id, name, owner) = keys.authenticate(&secret)?;
-        drop(keys);
-        let (user, identity) = if let Some(oid) = owner {
-            if let Some(u) = st.users.lock().unwrap().get(&oid) {
-                (u.username.clone(), "local_user".into())
-            } else {
-                (name.clone(), "local".into())
+            AuthIdentity::Local {
+                id,
+                name,
+                owner_user_id,
+            } => {
+                let (user, identity) = if let Some(oid) = owner_user_id {
+                    if let Some(u) = st.users.lock().unwrap().get(&oid) {
+                        (u.username.clone(), "local_user".into())
+                    } else {
+                        (name.clone(), "local".into())
+                    }
+                } else {
+                    (name.clone(), "local".into())
+                };
+                Ok(ChatAuth {
+                    user,
+                    key_id: Some(id),
+                    key_name: Some(name),
+                    identity,
+                    serve_user_id: None,
+                    serve_email: None,
+                    serve_site: None,
+                })
             }
-        } else {
-            (name.clone(), "local".into())
         };
-        return Ok(ChatAuth {
-            user,
-            key_id: Some(id),
-            key_name: Some(name),
-            identity,
-            serve_user_id: None,
-            serve_email: None,
-            serve_site: None,
-        });
     }
     if require {
         return Err(RouterError::Unauthorized("api key required".into()));

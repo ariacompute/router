@@ -36,6 +36,7 @@ pub struct GlobalCfg {
     pub keys_path: Option<String>,
     #[serde(default)]
     pub users_path: Option<String>,
+    /// Deprecated: OAuth keys live in `keys_path` (`kind: oauth`). Kept for YAML compat.
     #[serde(default)]
     pub serve_account_path: Option<String>,
 }
@@ -628,10 +629,6 @@ pub fn default_users_path() -> Result<PathBuf, RouterError> {
     Ok(aria_home()?.join("router-users.json"))
 }
 
-pub fn default_serve_account_path() -> Result<PathBuf, RouterError> {
-    Ok(aria_home()?.join("router-serve.json"))
-}
-
 /// Expand `~/` or leave absolute/relative paths as-is under aria home resolution.
 pub fn resolve_home_path(raw: &str, default: fn() -> Result<PathBuf, RouterError>) -> Result<PathBuf, RouterError> {
     let t = raw.trim();
@@ -657,10 +654,6 @@ pub fn resolve_keys_path(raw: &str) -> Result<PathBuf, RouterError> {
 
 pub fn resolve_users_path(raw: &str) -> Result<PathBuf, RouterError> {
     resolve_home_path(raw, default_users_path)
-}
-
-pub fn resolve_serve_account_path(raw: &str) -> Result<PathBuf, RouterError> {
-    resolve_home_path(raw, default_serve_account_path)
 }
 
 /// Write a v0.3 starter YAML to `~/.ariacompute/router.yml`.
@@ -699,7 +692,6 @@ pub fn write_default_config_with(
     };
     let keys = default_keys_path()?;
     let users = default_users_path()?;
-    let serve = default_serve_account_path()?;
     let disp = |p: &PathBuf| {
         format!(
             "~/.ariacompute/{}",
@@ -726,10 +718,6 @@ pub fn write_default_config_with(
         g.insert(
             serde_yaml::Value::String("users_path".into()),
             serde_yaml::Value::String(disp(&users)),
-        );
-        g.insert(
-            serde_yaml::Value::String("serve_account_path".into()),
-            serde_yaml::Value::String(disp(&serve)),
         );
         map.insert(
             serde_yaml::Value::String("global".into()),
