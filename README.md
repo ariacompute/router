@@ -70,7 +70,7 @@ The management listener serves a Vite React SPA at `http://{mgmt}/` when `dashbo
 | Section title (same as CLI) | Pages |
 |-----------------------------|--------|
 | **Local (router Dashboard)** | Login / Register · API keys (`sk-aria_…`) · Users (admin) |
-| **OAuth (Aria Compute)** | Account — linked user, `bfvk-…` reveal/paste/OAuth |
+| **OAuth (Aria Compute)** | Account — linked user, `sk-bf-…` reveal/paste/OAuth |
 
 Cost splits **Local users** vs **OAuth users**. Build:
 
@@ -90,9 +90,9 @@ cargo run -p aria-router -- serve \
 
 1. Open Dashboard → **API keys** → Generate (`sk-aria_…` shown once). Or `POST /v1/router/keys`.
 2. Setup writes `global.require_api_key: true` by default (chat and `PUT /v1/router/providers` need Bearer). Set `false` in YAML to open the data plane.
-3. Clients and `aria-engine` use Bearer `sk-aria_…` or `bfvk-…` (`router_api_key` / `--router-api-key`).
+3. Clients and `aria-engine` use Bearer `sk-aria_…` or `sk-bf-…` (`router_api_key` / `--router-api-key`).
 4. **Cost** page / `GET /v1/router/cost` shows six-factor spend plus `by_local_user` / `by_serve_user` / `by_key` (YAML `pricing.input_per_mtok` / `output_per_mtok`).
-5. OAuth: Dashboard → Account for `bfvk-…` (link / paste / reveal).
+5. OAuth: Dashboard → Account for `sk-bf-…` (link / paste / reveal).
 
 ```bash
 # Chat with API key (when require_api_key: true)

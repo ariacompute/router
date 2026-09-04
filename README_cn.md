@@ -69,7 +69,7 @@ cargo run -p aria-router -- serve \
 | 段落标题（与 CLI 同名） | 页面 |
 |------------------------|------|
 | **Local (router Dashboard)** | Login / Register · API 密钥（`sk-aria_…`）· Users（admin） |
-| **OAuth (Aria Compute)** | Account — 已关联用户、`bfvk-…` 展示/粘贴/OAuth |
+| **OAuth (Aria Compute)** | Account — 已关联用户、`sk-bf-…` 展示/粘贴/OAuth |
 
 Cost 分 **Local users** 与 **OAuth users**。构建：
 
@@ -89,9 +89,9 @@ cargo run -p aria-router -- serve \
 
 1. Dashboard → **API 密钥** → 生成（`sk-aria_…` 只显示一次），或 `POST /v1/router/keys`。
 2. setup 默认写入 `global.require_api_key: true`（chat 与 `PUT /v1/router/providers` 须 Bearer）。可在 YAML 改为 `false` 开放数据面。
-3. 客户端与 `aria-engine` 使用 Bearer `sk-aria_…` 或 `bfvk-…`（`router_api_key` / `--router-api-key`）。
+3. 客户端与 `aria-engine` 使用 Bearer `sk-aria_…` 或 `sk-bf-…`（`router_api_key` / `--router-api-key`）。
 4. **Cost** 页 / `GET /v1/router/cost` 展示六因子、`by_local_user` / `by_serve_user` / `by_key`（YAML `pricing`）。
-5. OAuth：Dashboard → Account 配置 `bfvk-…`（关联 / 粘贴 / 展示）。
+5. OAuth：Dashboard → Account 配置 `sk-bf-…`（关联 / 粘贴 / 展示）。
 
 ```bash
 curl -s http://127.0.0.1:8899/v1/chat/completions \

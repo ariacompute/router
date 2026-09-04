@@ -166,6 +166,10 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
             "/v1/router/serve/account/sync",
             post(auth_api::serve_account_sync),
         )
+        .route(
+            "/v1/router/serve/account/key",
+            post(auth_api::serve_account_set_key),
+        )
         .route("/v1/router/validate", post(validate_ep))
         .route("/v1/router/replay", get(replay_ep))
         .route("/v1/router/providers", put(upsert_provider).get(list_providers))

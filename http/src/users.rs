@@ -515,8 +515,12 @@ pub fn extract_session_token(headers: &axum::http::HeaderMap) -> Option<String> 
             let s = s.trim();
             if let Some(rest) = s.strip_prefix("Bearer ") {
                 let t = rest.trim();
-                // Session tokens are hex; sk-aria_ / bfvk- are API keys — ignore those here.
-                if !t.is_empty() && !t.starts_with("sk-aria_") && !t.starts_with("bfvk-") {
+                // Session tokens are hex; sk-aria_ / bfvk- / sk-bf- are API keys — ignore those here.
+                if !t.is_empty()
+                    && !t.starts_with("sk-aria_")
+                    && !t.starts_with("bfvk-")
+                    && !t.starts_with("sk-bf-")
+                {
                     return Some(t.to_string());
                 }
             }

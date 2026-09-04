@@ -106,6 +106,15 @@ export async function syncServeAccount(): Promise<ServeAccount> {
   return data;
 }
 
+/// Store the serve API key (sk-bf-) the user created on serve. The router uses it as
+/// a Bearer credential; its name/prefix are synced separately via `syncServeAccount`.
+export async function setServeApiKey(apiKey: string): Promise<ServeAccount> {
+  const { data } = await sendJson<ServeAccount>('/v1/router/serve/account/key', 'POST', {
+    api_key: apiKey,
+  });
+  return data;
+}
+
 export type LocalUser = {
   id: string;
   username: string;

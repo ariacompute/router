@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { getJson, syncServeAccount, type LocalUser, type ServeAccount } from '../api';
+import {
+  getJson,
+  setServeApiKey,
+  syncServeAccount,
+  type LocalUser,
+  type ServeAccount,
+} from '../api';
 import styles from './page.module.css';
 
 export default function Account() {
@@ -7,6 +13,7 @@ export default function Account() {
   const [acct, setAcct] = useState<ServeAccount | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [keyInput, setKeyInput] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -31,6 +38,21 @@ export default function Account() {
     setErr(null);
     try {
       setAcct(await syncServeAccount());
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveKey() {
+    const v = keyInput.trim();
+    if (!v) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      setAcct(await setServeApiKey(v));
+      setKeyInput('');
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -105,6 +127,28 @@ export default function Account() {
           ) : (
             <div className={styles.value}>—</div>
           )}
+          <p className="muted" style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
+            Create this key yourself on Aria Compute, then paste it here once. Its
+            name/prefix are auto-synced from serve.
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+            <input
+              type="password"
+              className="input-field"
+              placeholder="sk-bf-…"
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <button
+              type="button"
+              className="btn-ghost btn-sm"
+              onClick={saveKey}
+              disabled={busy || !acct?.linked || !keyInput.trim()}
+            >
+              {busy ? 'Saving…' : 'Save key'}
+            </button>
+          </div>
           <button
             type="button"
             className="btn-ghost btn-sm"

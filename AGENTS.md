@@ -40,7 +40,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 
 ## 进行中需求
 Spec 见 `requirements.md`。阶段 A–H 已落地（本地用户、OAuth 为 keys `kind=oauth`、cost 分桶、CLI）。
-engine 去 hybrid；`--router` / `--router-api-key`（sk-aria_ 或 bfvk-）。
+engine 去 hybrid；`--router` / `--router-api-key`（sk-aria_ 或 sk-bf-）。
 
 ## 注意事项
 - 黄金路径：keyword decision → static 转发 mock/engine；agent builtin JSON 决策。

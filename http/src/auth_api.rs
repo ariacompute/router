@@ -416,67 +416,35 @@ pub async fn oauth_callback(
         .get("expires_at")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let api_keys = body
-        .get("api_keys")
-        .and_then(|v| v.as_array())
-        .cloned();
-    // Reuse the previously issued serve key when re-linking the same account so
-    // we don't accumulate duplicate serve keys. Otherwise provision a fresh one
-    // (bfvk-) which doubles as the durable credential for LLM proxying and later
-    // account syncs after link_token expires.
-    let can_reuse = {
-        let keys = st.keys.lock().unwrap();
-        match keys.oauth_api_key() {
-            Some(_) => keys.oauth_owner_user_id().as_deref() == Some(user.id.as_str()),
-            None => false,
-        }
-    };
-    let provisioned = if can_reuse {
-        None
-    } else {
-        match &link_token {
-            Some(token) => serve_provision_api_key(&site_url, token).await.ok(),
-            None => None,
-        }
-    };
+    // Link the serve account. The router does NOT create a serve API key on the
+    // user's behalf; the oauth user creates their own key on serve, the dashboard
+    // auto-syncs its metadata, and the user pastes the bfvk- plaintext once.
     let site_label = body.get("site").and_then(|v| v.as_str()).unwrap_or(&site);
+
+    let mut keys_guard = st.keys.lock().unwrap();
+    // Re-linking a different serve account: drop the previously pasted key so it
+    // is not reused for the new account.
+    let switching = keys_guard
+        .oauth_owner_user_id()
+        .map(|o| o != user.id)
+        .unwrap_or(false);
+    if switching {
+        let _ = keys_guard.oauth_clear_api_key();
+    }
     let exchange = ExchangeInput {
         site: site_label.to_string(),
-        site_url,
+        site_url: site_url.clone(),
         user: display,
-        link_token,
+        link_token: link_token.clone(),
         expires_at,
-        api_key: provisioned.clone(),
+        api_key: None,
         owner_user_id: Some(user.id.clone()),
     };
-    if let Err(e) = st.keys.lock().unwrap().apply_exchange(exchange) {
+    if let Err(e) = keys_guard.apply_exchange(exchange) {
         return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
             .into_response();
     }
-    // Fallback: if provisioning genuinely failed (not an intentional reuse), at
-    // least surface the key metadata serve returned so the dashboard can display
-    // the linked key (no secret stored).
-    if provisioned.is_none() && !can_reuse {
-        if let Some(arr) = &api_keys {
-            if let Some(first) = arr.first() {
-                let name = first
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("aria-router")
-                    .to_string();
-                let prefix = first
-                    .get("prefix")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let _ = st
-                    .keys
-                    .lock()
-                    .unwrap()
-                    .oauth_set_api_key_meta(name, prefix);
-            }
-        }
-    }
+    drop(keys_guard);
     // Issue a router dashboard session for the upserted user.
     let token = match st.users.lock().unwrap().issue_session(&user.id) {
         Ok(t) => t,
@@ -485,6 +453,25 @@ pub async fn oauth_callback(
                 .into_response();
         }
     };
+    // Best-effort: auto-sync the serve key metadata from serve (display only). The
+    // secret is not exposed by serve's list endpoint and is pasted by the user.
+    // Run in a detached task so the handler future stays `Send` (no borrow held
+    // across an await here); sync failures are non-fatal for the link flow.
+    if let Some(lt) = link_token.clone() {
+        let st_task = Arc::clone(&st);
+        let site_url_task = site_url.clone();
+        tokio::spawn(async move {
+            if let Ok(list) = serve_fetch_api_keys(&site_url_task, &lt).await {
+                if let Some((name, prefix)) = serve_pick_api_key(&list) {
+                    let _ = st_task
+                        .keys
+                        .lock()
+                        .unwrap()
+                        .oauth_set_api_key_meta(name, prefix);
+                }
+            }
+        });
+    }
     let mut res = Redirect::temporary("/?oauth=1").into_response();
     res.headers_mut()
         .insert(header::SET_COOKIE, session_cookie(&token).parse().unwrap());
@@ -523,37 +510,47 @@ async fn serve_json(
         .map_err(|e| RouterError::Upstream(format!("serve json from {url}: {e}")))
 }
 
-/// Provision a brand-new serve API key (bfvk-) for the linked account using the
-/// short-lived `link_token`. Re-linking the same account reuses the previously
-/// issued key (handled by the caller) so this is only called when no usable key
-/// is already stored. Returns `(name, key)` if successful.
-async fn serve_provision_api_key(
+/// Fetch the linked serve account's API keys (metadata only) from serve using a
+/// bearer credential (the stored bfvk- after link, or the short-lived link_token at
+/// link time). The secret is never returned by serve's list endpoint.
+async fn serve_fetch_api_keys(
     site_url: &str,
-    link_token: &str,
-) -> Result<(String, String), RouterError> {
+    bearer: &str,
+) -> Result<Vec<Value>, RouterError> {
     let url = format!("{}/api/api-keys", site_url.trim_end_matches('/'));
-    let v = serve_json(
-        Method::POST,
-        &url,
-        link_token,
-        Some(json!({ "name": "aria-router" })),
-    )
-    .await?;
-    let key = v
-        .get("key")
-        .and_then(|x| x.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let name = v
+    let v = serve_json(Method::GET, &url, bearer, None).await?;
+    Ok(v.as_array().cloned().unwrap_or_default())
+}
+
+/// Pick the serve API key to surface on the router dashboard: the most recently
+/// created active key. Its secret must be pasted by the user separately (serve's
+/// list endpoint never returns it).
+fn serve_pick_api_key(list: &[Value]) -> Option<(String, String)> {
+    let mut best: Option<&Value> = None;
+    for m in list {
+        match best {
+            Some(b) => {
+                let bt = b.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+                let mt = m.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+                if mt > bt {
+                    best = Some(m);
+                }
+            }
+            None => best = Some(m),
+        }
+    }
+    let m = best?;
+    let name = m
         .get("name")
-        .and_then(|x| x.as_str())
+        .and_then(|v| v.as_str())
         .unwrap_or("aria-router")
         .to_string();
-    if key.starts_with("bfvk-") {
-        Ok((name, key))
-    } else {
-        Err(RouterError::Upstream("serve did not return an api key".into()))
-    }
+    let prefix = m
+        .get("prefix")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some((name, prefix))
 }
 
 /// Re-sync the linked serve account's API key metadata from serve. Prefers the
@@ -612,4 +609,28 @@ pub async fn serve_account_sync(
             .map_err(AppError)?;
     }
     Ok(Json(st.keys.lock().unwrap().oauth_public()))
+}
+
+/// Store the serve API key (bfvk-) the user created on serve, so the router can
+/// use it as a Bearer credential and call back into serve after the link token
+/// expires. Serve's list endpoint never returns the secret, so the user pastes it
+/// once; the key's name/prefix are synced separately via `serve_account_sync`.
+pub async fn serve_account_set_key(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<ServeAccountPublic>, AppError> {
+    let _ = gate_if_users(&st, &headers).map_err(AppError)?;
+    let raw = body
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError(RouterError::InvalidParam("api_key required".into())))?;
+    let mut keys = st.keys.lock().unwrap();
+    if !keys.oauth_public().linked {
+        return Err(AppError(RouterError::InvalidParam(
+            "no linked serve account".into(),
+        )));
+    }
+    keys.oauth_set_api_key(raw, None).map_err(AppError)?;
+    Ok(Json(keys.oauth_public()))
 }

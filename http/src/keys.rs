@@ -11,7 +11,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 
 const SECRET_PREFIX: &str = "sk-aria_";
-const BFVK_PREFIX: &str = "bfvk-";
+/// Prefixes that identify an Aria Compute (serve) OAuth API key pasted into the
+/// router. Serve issues keys as `sk-bf-…`; `bfvk-…` is kept for backward
+/// compatibility with earlier router assumptions.
+const OAUTH_KEY_PREFIXES: &[&str] = &["bfvk-", "sk-bf-"];
+
+fn is_oauth_key(secret: &str) -> bool {
+    OAUTH_KEY_PREFIXES.iter().any(|p| secret.starts_with(p))
+}
+
 const LINK_STATE_TTL_SECS: u64 = 600;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -391,7 +399,7 @@ impl KeyStore {
 
     pub fn resolve_bearer(&mut self, secret: &str) -> Result<AuthIdentity, RouterError> {
         let secret = secret.trim();
-        if secret.starts_with(BFVK_PREFIX) {
+        if is_oauth_key(secret) {
             return self.authenticate_oauth(secret);
         }
         let hash = sha256_hex(secret);
@@ -785,6 +793,18 @@ pub fn apply_exchange(&mut self, inp: ExchangeInput) -> Result<(), RouterError> 
         k.prefix = prefix;
         self.persist()
     }
+
+    /// Clear the stored serve API key (bfvk-) without unlinking the account. Used
+    /// when re-linking a *different* serve account so the previous account's key is
+    /// not reused for the new one.
+    pub fn oauth_clear_api_key(&mut self) -> Result<(), RouterError> {
+        let k = self
+            .active_oauth_mut()
+            .ok_or_else(|| RouterError::InvalidParam("no linked serve account".into()))?;
+        k.api_key = None;
+        k.prefix = String::new();
+        self.persist()
+    }
 }
 
 pub fn validate_bfvk(key: &str) -> Result<(), RouterError> {
@@ -793,9 +813,9 @@ pub fn validate_bfvk(key: &str) -> Result<(), RouterError> {
             "Local router key detected; use Dashboard → Keys".into(),
         ));
     }
-    if !key.starts_with(BFVK_PREFIX) {
+    if !is_oauth_key(key) {
         return Err(RouterError::InvalidParam(
-            "OAuth API key must start with bfvk-".into(),
+            "OAuth API key must start with bfvk- or sk-bf-".into(),
         ));
     }
     if key.len() < 12 {
@@ -919,6 +939,27 @@ mod tests {
         ));
         assert!(store.resolve_bearer("bfvk-wrong").is_err());
         assert!(validate_bfvk("sk-aria_abc").is_err());
+    }
+
+    #[test]
+    fn serve_api_key_accepts_sk_bf_prefix() {
+        // Serve issues OAuth API keys with the `sk-bf-` prefix, not `bfvk-`.
+        assert!(validate_bfvk("sk-bf-59af311a-803d-41c0-8000-b82ee4d46b7c").is_ok());
+        assert!(is_oauth_key("sk-bf-59af311a-803d-41c0-8000-b82ee4d46b7c"));
+        assert!(!is_oauth_key("sk-aria_abc"));
+        // A `sk-bf-` key routes to OAuth (not local) authentication.
+        let dir = tempdir().unwrap();
+        let keys_path = dir.path().join("router-keys.json");
+        let mut store = KeyStore::load(&keys_path).unwrap();
+        store
+            .oauth_set_api_key("sk-bf-59af311a-803d-41c0-8000-b82ee4d46b7c", Some("test"))
+            .unwrap();
+        assert!(matches!(
+            store
+                .resolve_bearer("sk-bf-59af311a-803d-41c0-8000-b82ee4d46b7c")
+                .unwrap(),
+            AuthIdentity::Oauth { .. }
+        ));
     }
 
     #[test]
