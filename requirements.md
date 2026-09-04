@@ -169,7 +169,7 @@ Extensions：
 
 管理面默认只绑 `127.0.0.1`。本地密钥明文只在 POST 响应出现一次；`keys_path` 只存 sha256；密码 argon2id。
 
-CLI：`aria-router setup` **分段** `[1/2] Local (router Dashboard)`（admin、`allow_register`、`require_api_key`）与 `[2/2] OAuth (Aria Compute)`（site + `bfvk` 写入 `keys[]` `kind=oauth`）；**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 从 `keys[]` 分组展示 Local vs OAuth。`--clear` 可删 `router-keys.json` / `router-users.json`。
+CLI：`aria-router setup` **分段** `[1/2] Local (router Dashboard)`（admin、`allow_register`、`require_api_key`）与 `[2/2] OAuth (Aria Compute)`（site + `bfvk` 写入 `keys[]` `kind=oauth`）；**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 从 `keys[]` 分组展示 Local vs OAuth。`--clear` 可删 `router-keys.json` / `router-users.json`。CLI help 由 **clap** derive 生成（对齐 memo：`about` / `Usage` / `Commands` / `Options`；支持 `aria-router <cmd> --help`）。无参调用打印 help 并 exit **2**；`-v` / `--version` / 子命令 `version` 打印版本。
 
 **与 engine**：单一 `router_api_key` 字段可传 `sk-aria_` 或 `bfvk-`；router 按前缀解析 `keys[]`（`kind: local|oauth`）。
 

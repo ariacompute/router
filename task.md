@@ -119,3 +119,10 @@
 ### T17 — CLI
 - [x] `aria-router setup` 分段 Local vs OAuth；`--status` 分组
 - [x] `aria-engine setup`；`router_api_key` 双前缀；router `keys[]` kind local|oauth
+
+## CLI help 对齐 memo（clap）
+
+### T18 — clap help usage
+- [x] `aria-router` 迁 clap derive；删除手写 `print_usage`
+- [x] `-v` / `--version` / `version`；无参 exit 2；子命令 `--help`
+- [x] `cargo test` + `--help` 冒烟

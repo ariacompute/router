@@ -55,3 +55,4 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 argon2 = "0.5"
 password-hash = "0.5"
 subtle = "2"
+clap = { version = "4.5", features = ["derive"] }

@@ -6,11 +6,85 @@ use aria_router_http::{
     data_router, ensure_extensions_startable, mgmt_router, mgmt_router_with_dashboard,
     resolve_dashboard_dir, validate_bfvk, AppState, KeyStore, LocalUserStore,
 };
-use std::path::PathBuf;
+use clap::{ArgAction, Parser, Subcommand};
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 const ROUTER_VERSION: &str = env!("ARIA_ROUTER_VERSION");
+
+#[derive(Parser)]
+#[command(
+    name = "aria-router",
+    about = "OpenAI-compatible routing gateway CLI",
+    version = ROUTER_VERSION,
+    arg_required_else_help = true,
+    disable_version_flag = true
+)]
+struct Cli {
+    /// Print version
+    #[arg(short = 'v', long = "version", action = ArgAction::Version)]
+    _version: (),
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Write router.yml (Local + optional OAuth)
+    Setup {
+        /// Show config status
+        #[arg(long)]
+        status: bool,
+        /// Remove router.yml (optional local/OAuth files)
+        #[arg(long)]
+        clear: bool,
+        /// Template: semantic | agent
+        #[arg(long)]
+        template: Option<String>,
+        /// Local admin username
+        #[arg(long)]
+        admin_user: Option<String>,
+        /// Local admin password
+        #[arg(long)]
+        admin_password: Option<String>,
+        /// Allow Dashboard self-registration (true|false)
+        #[arg(long)]
+        allow_register: Option<String>,
+        /// Require local API key on data plane
+        #[arg(long, action = ArgAction::SetTrue)]
+        require_api_key: bool,
+        /// OAuth site URL
+        #[arg(long)]
+        serve_site: Option<String>,
+        /// OAuth Serve API key (bfvk-…)
+        #[arg(long)]
+        serve_api_key: Option<String>,
+    },
+    /// Validate router YAML
+    Validate {
+        /// Config path (default: ~/.ariacompute/router.yml)
+        #[arg(long)]
+        config: Option<String>,
+    },
+    /// Start data + management HTTP servers
+    Serve {
+        /// Config path (default: ~/.ariacompute/router.yml)
+        #[arg(long)]
+        config: Option<String>,
+        /// Data-plane bind address
+        #[arg(long)]
+        bind: Option<String>,
+        /// Management-plane bind address
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        mgmt_bind: String,
+        /// Skip serving Dashboard SPA
+        #[arg(long)]
+        no_dashboard: bool,
+    },
+    /// Print version
+    Version,
+}
 
 #[tokio::main]
 async fn main() {
@@ -18,20 +92,6 @@ async fn main() {
         eprintln!("{e}");
         std::process::exit(1);
     }
-}
-
-fn print_usage() {
-    println!(
-        "\
-aria-router {ROUTER_VERSION}
-
-aria-router setup [--status|--clear]
-aria-router validate [--config <file>]
-aria-router serve [--config <file>] [--bind HOST:PORT] [--mgmt-bind HOST:PORT] [--no-dashboard]
-aria-router -h | --help | help
-aria-router -v | --version | version
-"
-    );
 }
 
 fn prompt(label: &str) -> io::Result<String> {
@@ -42,8 +102,8 @@ fn prompt(label: &str) -> io::Result<String> {
     Ok(line.trim().to_string())
 }
 
-fn resolve_config(args: &mut Vec<String>) -> Result<String, Box<dyn std::error::Error>> {
-    if let Some(p) = take_flag(args, "--config") {
+fn resolve_config(config: Option<String>) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(p) = config {
         return Ok(p);
     }
     let path = default_config_path()?;
@@ -53,11 +113,21 @@ fn resolve_config(args: &mut Vec<String>) -> Result<String, Box<dyn std::error::
     Ok(path.display().to_string())
 }
 
-fn cmd_setup(args: &mut Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
-    if args.iter().any(|a| a == "--status") {
+fn cmd_setup(
+    status: bool,
+    clear: bool,
+    template: Option<String>,
+    admin_user: Option<String>,
+    admin_password: Option<String>,
+    allow_register_flag: Option<String>,
+    require_api_key_flag: bool,
+    serve_site: Option<String>,
+    serve_api_key: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if status {
         return setup_status();
     }
-    if args.iter().any(|a| a == "--clear") {
+    if clear {
         return setup_clear();
     }
 
@@ -66,7 +136,7 @@ fn cmd_setup(args: &mut Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("  Local API keys: sk-aria_… (Dashboard → Keys only; CLI does not mint).");
     eprintln!();
 
-    let raw = take_flag(args, "--template").unwrap_or_else(|| {
+    let raw = template.unwrap_or_else(|| {
         prompt("template [semantic|agent] (default: semantic): ").unwrap_or_default()
     });
     let kind = if raw.is_empty() {
@@ -78,7 +148,7 @@ fn cmd_setup(args: &mut Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("invalid template: {kind}").into());
     }
 
-    let admin_user = take_flag(args, "--admin-user").unwrap_or_else(|| {
+    let admin_user = admin_user.unwrap_or_else(|| {
         let u = prompt("local admin username [admin]: ").unwrap_or_default();
         if u.is_empty() {
             "admin".into()
@@ -86,7 +156,7 @@ fn cmd_setup(args: &mut Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
             u
         }
     });
-    let admin_pass = take_flag(args, "--admin-password").unwrap_or_else(|| {
+    let admin_pass = admin_password.unwrap_or_else(|| {
         let p1 = prompt("local admin password: ").unwrap_or_default();
         let p2 = prompt("confirm password: ").unwrap_or_default();
         if p1 != p2 {
@@ -99,14 +169,14 @@ fn cmd_setup(args: &mut Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         return Err("password must be at least 8 characters".into());
     }
 
-    let allow_register = if let Some(v) = take_flag(args, "--allow-register") {
+    let allow_register = if let Some(v) = allow_register_flag {
         matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "y" | "yes")
     } else {
         let ans = prompt("allow Dashboard self-registration for local users? [Y/n]: ")?;
         !matches!(ans.to_ascii_lowercase().as_str(), "n" | "no")
     };
 
-    let require_api_key = if args.iter().any(|a| a == "--require-api-key") {
+    let require_api_key = if require_api_key_flag {
         true
     } else {
         let ans = prompt("require local API key (sk-aria_) on data plane? [y/N]: ")?;
@@ -121,12 +191,13 @@ fn cmd_setup(args: &mut Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("  OAuth link: Dashboard → Account (CLI only pastes the key).");
     eprintln!();
 
-    let mut serve_site = take_flag(args, "--serve-site");
-    let mut serve_key = take_flag(args, "--serve-api-key");
+    let mut serve_site = serve_site;
+    let mut serve_key = serve_api_key;
     if serve_site.is_none() && serve_key.is_none() {
         let ans = prompt("configure OAuth API key now? [y/N]: ")?;
         if matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes") {
-            let site = prompt("Serve site [1] https://ariacompute.com  [2] https://ariacompute.cn: ")?;
+            let site =
+                prompt("Serve site [1] https://ariacompute.com  [2] https://ariacompute.cn: ")?;
             serve_site = Some(site);
             let key = prompt("Serve API key (bfvk-…): ")?;
             serve_key = Some(key);
@@ -145,12 +216,8 @@ fn cmd_setup(args: &mut Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let written = aria_router_config::write_default_config_with(
-        &kind,
-        true,
-        require_api_key,
-        allow_register,
-    )?;
+    let written =
+        aria_router_config::write_default_config_with(&kind, true, require_api_key, allow_register)?;
     println!("wrote {}", written.display());
 
     let users_path = default_users_path()?;
@@ -169,7 +236,8 @@ fn cmd_setup(args: &mut Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     if let (Some(site), Some(key)) = (serve_site, serve_key) {
         validate_bfvk(&key).map_err(|e| e.to_string())?;
         let keys_path = default_keys_path()?;
-        let mut store = KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path.clone()));
+        let mut store =
+            KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path.clone()));
         store.oauth_set_site(&site).map_err(|e| e.to_string())?;
         store
             .oauth_set_api_key(&key, Some("aria-router"))
@@ -272,38 +340,45 @@ fn setup_clear() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args().skip(1).collect::<Vec<_>>();
-    if args.is_empty()
-        || args
-            .iter()
-            .any(|a| a == "-h" || a == "--help" || a == "help")
-    {
-        print_usage();
-        return Ok(());
-    }
-    if args
-        .iter()
-        .any(|a| a == "-v" || a == "--version" || a == "version")
-    {
-        println!("aria-router {ROUTER_VERSION}");
-        return Ok(());
-    }
-    let cmd = args.remove(0);
-    match cmd.as_str() {
-        "setup" => cmd_setup(&mut args)?,
-        "validate" => {
-            let config = resolve_config(&mut args)?;
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Setup {
+            status,
+            clear,
+            template,
+            admin_user,
+            admin_password,
+            allow_register,
+            require_api_key,
+            serve_site,
+            serve_api_key,
+        } => cmd_setup(
+            status,
+            clear,
+            template,
+            admin_user,
+            admin_password,
+            allow_register,
+            require_api_key,
+            serve_site,
+            serve_api_key,
+        )?,
+        Command::Validate { config } => {
+            let config = resolve_config(config)?;
             RouterDocument::load_path(&config)?;
             println!("ok");
         }
-        "serve" => {
-            let config = resolve_config(&mut args)?;
+        Command::Serve {
+            config,
+            bind,
+            mgmt_bind,
+            no_dashboard,
+        } => {
+            let config = resolve_config(config)?;
             let doc = RouterDocument::load_path(&config)?;
             ensure_extensions_startable(&doc)?;
-            let bind = take_flag(&mut args, "--bind").unwrap_or_else(|| doc.data_bind());
-            let mgmt = take_flag(&mut args, "--mgmt-bind")
-                .unwrap_or_else(|| "127.0.0.1:8080".into());
-            let no_dashboard = take_switch(&mut args, "--no-dashboard");
+            let bind = bind.unwrap_or_else(|| doc.data_bind());
+            let mgmt = mgmt_bind;
             let state = Arc::new(AppState::with_path(doc, PathBuf::from(&config)));
             let data = data_router(state.clone());
             let admin = if no_dashboard {
@@ -327,26 +402,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 r = b => r?,
             }
         }
-        other => return Err(format!("unknown command {other}").into()),
-    }
-    Ok(())
-}
-
-fn take_flag(args: &mut Vec<String>, name: &str) -> Option<String> {
-    if let Some(i) = args.iter().position(|a| a == name) {
-        args.remove(i);
-        if i < args.len() {
-            return Some(args.remove(i));
+        Command::Version => {
+            println!("aria-router {ROUTER_VERSION}");
         }
     }
-    None
-}
-
-fn take_switch(args: &mut Vec<String>, name: &str) -> bool {
-    if let Some(i) = args.iter().position(|a| a == name) {
-        args.remove(i);
-        true
-    } else {
-        false
-    }
+    Ok(())
 }
