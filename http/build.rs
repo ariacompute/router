@@ -52,23 +52,16 @@ fn main() {
     let dist_dir = dashboard_dir.join("dist");
     let out_path = out_file();
 
-    // Ensure the dist exists; auto-build it on a clean checkout.
+    // Ensure the dist exists; auto-build it on a clean checkout. We only warn
+    // when the build genuinely fails — a successful auto-build is silent so
+    // `cargo build` stays quiet on fresh checkouts.
     if !dist_dir.join("index.html").exists() {
-        println!(
-            "cargo:warning=dashboard/dist missing; attempting `npm --prefix dashboard run build`"
-        );
-        match Command::new("npm")
-            .args(["--prefix", dashboard_dir.to_str().unwrap(), "run", "build"])
-            .status()
-        {
-            Ok(status) if status.success() => {}
-            _ => {
-                println!(
-                    "cargo:warning=auto-build of dashboard failed; binary ships without an embedded dashboard. Run `npm --prefix dashboard run build`."
-                );
-                write_embed(&out_path, EMPTY_EMBED);
-                return;
-            }
+        if let Err(e) = build_dashboard(&dashboard_dir) {
+            println!(
+                "cargo:warning=auto-build of dashboard failed ({e}); binary ships without an embedded dashboard. Run `npm --prefix dashboard install && npm --prefix dashboard run build`."
+            );
+            write_embed(&out_path, EMPTY_EMBED);
+            return;
         }
     }
 
@@ -115,6 +108,34 @@ fn main() {
 
 fn out_file() -> PathBuf {
     PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("dashboard_embed.rs")
+}
+
+/// Build the dashboard SPA into `dist/`. Installs npm dependencies first when
+/// `node_modules` is absent, so a clean checkout (or one with deps removed)
+/// builds without requiring a manual `npm install` beforehand.
+fn build_dashboard(dashboard_dir: &Path) -> Result<(), String> {
+    if !dashboard_dir.join("package.json").exists() {
+        return Err("dashboard/package.json not found".into());
+    }
+    if !dashboard_dir.join("node_modules").exists() {
+        let status = Command::new("npm")
+            .args(["install", "--no-audit", "--no-fund"])
+            .current_dir(dashboard_dir)
+            .status()
+            .map_err(|e| format!("npm install: {e}"))?;
+        if !status.success() {
+            return Err("npm install failed".into());
+        }
+    }
+    let status = Command::new("npm")
+        .args(["run", "build"])
+        .current_dir(dashboard_dir)
+        .status()
+        .map_err(|e| format!("npm run build: {e}"))?;
+    if !status.success() {
+        return Err("npm run build failed".into());
+    }
+    Ok(())
 }
 
 /// Short (7-char) git commit hash of the source tree, or "unknown" when git
