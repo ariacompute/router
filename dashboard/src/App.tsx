@@ -5,6 +5,7 @@ import {
   getJson,
   sendJson,
   setSessionToken,
+  type BuildVersion,
   type LocalUser,
   type RegisterStatus,
 } from './api';
@@ -55,6 +56,20 @@ const groups: NavGroup[] = [
 
 function Sidebar({ user }: { user: LocalUser }) {
   const nav = useNavigate();
+  const [build, setBuild] = useState<BuildVersion | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getJson<BuildVersion>('/v1/router/version')
+      .then((v) => {
+        if (!cancelled) setBuild(v);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function logout() {
     try {
       await sendJson('/v1/router/auth/logout', 'POST', {});
@@ -96,6 +111,14 @@ function Sidebar({ user }: { user: LocalUser }) {
         <button type="button" className={styles.logout} onClick={logout}>
           Logout
         </button>
+        {build && (
+          <span
+            className={styles.version}
+            title={`aria-router v${build.version} @ ${build.commit}`}
+          >
+            v{build.version}@{build.commit}
+          </span>
+        )}
       </div>
     </nav>
   );

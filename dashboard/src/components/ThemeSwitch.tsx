@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { getTheme, toggleTheme } from '../theme';
+import { useState, CSSProperties } from 'react';
+import { getTheme, setTheme, Theme } from '../theme';
 
 function SunIcon() {
   return (
@@ -19,44 +19,57 @@ function MoonIcon() {
 }
 
 export default function ThemeSwitch() {
-  const [isDark, setIsDark] = useState(getTheme() === 'dark');
+  const [theme, setThemeState] = useState<Theme>(getTheme());
 
-  function onClick() {
-    const next = toggleTheme();
-    setIsDark(next === 'dark');
+  function select(next: Theme) {
+    setTheme(next);
+    setThemeState(next);
+  }
+
+  function buttonStyle(active: boolean): CSSProperties {
+    return {
+      flex: 1,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '0.4rem',
+      padding: '0.45rem 0.5rem',
+      borderRadius: '8px',
+      border: `1px solid ${active ? 'var(--accent)' : 'var(--line)'}`,
+      background: active ? 'var(--accent-soft)' : 'transparent',
+      color: active ? 'var(--accent)' : 'var(--text-muted)',
+      fontSize: '0.8rem',
+      cursor: 'pointer',
+      transition: 'all 0.18s ease',
+    };
   }
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '0.5rem',
-        padding: '0.45rem 0.7rem',
-        borderRadius: '8px',
-        border: '1px solid var(--line)',
-        background: 'transparent',
-        color: 'var(--text-muted)',
-        fontSize: '0.8rem',
-        cursor: 'pointer',
-        transition: 'all 0.18s ease',
-        width: '100%',
-        justifyContent: 'flex-start',
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.color = 'var(--text-main)';
-        e.currentTarget.style.background = 'var(--panel-bg-soft)';
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.color = 'var(--text-muted)';
-        e.currentTarget.style.background = 'transparent';
-      }}
+    <div
+      role="group"
+      aria-label="Theme"
+      style={{ display: 'flex', gap: '0.4rem', width: '100%' }}
     >
-      {isDark ? <MoonIcon /> : <SunIcon />}
-      <span>{isDark ? 'Dark' : 'Light'}</span>
-    </button>
+      <button
+        type="button"
+        onClick={() => select('light')}
+        title="Light mode"
+        aria-pressed={theme === 'light'}
+        style={buttonStyle(theme === 'light')}
+      >
+        <SunIcon />
+        <span>Light</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => select('dark')}
+        title="Dark mode"
+        aria-pressed={theme === 'dark'}
+        style={buttonStyle(theme === 'dark')}
+      >
+        <MoonIcon />
+        <span>Dark</span>
+      </button>
+    </div>
   );
 }

@@ -156,6 +156,13 @@ export type CostEvent = {
   priced: boolean;
 };
 
+/// Build metadata returned by GET /v1/router/version (mirrors
+/// harness/ariaterm's version@commit scheme).
+export interface BuildVersion {
+  version: string;
+  commit: string;
+}
+
 export type CostReport = {
   totals: {
     requests: number;

@@ -144,6 +144,7 @@ pub fn resolve_dashboard_dir() -> Option<PathBuf> {
 fn mgmt_api_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/v1/router/version", get(version_ep))
         .route("/v1/router/auth/register-status", get(auth_api::register_status))
         .route("/v1/router/auth/register", post(auth_api::register))
         .route("/v1/router/auth/login", post(auth_api::login))
@@ -177,6 +178,16 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
 
 async fn health() -> Json<Value> {
     Json(json!({"status": "ok"}))
+}
+
+/// Build metadata (version + short commit hash) for the dashboard footer.
+/// Public (no auth) — mirrors harness/ariaterm's version@commit scheme and
+/// leaks nothing sensitive, avoiding an extra authenticated request on load.
+async fn version_ep() -> Json<Value> {
+    Json(json!({
+        "version": env!("ARIA_ROUTER_VERSION"),
+        "commit": env!("ARIA_ROUTER_COMMIT"),
+    }))
 }
 
 async fn validate_ep(State(st): State<Arc<AppState>>) -> Result<Json<Value>, AppError> {

@@ -22,6 +22,31 @@ pub static DASHBOARD_HAS: bool = false;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    // Build metadata for the dashboard footer (version@commit), mirroring
+    // harness/ariaterm's git tag + short commit hash scheme. Exposed via the
+    // public /v1/router/version endpoint so the SPA can render it bottom-left.
+    let version = std::env::var("ARIA_ROUTER_VERSION")
+        .or_else(|_| std::env::var("CARGO_PKG_VERSION"))
+        .unwrap_or_else(|_| "0.0.0".to_string());
+    let version = version.strip_prefix('v').unwrap_or(&version).to_string();
+    println!("cargo:rustc-env=ARIA_ROUTER_VERSION={version}");
+    let commit = git_short_commit();
+    println!("cargo:rustc-env=ARIA_ROUTER_COMMIT={commit}");
+    if let Some(git_dir) = git_dir() {
+        let head = Path::new(&git_dir).join("HEAD");
+        if head.exists() {
+            println!("cargo:rerun-if-changed={}", head.display());
+        }
+        let refs = Path::new(&git_dir).join("refs/heads");
+        if refs.exists() {
+            println!("cargo:rerun-if-changed={}", refs.display());
+        }
+        let packed = Path::new(&git_dir).join("packed-refs");
+        if packed.exists() {
+            println!("cargo:rerun-if-changed={}", packed.display());
+        }
+    }
+
     let manifest = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let dashboard_dir = Path::new(&manifest).join("..").join("dashboard");
     let dist_dir = dashboard_dir.join("dist");
@@ -91,6 +116,43 @@ fn main() {
 fn out_file() -> PathBuf {
     PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("dashboard_embed.rs")
 }
+
+/// Short (7-char) git commit hash of the source tree, or "unknown" when git
+/// is unavailable or this is not a git checkout (e.g. a source tarball).
+fn git_short_commit() -> String {
+    match Command::new("git")
+        .args(["rev-parse", "--short=7", "HEAD"])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if s.is_empty() {
+                "unknown".to_string()
+            } else {
+                s
+            }
+        }
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Absolute path to the `.git` directory, or `None` if not in a git checkout.
+fn git_dir() -> Option<String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--absolute-git-dir"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
 
 fn write_embed(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {

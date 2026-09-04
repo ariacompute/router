@@ -153,12 +153,21 @@ mod tests {
     use aria_router_core::ModelCard;
 
     fn mock_echo_command(stem: &str, json_line: &str) -> Vec<String> {
-        let dir = std::env::temp_dir();
-        let out = dir.join(format!("aria-router-{stem}.out"));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static ID: AtomicU64 = AtomicU64::new(0);
+        // Unique temp dir per call: reusing a fixed name in std::env::temp_dir()
+        // let a leftover process from a prior run keep the script exec'ing while
+        // the next run overwrote it, so execve failed with ETXTBSY ("Text file
+        // busy"). A unique path avoids the collision entirely.
+        let id = ID.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir()
+            .join(format!("aria-router-{stem}-{}-{}", std::process::id(), id));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("out.jsonl");
         std::fs::write(&out, format!("{json_line}\n")).unwrap();
         #[cfg(windows)]
         {
-            let script = dir.join(format!("aria-router-{stem}.cmd"));
+            let script = dir.join("run.cmd");
             std::fs::write(
                 &script,
                 format!("@echo off\r\nset /p line=\r\ntype \"{}\"\r\n", out.display()),
@@ -168,7 +177,7 @@ mod tests {
         }
         #[cfg(not(windows))]
         {
-            let script = dir.join(format!("aria-router-{stem}.sh"));
+            let script = dir.join("run.sh");
             std::fs::write(
                 &script,
                 format!("#!/bin/sh\nread line\ncat '{}'\n", out.display()),
