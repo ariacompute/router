@@ -33,9 +33,6 @@ export default function Login() {
       <h1 className="h1" style={{ marginBottom: '0.4rem' }}>
         Sign in
       </h1>
-      <p className="muted" style={{ marginBottom: '1.5rem' }}>
-        Username/password for this router instance. Not OAuth / Aria Compute.
-      </p>
       <form onSubmit={onSubmit} className="stack" style={{ gap: '1rem' }}>
         <div className="stack" style={{ gap: '0.4rem' }}>
           <label className="stat-label" htmlFor="username">

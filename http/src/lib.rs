@@ -6,6 +6,7 @@ mod cost;
 mod users;
 mod serve_account;
 mod auth_api;
+mod embed;
 
 use aria_router_agent::{task_from, AgentExtension, BuiltinExtension, FakeExtension};
 use aria_router_algorithm::{hard_filter, select, RuntimeStats};
@@ -36,6 +37,7 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub use users::UserStore as LocalUserStore;
+pub use embed::mgmt_router_serve_dashboard;
 
 pub struct AppState {
     pub doc: Mutex<RouterDocument>,
@@ -1656,6 +1658,24 @@ global:
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
         let (st, _dir) = isolated_state(doc);
         let res = mgmt_router_with_dashboard(st, dir)
+            .oneshot(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        let html = String::from_utf8_lossy(&bytes);
+        assert!(html.contains("aria-router") || html.contains("root"));
+    }
+
+    #[tokio::test]
+    async fn embedded_dashboard_serves_index() {
+        if !crate::embed::has_dashboard() {
+            return;
+        }
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let res = crate::embed::mgmt_router_with_embedded_dashboard(st)
             .oneshot(Request::get("/").body(Body::empty()).unwrap())
             .await
             .unwrap();

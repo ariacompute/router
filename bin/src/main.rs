@@ -3,8 +3,8 @@ use aria_router_config::{
     resolve_keys_path, resolve_users_path, RouterDocument,
 };
 use aria_router_http::{
-    data_router, ensure_extensions_startable, mgmt_router, mgmt_router_with_dashboard,
-    resolve_dashboard_dir, AppState, KeyStore, LocalUserStore,
+    data_router, ensure_extensions_startable, mgmt_router, mgmt_router_serve_dashboard,
+    AppState, KeyStore, LocalUserStore,
 };
 use clap::{ArgAction, Parser, Subcommand};
 use std::io::{self, BufRead, Write};
@@ -369,14 +369,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let admin = if no_dashboard {
                 println!("data {bind}  mgmt {mgmt}");
                 mgmt_router(state)
-            } else if let Some(dir) = resolve_dashboard_dir() {
-                println!("data {bind}  mgmt {mgmt}");
-                println!("dashboard http://{mgmt}/");
-                mgmt_router_with_dashboard(state, dir)
             } else {
                 println!("data {bind}  mgmt {mgmt}");
-                eprintln!("dashboard assets missing (npm --prefix dashboard run build); API only");
-                mgmt_router(state)
+                println!("dashboard http://{mgmt}/");
+                mgmt_router_serve_dashboard(state)
             };
             let data_l = tokio::net::TcpListener::bind(&bind).await?;
             let mgmt_l = tokio::net::TcpListener::bind(&mgmt).await?;

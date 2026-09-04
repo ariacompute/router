@@ -80,9 +80,6 @@ export default function Register() {
       <h1 className="h1" style={{ marginBottom: '0.4rem' }}>
         Create account
       </h1>
-      <p className="muted" style={{ marginBottom: '1.5rem' }}>
-        Creates a local <code>user</code> account (not admin). Password is for Dashboard only.
-      </p>
       <form onSubmit={onSubmit} className="stack" style={{ gap: '1rem' }}>
         <div className="stack" style={{ gap: '0.4rem' }}>
           <label className="stat-label" htmlFor="username">
