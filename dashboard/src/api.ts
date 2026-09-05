@@ -100,18 +100,11 @@ export async function startAriaOAuth(site?: string): Promise<OAuthStart> {
   return data;
 }
 
-/// Re-sync the linked serve account's API key metadata from serve.
+/// Re-sync the linked serve account's API key from serve. Serve returns the
+/// plaintext secret in its key list, so the router stores it automatically — no
+/// manual paste is needed.
 export async function syncServeAccount(): Promise<ServeAccount> {
   const { data } = await sendJson<ServeAccount>('/v1/router/serve/account/sync', 'POST', {});
-  return data;
-}
-
-/// Store the serve API key (sk-bf-) the user created on serve. The router uses it as
-/// a Bearer credential; its name/prefix are synced separately via `syncServeAccount`.
-export async function setServeApiKey(apiKey: string): Promise<ServeAccount> {
-  const { data } = await sendJson<ServeAccount>('/v1/router/serve/account/key', 'POST', {
-    api_key: apiKey,
-  });
   return data;
 }
 

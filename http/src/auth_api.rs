@@ -453,21 +453,22 @@ pub async fn oauth_callback(
                 .into_response();
         }
     };
-    // Best-effort: auto-sync the serve key metadata from serve (display only). The
-    // secret is not exposed by serve's list endpoint and is pasted by the user.
-    // Run in a detached task so the handler future stays `Send` (no borrow held
-    // across an await here); sync failures are non-fatal for the link flow.
+    // Best-effort: auto-sync the serve API key from serve. Serve now returns the
+    // plaintext secret in the key list, so store it directly as the durable Bearer
+    // credential — no manual paste needed. Run in a detached task so the handler
+    // future stays `Send` (no borrow held across an await here); sync failures are
+    // non-fatal for the link flow.
     if let Some(lt) = link_token.clone() {
         let st_task = Arc::clone(&st);
         let site_url_task = site_url.clone();
         tokio::spawn(async move {
             if let Ok(list) = serve_fetch_api_keys(&site_url_task, &lt).await {
-                if let Some((name, prefix)) = serve_pick_api_key(&list) {
+                if let Some((name, _prefix, secret)) = serve_pick_api_key(&list) {
                     let _ = st_task
                         .keys
                         .lock()
                         .unwrap()
-                        .oauth_set_api_key_meta(name, prefix);
+                        .oauth_set_api_key(&secret, Some(&name));
                 }
             }
         });
@@ -510,9 +511,10 @@ async fn serve_json(
         .map_err(|e| RouterError::Upstream(format!("serve json from {url}: {e}")))
 }
 
-/// Fetch the linked serve account's API keys (metadata only) from serve using a
-/// bearer credential (the stored sk-bf- after link, or the short-lived link_token at
-/// link time). The secret is never returned by serve's list endpoint.
+/// Fetch the linked serve account's API keys from serve using a bearer credential
+/// (the stored sk-bf- after link, or the short-lived link_token at link time). Serve
+/// now returns the plaintext secret (`sk-bf-`) in each key object so the router can
+/// auto-sync it without a manual paste.
 async fn serve_fetch_api_keys(
     site_url: &str,
     bearer: &str,
@@ -523,9 +525,11 @@ async fn serve_fetch_api_keys(
 }
 
 /// Pick the serve API key to surface on the router dashboard: the most recently
-/// created active key. Its secret must be pasted by the user separately (serve's
-/// list endpoint never returns it).
-fn serve_pick_api_key(list: &[Value]) -> Option<(String, String)> {
+/// created active key. Returns `(name, prefix, secret)` — serve now returns the
+/// plaintext secret in the list, so the router can store it as the durable Bearer
+/// credential and skip the manual paste entirely. Returns `None` when no usable key
+/// (empty list, or a key without a secret) is present.
+fn serve_pick_api_key(list: &[Value]) -> Option<(String, String, String)> {
     let mut best: Option<&Value> = None;
     for m in list {
         match best {
@@ -550,7 +554,16 @@ fn serve_pick_api_key(list: &[Value]) -> Option<(String, String)> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    Some((name, prefix))
+    // Serve returns the plaintext secret now; the router stores it directly.
+    let secret = m
+        .get("secret")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if secret.is_empty() {
+        return None;
+    }
+    Some((name, prefix, secret))
 }
 
 /// Re-sync the linked serve account's API key metadata from serve. Prefers the
@@ -617,40 +630,32 @@ pub async fn serve_account_sync(
         .await
         .map_err(|e| RouterError::Upstream(format!("serve json from {list_url}: {e}")))?;
     let arr = metas.as_array().cloned().unwrap_or_default();
-    // A 200 means the bearer is still valid, so the stored key still exists on
-    // serve. Refresh display metadata from the most recently created active key
-    // and clear any prior deletion marker. (The key's full secret is never
-    // returned by serve, so the user pastes it once.)
-    if let Some((name, prefix)) = serve_pick_api_key(&arr) {
-        let mut keys = st.keys.lock().unwrap();
-        keys.oauth_set_api_key_meta(name, prefix).map_err(AppError)?;
-        if keys.oauth_public().api_key_deleted {
-            keys.oauth_unmark_api_key_deleted().map_err(AppError)?;
+    // A 200 means the bearer is still valid. Auto-sync the most recently created
+    // active key: serve returns its plaintext secret, so store it as the durable
+    // Bearer credential and clear any prior deletion marker. An empty list (or a
+    // list with no usable secret) means the account no longer has a key on serve —
+    // mark it deleted (clear the stale secret) so the dashboard shows a degraded
+    // state. Network/parse failures above already bail out, leaving prior state.
+    let mut keys = st.keys.lock().unwrap();
+    match serve_pick_api_key(&arr) {
+        Some((name, _prefix, secret)) => {
+            keys.oauth_set_api_key(&secret, Some(&name)).map_err(AppError)?;
+            if keys.oauth_public().api_key_deleted {
+                keys.oauth_unmark_api_key_deleted().map_err(AppError)?;
+            }
+        }
+        None => {
+            // Bearer still valid but no usable key returned: the prior key was
+            // deleted/revoked on serve. Clear the stale secret (keep name/prefix).
+            if keys.oauth_public().api_key_configured || keys.oauth_public().api_key_deleted {
+                keys.oauth_mark_api_key_deleted().map_err(AppError)?;
+            }
         }
     }
-    Ok(Json(st.keys.lock().unwrap().oauth_public()))
-}
-
-/// Store the serve API key (sk-bf-) the user created on serve, so the router can
-/// use it as a Bearer credential and call back into serve after the link token
-/// expires. Serve's list endpoint never returns the secret, so the user pastes it
-/// once; the key's name/prefix are synced separately via `serve_account_sync`.
-pub async fn serve_account_set_key(
-    State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Result<Json<ServeAccountPublic>, AppError> {
-    let _ = gate_if_users(&st, &headers).map_err(AppError)?;
-    let raw = body
-        .get("api_key")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError(RouterError::InvalidParam("api_key required".into())))?;
-    let mut keys = st.keys.lock().unwrap();
-    if !keys.oauth_public().linked {
-        return Err(AppError(RouterError::InvalidParam(
-            "no linked serve account".into(),
-        )));
-    }
-    keys.oauth_set_api_key(raw, None).map_err(AppError)?;
     Ok(Json(keys.oauth_public()))
 }
+
+// Manual paste of the serve `sk-bf-` secret is no longer supported. Serve's
+// `GET /api/api-keys` returns the plaintext secret and `serve_account_sync`
+// stores it automatically, so the old `POST /v1/router/serve/account/key`
+// endpoint has been removed.

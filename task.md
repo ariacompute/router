@@ -131,7 +131,7 @@
 
 ### T19 — 从 serve 同步 OAuth API key（用户自建 key + router 自动同步元数据）
 - [x] **router 不在 serve 为 oauth 用户创建 api key**；由 oauth 用户自行在 serve 创建 `sk-bf-`，router dashboard 通过 link_token/已存 sk-bf- `GET {site}/api/api-keys` **自动同步 key 的 name/prefix/状态**用于展示
-- [x] **sk-bf- 明文由用户在 dashboard 手动粘贴一次**（`POST /v1/router/serve/account/key`，存入 oauth 记录作为 Bearer 凭据 + 回连 serve 同步用）；serve 列表接口不返回 secret，故必须手动粘贴
+- [x] ~~sk-bf- 明文由用户在 dashboard 手动粘贴一次~~（**已废弃**：阶段 J2 serve 列表接口现返回 secret，改为 `POST /v1/router/serve/account/sync` 自动同步明文，手动粘贴入口 `POST /v1/router/serve/account/key` 已下线）
 - [x] 重新链接不同 serve 账户时清除上次粘贴的 key（`oauth_clear_api_key`），避免被错误复用
 - [x] `keys.rs`：`oauth_api_key()`（取 sk-bf- 凭据）+ `oauth_set_api_key_meta(name,prefix)`（仅更新展示元数据，不动 secret）+ `oauth_clear_api_key()`
 - [x] `POST /v1/router/serve/account/sync`：用已存 sk-bf-（回退 link_token）`GET {site}/api/api-keys` 刷新 key 元数据并返回 `ServeAccountPublic`
@@ -151,6 +151,18 @@
 - [x] Dashboard Account：每 30s 自动轮询 `serve/account/sync`；删除时显示醒目警告横幅 + 最后已知 key 信息 + 重新粘贴引导；Keys 与 Overview 同步展示 `deleted on serve`
 - [x] 单测：`keys.rs` 单测（mark 清 secret+flag / 重贴清 flag）、`lib.rs` 三条集成（`401→deleted` 且 GET 持久化、200 有效 bearer 仅刷新 meta 不误删、200 命中更新 name）
 - [x] 验证：`cargo clippy -p aria-router-http` 无告警、`cargo test -p aria-router-http`（33/33）、`npm --prefix dashboard run build` 通过
+
+## 阶段 J2 — Serve API Key 自动同步（明文，去手动粘贴）
+
+### T18 — 从 serve 自动同步 OAuth API key 明文（替换手动粘贴）
+- [x] serve `GET /api/api-keys` 现返回明文 secret（`sk-bf-`）；`serve_pick_api_key` 由 `(name,prefix)` 改为 `(name,prefix,secret)`
+- [x] `POST /v1/router/serve/account/sync` 在 200 时取最近创建的 active key，调 `oauth_set_api_key` 自动写入明文（新增 key 自动采用）；空列表（或列表无可用 secret）→ `oauth_mark_api_key_deleted`（删除 key 自动清除、保留 name/prefix）
+- [x] `oauth_callback` link 完成 detached task 改用 `oauth_set_api_key` 直接存 secret（链接即可用，无需再手动粘贴；保留 `oauth_set_api_key_meta` 仅单测引用不删）
+- [x] **下线手动粘贴入口**：删 `POST /v1/router/serve/account/key` 路由与 `serve_account_set_key` handler；`dashboard/src/api.ts` 删 `setServeApiKey`
+- [x] Dashboard Account：移除粘贴输入框与「Save key」+ `saveKey`；保留「Sync now」按钮 + 30s 自动轮询；文案改为 auto-synced from serve；删除/不可达显示降级提示（不再提示粘贴）
+- [x] Dashboard Keys：serve-deleted 提示去掉「paste it again in Account」，改自动同步引导（在 Aria Compute 重新生成 / 重新关联账户）
+- [x] 单测：`lib.rs` 更新 `serve_sync_refreshes_meta_on_200_valid_bearer` / `serve_sync_updates_meta_when_key_present`（mock 补 `secret`），新增 `serve_sync_marks_deleted_when_empty_list`、`serve_sync_adopts_newly_created_key`（覆盖新增/删除两类路径）
+- [x] `requirements.md` OAuth 小节补充 `POST /v1/router/serve/account/sync` 自动同步 + 手动粘贴入口下线说明
 
 ## 阶段 K — Router bench（ADR-040 + DRACO）
 

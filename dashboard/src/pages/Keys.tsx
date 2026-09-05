@@ -150,9 +150,10 @@ export default function Keys() {
                 marginBottom: '0.75rem',
               }}
             >
-              This key was deleted or revoked on Aria Compute. Re-create it on
-              Aria Compute and paste it again in{' '}
-              <a href="/account">Account</a> to restore.
+              This key was deleted or revoked on Aria Compute. Generate a new key
+              there (or re-link your Aria Compute account) and it will sync here
+              automatically. See{' '}
+              <a href="/account">Account</a> for status.
             </div>
           ) : null}
           <div className={styles.card} style={{ maxWidth: '40rem' }}>

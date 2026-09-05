@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   getJson,
-  setServeApiKey,
   syncServeAccount,
   type LocalUser,
   type ServeAccount,
@@ -13,7 +12,6 @@ export default function Account() {
   const [acct, setAcct] = useState<ServeAccount | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [keyInput, setKeyInput] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -33,8 +31,8 @@ export default function Account() {
     }
   }, []);
 
-  // Auto-update: poll the serve account sync so a key deleted/revoked on Aria
-  // Compute surfaces on the dashboard without a manual refresh.
+  // Auto-sync: poll the serve account so a key created/deleted/revoked on Aria
+  // Compute surfaces on the dashboard without any manual paste.
   const acctRef = useRef<ServeAccount | null>(null);
   acctRef.current = acct;
   useEffect(() => {
@@ -50,21 +48,6 @@ export default function Account() {
     setErr(null);
     try {
       setAcct(await syncServeAccount());
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function saveKey() {
-    const v = keyInput.trim();
-    if (!v) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      setAcct(await setServeApiKey(v));
-      setKeyInput('');
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -123,8 +106,9 @@ export default function Account() {
             marginBottom: '1rem',
           }}
         >
-          This API key was deleted or revoked on Aria Compute. Create a new key
-          there and paste it below to restore the connection.
+          This API key was deleted or revoked on Aria Compute. Generate a new key
+          there (or re-link your Aria Compute account) and it will sync here
+          automatically on the next refresh.
           {acct.api_key_prefix ? (
             <div className="muted" style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
               Last known key: {acct.api_key_name ?? 'aria-router'} (
@@ -167,27 +151,9 @@ export default function Account() {
           )}
           <p className="muted" style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
             {acct?.api_key_deleted
-              ? 'The key above no longer exists on Aria Compute. Paste a new key to reconnect.'
-              : 'Create this key yourself on Aria Compute, then paste it here once. Its name/prefix are auto-synced from serve.'}
+              ? 'The key above no longer exists on Aria Compute. It will sync again automatically once a valid key is present.'
+              : 'Auto-synced from Aria Compute — no manual paste needed. Create or delete the key on Aria Compute and it reflects here automatically.'}
           </p>
-          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-            <input
-              type="password"
-              className="input-field"
-              placeholder="sk-bf-…"
-              value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
-              style={{ flex: 1 }}
-            />
-            <button
-              type="button"
-              className="btn-ghost btn-sm"
-              onClick={saveKey}
-              disabled={busy || !acct?.linked || !keyInput.trim()}
-            >
-              {busy ? 'Saving…' : 'Save key'}
-            </button>
-          </div>
           <button
             type="button"
             className="btn-ghost btn-sm"
@@ -195,7 +161,7 @@ export default function Account() {
             disabled={busy || !acct?.linked}
             style={{ marginTop: '0.5rem' }}
           >
-            {busy ? 'Syncing…' : 'Auto-update'}
+            {busy ? 'Syncing…' : 'Sync now'}
           </button>
         </div>
       </div>

@@ -166,10 +166,6 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
             "/v1/router/serve/account/sync",
             post(auth_api::serve_account_sync),
         )
-        .route(
-            "/v1/router/serve/account/key",
-            post(auth_api::serve_account_set_key),
-        )
         .route("/v1/router/validate", post(validate_ep))
         .route("/v1/router/replay", get(replay_ep))
         .route("/v1/router/providers", put(upsert_provider).get(list_providers))
@@ -1996,7 +1992,8 @@ global:
     #[tokio::test]
     async fn serve_sync_refreshes_meta_on_200_valid_bearer() {
         // A 200 listing means the bearer is still valid (the key exists on
-        // serve), even if serve returns a longer prefix than the router stored.
+        // serve). Serve now returns the plaintext secret, which the router stores
+        // automatically (no manual paste); the displayed name/prefix refresh too.
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
         let (st, _dir) = isolated_state(doc);
@@ -2005,6 +2002,7 @@ global:
             json!([{
                 "name": "other",
                 "prefix": "sk-bf-OTHERKEY12345",
+                "secret": "sk-bf-OTHERKEY1234567890",
                 "created_at": "2024-01-01T00:00:00Z"
             }]),
         )
@@ -2022,8 +2020,10 @@ global:
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["api_key_deleted"], false);
         assert_eq!(body["api_key_configured"], true);
-        // Metadata refreshed from the (only) serve key.
+        // Metadata refreshed from the (only) serve key; secret auto-stored.
         assert_eq!(body["api_key_name"], "other");
+        // The router can now authenticate with the auto-synced serve secret.
+        assert!(st.keys.lock().unwrap().oauth_api_key().is_some());
     }
 
     #[tokio::test]
@@ -2037,6 +2037,7 @@ global:
             json!([{
                 "name": "renamed",
                 "prefix": key,
+                "secret": key,
                 "created_at": "2024-01-01T00:00:00Z"
             }]),
         )
@@ -2055,5 +2056,77 @@ global:
         assert_eq!(body["api_key_deleted"], false);
         assert_eq!(body["api_key_configured"], true);
         assert_eq!(body["api_key_name"], "renamed");
+    }
+
+    #[tokio::test]
+    async fn serve_sync_marks_deleted_when_empty_list() {
+        // A 200 with an empty key list means the account has no usable key on
+        // serve (all deleted/revoked). The router must clear the stale secret and
+        // surface the degraded state — without a manual paste.
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let base = spawn_serve(200, json!([])).await;
+        link_with_key(&st, "sk-bf-ABCDEFGHIJKLMNOP", &base);
+
+        let app = mgmt_router(st.clone());
+        let (status, body) = oneshot_json(
+            app,
+            Request::post("/v1/router/serve/account/sync")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["api_key_deleted"], true);
+        assert_eq!(body["api_key_configured"], false);
+        // The stale secret is cleared so the router stops authenticating with it.
+        assert!(st.keys.lock().unwrap().oauth_api_key().is_none());
+    }
+
+    #[tokio::test]
+    async fn serve_sync_adopts_newly_created_key() {
+        // A newly created serve key (more recent created_at) is auto-synced: the
+        // router adopts it and stores its secret, even when the prior key is still
+        // present in the list.
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let old = "sk-bf-OLDKEY0000000000";
+        let new_key = "sk-bf-NEWKEY0000000000";
+        let base = spawn_serve(
+            200,
+            json!([
+                {
+                    "name": "old",
+                    "prefix": old,
+                    "secret": old,
+                    "created_at": "2024-01-01T00:00:00Z"
+                },
+                {
+                    "name": "fresh",
+                    "prefix": new_key,
+                    "secret": new_key,
+                    "created_at": "2024-06-01T00:00:00Z"
+                }
+            ]),
+        )
+        .await;
+        link_with_key(&st, old, &base);
+
+        let app = mgmt_router(st.clone());
+        let (status, body) = oneshot_json(
+            app,
+            Request::post("/v1/router/serve/account/sync")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["api_key_deleted"], false);
+        assert_eq!(body["api_key_configured"], true);
+        assert_eq!(body["api_key_name"], "fresh");
+        // The router adopted the newer key's secret.
+        assert_eq!(st.keys.lock().unwrap().oauth_api_key().as_deref(), Some(new_key));
     }
 }
