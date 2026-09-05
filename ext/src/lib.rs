@@ -155,10 +155,11 @@ mod tests {
     fn mock_echo_command(stem: &str, json_line: &str) -> Vec<String> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static ID: AtomicU64 = AtomicU64::new(0);
-        // Unique temp dir per call: reusing a fixed name in std::env::temp_dir()
-        // let a leftover process from a prior run keep the script exec'ing while
-        // the next run overwrote it, so execve failed with ETXTBSY ("Text file
-        // busy"). A unique path avoids the collision entirely.
+        // Unique payload file per call. Do not write+chmod+exec a temp script:
+        // on Linux that races with ETXTBSY ("Text file busy") when execve runs
+        // while the inode is still open for write (flaky under parallel cargo
+        // test / WSL). Instead exec a stable interpreter and pass -c so only
+        // a data file is created.
         let id = ID.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir()
             .join(format!("aria-router-{stem}-{}-{}", std::process::id(), id));
@@ -167,30 +168,19 @@ mod tests {
         std::fs::write(&out, format!("{json_line}\n")).unwrap();
         #[cfg(windows)]
         {
-            let script = dir.join("run.cmd");
-            std::fs::write(
-                &script,
-                format!("@echo off\r\nset /p line=\r\ntype \"{}\"\r\n", out.display()),
-            )
-            .unwrap();
-            vec![script.to_string_lossy().into_owned()]
+            vec![
+                "cmd".into(),
+                "/C".into(),
+                format!("set /p line= & type \"{}\"", out.display()),
+            ]
         }
         #[cfg(not(windows))]
         {
-            let script = dir.join("run.sh");
-            std::fs::write(
-                &script,
-                format!("#!/bin/sh\nread line\ncat '{}'\n", out.display()),
-            )
-            .unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut p = std::fs::metadata(&script).unwrap().permissions();
-                p.set_mode(0o755);
-                std::fs::set_permissions(&script, p).unwrap();
-            }
-            vec![script.to_string_lossy().into_owned()]
+            vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                format!("read line; cat '{}'", out.display()),
+            ]
         }
     }
 
