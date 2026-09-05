@@ -152,42 +152,55 @@ mod tests {
     use super::*;
     use aria_router_core::ModelCard;
 
-    fn mock_echo_command(stem: &str, json_line: &str) -> Vec<String> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static ID: AtomicU64 = AtomicU64::new(0);
-        // Unique payload file per call. Do not write+chmod+exec a temp script:
-        // on Linux that races with ETXTBSY ("Text file busy") when execve runs
-        // while the inode is still open for write (flaky under parallel cargo
-        // test / WSL). Instead exec a stable interpreter and pass -c so only
-        // a data file is created.
-        let id = ID.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir()
-            .join(format!("aria-router-{stem}-{}-{}", std::process::id(), id));
-        std::fs::create_dir_all(&dir).unwrap();
-        let out = dir.join("out.jsonl");
-        std::fs::write(&out, format!("{json_line}\n")).unwrap();
+    /// Mock extension command that consumes one stdin line then prints a fixed
+    /// JSON decision without write+chmod+exec of a temp script on Unix (ETXTBSY)
+    /// and without inline `cmd /C … & type …` on Windows (empty stdout from quoting).
+    fn mock_echo_command(json_line: &str) -> (Vec<String>, std::collections::HashMap<String, String>) {
         #[cfg(windows)]
         {
-            vec![
-                "cmd".into(),
-                "/C".into(),
-                format!("set /p line= & type \"{}\"", out.display()),
-            ]
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static ID: AtomicU64 = AtomicU64::new(0);
+            let id = ID.fetch_add(1, Ordering::SeqCst);
+            let dir = std::env::temp_dir().join(format!(
+                "aria-router-ext-{}-{}",
+                std::process::id(),
+                id
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let out = dir.join("out.jsonl");
+            std::fs::write(&out, format!("{json_line}\n")).unwrap();
+            let script = dir.join("run.cmd");
+            std::fs::write(
+                &script,
+                format!("@echo off\r\nset /p line=\r\ntype \"{}\"\r\n", out.display()),
+            )
+            .unwrap();
+            (
+                vec![script.to_string_lossy().into_owned()],
+                std::collections::HashMap::new(),
+            )
         }
         #[cfg(not(windows))]
         {
-            vec![
-                "/bin/sh".into(),
-                "-c".into(),
-                format!("read line; cat '{}'", out.display()),
-            ]
+            let mut env = std::collections::HashMap::new();
+            env.insert(
+                "ARIA_ROUTER_EXT_MOCK_JSON".to_string(),
+                json_line.to_string(),
+            );
+            (
+                vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    "read line; printf '%s\\n' \"$ARIA_ROUTER_EXT_MOCK_JSON\"".into(),
+                ],
+                env,
+            )
         }
     }
 
     #[tokio::test]
     async fn mock_script_json() {
-        let command = mock_echo_command(
-            "ext-mock",
+        let (command, env) = mock_echo_command(
             r#"{"model":"local/general","reason":"mock","confidence":0.9}"#,
         );
         let ext = SubprocessExtension {
@@ -197,7 +210,7 @@ mod tests {
                 command,
                 workdir: None,
                 timeout_ms: Some(2000),
-                env: Default::default(),
+                env,
                 endpoint: None,
             },
         };
@@ -237,8 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_pi_jsonl() {
-        let command = mock_echo_command(
-            "pi-mock",
+        let (command, env) = mock_echo_command(
             r#"{"data":"{\"model\":\"local/general\",\"reason\":\"pi\",\"confidence\":0.7}"}"#,
         );
         let ext = SubprocessExtension {
@@ -248,7 +260,7 @@ mod tests {
                 command,
                 workdir: None,
                 timeout_ms: Some(2000),
-                env: Default::default(),
+                env,
                 endpoint: None,
             },
         };
