@@ -28,15 +28,14 @@
 .brandMark {
   width: 30px;
   height: 30px;
-  border-radius: 9px;
-  background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
+  border-radius: var(--radius-field);
+  background: var(--text-main);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  font-weight: 800;
+  color: var(--text-on-solid);
+  font-weight: 700;
   font-size: 0.95rem;
-  box-shadow: 0 4px 14px rgba(124, 58, 237, 0.35);
   flex-shrink: 0;
 }
 
@@ -48,9 +47,10 @@
 }
 
 .section {
-  font-size: 0.66rem;
+  font-family: var(--font-label);
+  font-size: 0.68rem;
   text-transform: uppercase;
-  letter-spacing: 0.07em;
+  letter-spacing: 0.18em;
   color: var(--text-soft);
   font-weight: 600;
   padding: 1rem 0.65rem 0.35rem;
@@ -61,7 +61,7 @@
   align-items: center;
   gap: 0.55rem;
   padding: 0.5rem 0.65rem;
-  border-radius: 8px;
+  border-radius: var(--radius-field);
   color: var(--text-muted);
   font-size: 0.875rem;
   font-weight: 500;
@@ -70,7 +70,7 @@
 
 .link:hover {
   color: var(--text-main);
-  background: var(--panel-bg-soft);
+  background: var(--fill-subtle);
 }
 
 .active,
@@ -117,19 +117,19 @@
   width: 100%;
   justify-content: flex-start;
   padding: 0.45rem 0.7rem;
-  border-radius: 8px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--line);
   background: transparent;
   color: var(--text-muted);
   font-size: 0.8rem;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
 }
 
 .logout:hover {
   color: var(--danger);
-  border-color: rgba(220, 38, 38, 0.25);
+  border-color: var(--danger);
   background: var(--danger-wash);
 }
 
@@ -147,9 +147,7 @@
   align-items: center;
   justify-content: center;
   padding: 2rem 1.5rem;
-  background:
-    radial-gradient(1200px 600px at 50% -10%, rgba(124, 58, 237, 0.12), transparent 60%),
-    var(--page-bg);
+  background: var(--page-bg);
 }
 
 .brandCenter {

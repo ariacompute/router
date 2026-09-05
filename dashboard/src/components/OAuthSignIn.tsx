@@ -58,7 +58,7 @@ export default function OAuthSignIn({ onError }: { onError: (msg: string | null)
               style={{
                 textAlign: 'left',
                 padding: '0.6rem 0.75rem',
-                borderRadius: 'var(--radius-sm)',
+                borderRadius: 'var(--radius-field)',
                 border: `1px solid ${active ? 'var(--accent)' : 'var(--line)'}`,
                 background: active ? 'var(--accent-wash)' : 'transparent',
                 color: active ? 'var(--accent)' : 'var(--text-main)',

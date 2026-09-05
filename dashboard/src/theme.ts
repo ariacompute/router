@@ -6,6 +6,9 @@ export function getTheme(): Theme {
   if (typeof window === 'undefined') return 'light';
   const stored = localStorage.getItem(THEME_KEY);
   if (stored === 'light' || stored === 'dark') return stored;
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr === 'light' || attr === 'dark') return attr;
+  if (document.documentElement.classList.contains('dark')) return 'dark';
   if (window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
   return 'light';
 }
@@ -25,8 +28,10 @@ export function toggleTheme(): Theme {
 export function applyTheme(theme: Theme): void {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
-  if (theme === 'dark') root.classList.add('dark');
-  else root.classList.remove('dark');
+  // `data-theme` is the source of truth (matches serve/frontend). The legacy
+  // `.dark` class is kept in sync so any markup still keying off it works.
+  root.setAttribute('data-theme', theme);
+  root.classList.toggle('dark', theme === 'dark');
 }
 
 export function initTheme(): void {

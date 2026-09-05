@@ -98,11 +98,11 @@ export default function Account() {
       {acct?.api_key_deleted ? (
         <div
           style={{
-            border: '1px solid #e0a800',
-            background: '#fff8e1',
-            color: '#7a5b00',
+            border: '1px solid var(--chip-amber-fg)',
+            background: 'var(--chip-amber-bg)',
+            color: 'var(--chip-amber-fg)',
             padding: '0.75rem 1rem',
-            borderRadius: '8px',
+            borderRadius: 'var(--radius-field)',
             marginBottom: '1rem',
           }}
         >
@@ -141,7 +141,7 @@ export default function Account() {
                 {acct.api_key_prefix ?? '—'}
               </div>
               {acct.api_key_deleted ? (
-                <span style={{ color: '#b00020', fontSize: '0.8rem' }}>
+                <span style={{ color: 'var(--danger)', fontSize: '0.8rem' }}>
                   deleted on serve
                 </span>
               ) : null}

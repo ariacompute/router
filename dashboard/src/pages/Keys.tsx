@@ -142,11 +142,11 @@ export default function Keys() {
           {serve.api_key_deleted ? (
             <div
               style={{
-                border: '1px solid #e0a800',
-                background: '#fff8e1',
-                color: '#7a5b00',
+                border: '1px solid var(--chip-amber-fg)',
+                background: 'var(--chip-amber-bg)',
+                color: 'var(--chip-amber-fg)',
                 padding: '0.75rem 1rem',
-                borderRadius: '8px',
+                borderRadius: 'var(--radius-field)',
                 marginBottom: '0.75rem',
               }}
             >
@@ -170,9 +170,9 @@ export default function Keys() {
             </div>
             <div className={styles.value}>
               {serve.api_key_deleted ? (
-                <span style={{ color: '#b00020' }}>deleted on serve</span>
+                <span style={{ color: 'var(--danger)' }}>deleted on serve</span>
               ) : serve.api_key_configured ? (
-                <span style={{ color: '#2e7d32' }}>active</span>
+                <span style={{ color: 'var(--accent-green)' }}>active</span>
               ) : (
                 'not configured'
               )}
