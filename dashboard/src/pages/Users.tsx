@@ -70,8 +70,7 @@ export default function Users() {
 
   return (
     <>
-      <h1 className={styles.h1}>Local (router Dashboard) — Users</h1>
-      <p>Admin-only. Self-register creates <code>user</code> role accounts.</p>
+      <h1 className={styles.h1}>Users</h1>
       <div className={styles.row}>
         <button type="button" className="btn-ghost" onClick={toggleAllow} disabled={busy}>
           Self-registration: {allowRegister ? 'ON' : 'OFF'}
