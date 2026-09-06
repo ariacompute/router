@@ -26,10 +26,7 @@ providers:
         - name: primary
           endpoint: 127.0.0.1:8000
 
-# Unused on this gold path; listed so agent examples can share the same skeleton.
-extensions:
-  - name: builtin
-    type: builtin
+# Unused on this gold path.
 
 # Virtual name → recipe. Concrete provider names bypass recipes.
 entrypoints:

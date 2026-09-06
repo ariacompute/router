@@ -202,3 +202,13 @@
 ### T28 — 文档与验收
 - [x] corpus README（MMLU）；README 双语
 - [x] `python -m unittest discover -s bench/tests -t .` 全绿
+
+## 阶段 M — 轻量 builtin agent（去 ext）
+
+### T29 — 去 pi/dsh + 进程内 builtin tool-loop
+- [x] Spec：`requirements.md` §3.4 / 目录；本清单；`AGENTS.md`
+- [x] 删除 `ext/` crate 与顶层 `extensions:`；publish 去掉 `aria-router-ext`
+- [x] `BuiltinAgent`：固定工具 + `max_turns` / `timeout_ms`；`submit_route` 终态
+- [x] `agent-tiny` / setup template；http `route_agent`；topology / Dashboard 文案
+- [x] engine README / requirements 同步（semantic + builtin agent）
+- [x] `cargo test` 全绿

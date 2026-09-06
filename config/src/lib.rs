@@ -15,8 +15,6 @@ pub struct RouterDocument {
     #[serde(default)]
     pub providers: Providers,
     #[serde(default)]
-    pub extensions: Vec<ExtensionCfg>,
-    #[serde(default)]
     pub entrypoints: Vec<Entrypoint>,
     #[serde(default)]
     pub recipes: Vec<Recipe>,
@@ -196,23 +194,6 @@ impl BackendRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExtensionCfg {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub ext_type: String,
-    #[serde(default)]
-    pub command: Vec<String>,
-    #[serde(default)]
-    pub workdir: Option<String>,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    #[serde(default)]
-    pub endpoint: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entrypoint {
     pub model_names: Vec<String>,
     pub router: RouterKind,
@@ -375,8 +356,8 @@ pub struct Condition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentRecipe {
-    pub extension: String,
     #[serde(default)]
     pub max_turns: Option<u32>,
     #[serde(default)]
@@ -503,28 +484,28 @@ impl RouterDocument {
                             recipe.name
                         )));
                     }
-                    if recipe.agent.is_none() {
-                        return Err(RouterError::Config(format!(
+                    let agent = recipe.agent.as_ref().ok_or_else(|| {
+                        RouterError::Config(format!(
                             "agent recipe {} missing agent:",
                             recipe.name
-                        )));
+                        ))
+                    })?;
+                    if let Some(fb) = &agent.fallback {
+                        if self.provider(fb).is_none() {
+                            return Err(RouterError::Config(format!(
+                                "agent recipe {} fallback {fb} not in providers",
+                                recipe.name
+                            )));
+                        }
                     }
-                    let ext_name = &recipe.agent.as_ref().unwrap().extension;
-                    if !self.extensions.iter().any(|e| e.name == *ext_name) {
-                        return Err(RouterError::Config(format!(
-                            "agent extension {ext_name} not in extensions:"
-                        )));
+                    if let Some(t) = agent.max_turns {
+                        if t == 0 || t > 8 {
+                            return Err(RouterError::Config(format!(
+                                "agent recipe {} max_turns must be 1..=8, got {t}",
+                                recipe.name
+                            )));
+                        }
                     }
-                }
-            }
-        }
-        for ext in &self.extensions {
-            match ext.ext_type.as_str() {
-                "builtin" | "pi" | "deepseek-harness" => {}
-                other => {
-                    return Err(RouterError::Config(format!(
-                        "unknown extension type {other}"
-                    )));
                 }
             }
         }
@@ -898,7 +879,6 @@ recipes:
             include_str!("../examples/agent-tiny.yaml"),
             include_str!("../examples/ffi-tiny.yaml"),
             include_str!("../examples/semantic.yaml"),
-            include_str!("../examples/agent.yaml"),
             include_str!("../examples/ffi.yaml"),
         ] {
             RouterDocument::from_yaml_str(raw).unwrap();
@@ -906,7 +886,7 @@ recipes:
     }
 
     #[test]
-    fn catalog_examples_reference_learned_and_declare_extensions() {
+    fn catalog_examples_reference_learned_signals() {
         let semantic = RouterDocument::from_yaml_str(include_str!("../examples/semantic.yaml")).unwrap();
         let catalog = semantic.recipe("mom-catalog").unwrap();
         assert!(!semantic.learned_signal_referenced(catalog).is_empty());
@@ -917,12 +897,20 @@ recipes:
         let ffi_cat = ffi.recipe("mom-catalog").unwrap();
         assert!(!ffi.learned_signal_referenced(ffi_cat).is_empty());
 
-        let agent = RouterDocument::from_yaml_str(include_str!("../examples/agent.yaml")).unwrap();
-        let types: Vec<&str> = agent.extensions.iter().map(|e| e.ext_type.as_str()).collect();
-        assert!(types.contains(&"builtin"));
-        assert!(types.contains(&"pi"));
-        assert!(types.contains(&"deepseek-harness"));
-        assert_eq!(agent.recipe("agent-pi").unwrap().agent.as_ref().unwrap().extension, "pi");
-        assert_eq!(agent.recipe("agent-dsh").unwrap().agent.as_ref().unwrap().extension, "dsh");
+        let agent = RouterDocument::from_yaml_str(include_str!("../examples/agent-tiny.yaml")).unwrap();
+        assert_eq!(agent.entrypoints[0].router, RouterKind::Agent);
+        assert_eq!(
+            agent.recipe("agent-default").unwrap().agent.as_ref().unwrap().max_turns,
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn extensions_block_rejected() {
+        let raw = format!(
+            "{}\nextensions:\n  - name: builtin\n    type: builtin\n",
+            include_str!("../examples/semantic-tiny.yaml")
+        );
+        assert!(RouterDocument::from_yaml_str(&raw).is_err());
     }
 }

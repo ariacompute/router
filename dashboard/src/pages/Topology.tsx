@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { getJson, type Topology as TopologyT } from '../api';
 import styles from './page.module.css';
 
-const ORDER = ['entrypoint', 'recipe', 'signal', 'decision', 'algorithm', 'plugin', 'extension', 'model'];
+const ORDER = ['entrypoint', 'recipe', 'signal', 'decision', 'algorithm', 'plugin', 'builtin', 'model'];
 
 export default function Topology() {
   const [data, setData] = useState<TopologyT | null>(null);
@@ -31,7 +31,7 @@ export default function Topology() {
   return (
     <>
       <h1 className={styles.h1}>Topology</h1>
-      <p>Entrypoint → recipe → signals / decisions / algorithm / plugins or agent extension → models.</p>
+      <p>Entrypoint → recipe → signals / decisions / algorithm / plugins or builtin agent → models.</p>
       <div className={styles.flow}>
         {groups.map(([kind, nodes]) => (
           <div key={kind} className={styles.col}>

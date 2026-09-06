@@ -66,18 +66,22 @@ pub fn topology_graph(doc: &RouterDocument) -> Value {
             }
             RouterKind::Agent => {
                 if let Some(agent) = &recipe.agent {
-                    let xid = format!("extension:{}", agent.extension);
+                    let xid = "builtin".to_string();
+                    let nid = format!("builtin:{xid}");
                     add_node(
                         &mut nodes,
                         &mut seen,
-                        xid.clone(),
-                        "extension",
-                        &agent.extension,
-                        &[],
+                        nid.clone(),
+                        "builtin",
+                        "builtin",
+                        &[
+                            ("max_turns", json!(agent.max_turns.unwrap_or(3))),
+                            ("timeout_ms", json!(agent.timeout_ms.unwrap_or(5000))),
+                        ],
                     );
-                    edges.push(json!({"from": rid, "to": xid}));
+                    edges.push(json!({"from": rid, "to": nid}));
                     if let Some(fb) = &agent.fallback {
-                        edges.push(json!({"from": xid, "to": format!("model:{fb}")}));
+                        edges.push(json!({"from": nid, "to": format!("model:{fb}")}));
                     }
                 }
             }

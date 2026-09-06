@@ -3,8 +3,7 @@ use aria_router_config::{
     resolve_keys_path, resolve_users_path, RouterDocument,
 };
 use aria_router_http::{
-    data_router, ensure_extensions_startable, mgmt_router, mgmt_router_serve_dashboard,
-    AppState, KeyStore, LocalUserStore,
+    data_router, mgmt_router, mgmt_router_serve_dashboard, AppState, KeyStore, LocalUserStore,
 };
 use clap::{ArgAction, Parser, Subcommand};
 use std::io::{self, BufRead, Write};
@@ -361,7 +360,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let config = resolve_config(config)?;
             let doc = RouterDocument::load_path(&config)?;
-            ensure_extensions_startable(&doc)?;
             let bind = bind.unwrap_or_else(|| doc.data_bind());
             let mgmt = mgmt_bind;
             let state = Arc::new(AppState::with_path(doc, PathBuf::from(&config)));

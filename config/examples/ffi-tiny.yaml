@@ -26,10 +26,6 @@ providers:
         - name: primary
           endpoint: 127.0.0.1:9
 
-extensions:
-  - name: builtin
-    type: builtin
-
 entrypoints:
   - model_names: [aria/semantic-auto]
     router: semantic

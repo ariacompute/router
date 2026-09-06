@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-Aria Compute inference gateway: OpenAI-compatible HTTP, two parallel routers (**semantic** YAML v0.3 and **agent** via extensions). Shared providers, hard constraints, and forwarding.
+Aria Compute inference gateway: OpenAI-compatible HTTP, two parallel routers (**semantic** YAML v0.3 and **lightweight builtin agent** with fixed in-process tools + limited turns). Shared providers, hard constraints, and forwarding.
 
 ## Build / Test
 
@@ -14,16 +14,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Config / Run
 
-Routing policy is YAML v0.3 (`--config`). Secrets expand as `${VAR}` / `${VAR:-default}`. `entrypoint.router` must equal `recipe.router`. Semantic recipes must not contain `agent:`; agent recipes must not contain `signals` / `decisions`. Unknown top-level keys fail `validate`. Unimplemented YAML capabilities return `Unsupported` (no silent no-op). Missing `pi` / `deepseek-harness` binaries fail **serve**, not a silent fallback to semantic.
+Routing policy is YAML v0.3 (`--config`). Secrets expand as `${VAR}` / `${VAR:-default}`. `entrypoint.router` must equal `recipe.router`. Semantic recipes must not contain `agent:`; agent recipes must not contain `signals` / `decisions`. Unknown top-level keys fail `validate`. Unimplemented YAML capabilities return `Unsupported` (no silent no-op). There is **no** top-level `extensions` block and no pi / deepseek-harness subprocess.
 
 | Block | Meaning |
 |-------|---------|
 | `listeners` | Data-plane bind (`address` + `port`; default `--bind`) |
 | `providers` | `defaults.default_model` + named models / `backend_refs` |
-| `extensions` | Agent adapters: `builtin` / `pi` / `deepseek-harness` |
 | `entrypoints` | Virtual model names → `router: semantic\|agent` + `recipe` |
-| `recipes` | Semantic `routing.*` or agent `agent.*` |
-| `global` | Observability / classifier assets (optional) |
+| `recipes` | Semantic `routing.*` or agent `agent.*` (endpoint / max_turns / timeout / fallback) |
+| `global` | Auth / keys / users paths (optional) |
 
 Examples (English comments in every file):
 
@@ -31,7 +30,6 @@ Examples (English comments in every file):
 |------|------|
 | [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) / [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) / [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | Gold path — `validate` + `serve` / FFI |
 | [`semantic.yaml`](config/examples/semantic.yaml) | heuristics plus `aria/semantic-catalog` (learned signal + unimplemented algorithm → chat `Unsupported`) |
-| [`agent.yaml`](config/examples/agent.yaml) | `builtin` + `pi` + `deepseek-harness`. `validate` ok; `serve` needs those binaries |
 | [`ffi.yaml`](config/examples/ffi.yaml) | gold `fast-response` plus the same catalog recipe |
 
 ```bash
@@ -237,7 +235,7 @@ Native C ABI (`ariacompute-router-ffi` / `libaria-router_ffi`) plus thin wrapper
 
 C header: [`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init` (in-process YAML), `aria_router_connect` (HTTP to a running `serve`), `aria_router_complete` / `_stream`, `aria_router_models`, `aria_router_last_route`, `aria_router_destroy`, `aria_router_last_error`.
 
-Dynamic lib order: `ARIA_ROUTER_FFI_LIB` → package-bundled path → `~/.ariacompute/lib/`. Instance `setup` is in-memory `base_url` / `token` only and **never** writes `router.yml`. `init` runs semantic and `builtin` agent in-process; `type: pi` / `deepseek-harness` on platforms without subprocess is explicit `Unsupported`.
+Dynamic lib order: `ARIA_ROUTER_FFI_LIB` → package-bundled path → `~/.ariacompute/lib/`. Instance `setup` is in-memory `base_url` / `token` only and **never** writes `router.yml`. `init` runs semantic and in-process builtin agent (fixed tools + `max_turns`); there is no subprocess harness.
 
 ```bash
 cargo test -p ariacompute-router-ffi -p ariacompute-router

@@ -68,16 +68,16 @@ jobs:
           if n != 1:
               sys.exit(f"workspace.package version not found (n={n})")
           text, n = re.subn(
-              r'((?:aria-router-(?:core|config|signal|decision|algorithm|plugin|provider|agent|ext|http)) = \{ path = "[^"]+", version = )"[^"]+"',
+              r'((?:aria-router-(?:core|config|signal|decision|algorithm|plugin|provider|agent|http)) = \{ path = "[^"]+", version = )"[^"]+"',
               rf'\1"{version}"',
               text,
           )
-          if n != 10:
-              sys.exit(f"expected 10 path+version workspace deps, got {n}")
+          if n != 9:
+              sys.exit(f"expected 9 path+version workspace deps, got {n}")
           open(path, "w").write(text)
           print(f"Injected workspace version={version}")
           PY
-          grep -nE '^(version = |aria-router-(core|config|signal|decision|algorithm|plugin|provider|agent|ext|http) = )' Cargo.toml
+          grep -nE '^(version = |aria-router-(core|config|signal|decision|algorithm|plugin|provider|agent|http) = )' Cargo.toml
       - name: Check crates.io token
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -90,7 +90,7 @@ jobs:
         run: |
           cargo check -p aria-router-core -p aria-router-config -p aria-router-signal \
             -p aria-router-decision -p aria-router-algorithm -p aria-router-plugin \
-            -p aria-router-provider -p aria-router-agent -p aria-router-ext \
+            -p aria-router-provider -p aria-router-agent \
             -p aria-router-http -p ariacompute-router-ffi -p ariacompute-router
       - name: Publish to crates.io
         env:
@@ -157,7 +157,6 @@ jobs:
           publish_pkg aria-router-plugin
           publish_pkg aria-router-provider
           publish_pkg aria-router-agent
-          publish_pkg aria-router-ext
           publish_pkg aria-router-http
           publish_pkg ariacompute-router-ffi
           publish_pkg ariacompute-router

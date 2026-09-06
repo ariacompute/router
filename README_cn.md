@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-Aria Compute 推理网关：OpenAI 兼容 HTTP，两种并列决策器（**semantic** YAML v0.3 与 **agent** extensions）。共享 providers、硬约束与转发。
+Aria Compute 推理网关：OpenAI 兼容 HTTP，两种并列决策器（**semantic** YAML v0.3 与 **轻量 builtin agent**：进程内固定工具 + 限 turns）。共享 providers、硬约束与转发。
 
 ## 构建 / 测试
 
@@ -14,16 +14,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## 配置 / 运行
 
-路由策略为 YAML v0.3（`--config`）。密钥用 `${VAR}` / `${VAR:-default}` 展开。`entrypoint.router` 必须等于 `recipe.router`。Semantic recipe 禁止出现 `agent:`；agent recipe 禁止出现 `signals` / `decisions`。未知顶层键 → `validate` 失败。未实现的 YAML 能力返回 `Unsupported`（禁止静默空实现）。未安装 `pi` / `deepseek-harness` 二进制时 **serve 失败**，不会静默改走 semantic。
+路由策略为 YAML v0.3（`--config`）。密钥用 `${VAR}` / `${VAR:-default}` 展开。`entrypoint.router` 必须等于 `recipe.router`。Semantic recipe 禁止出现 `agent:`；agent recipe 禁止出现 `signals` / `decisions`。未知顶层键 → `validate` 失败。未实现的 YAML 能力返回 `Unsupported`（禁止静默空实现）。**无**顶层 `extensions`，不做 pi / deepseek-harness 子进程。
 
 | 块 | 含义 |
 |----|------|
 | `listeners` | 数据面绑定（`address` + `port`；`--bind` 默认值） |
 | `providers` | `defaults.default_model` + 具名模型 / `backend_refs` |
-| `extensions` | Agent 适配：`builtin` / `pi` / `deepseek-harness` |
 | `entrypoints` | 虚拟模型名 → `router: semantic\|agent` + `recipe` |
-| `recipes` | Semantic 的 `routing.*` 或 agent 的 `agent.*` |
-| `global` | 可观测 / 分类器资产（可选） |
+| `recipes` | Semantic 的 `routing.*` 或 agent 的 `agent.*`（endpoint / max_turns / timeout / fallback） |
+| `global` | 鉴权 / keys / users 路径（可选） |
 
 示例（YAML 内注释为英文）：
 
@@ -31,7 +30,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 |------|------|
 | [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) / [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) / [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | 黄金路径 — 可 `validate` + `serve` / FFI |
 | [`semantic.yaml`](config/examples/semantic.yaml) | 启发式 + `aria/semantic-catalog`（learned signal 与未实现 algorithm → chat `Unsupported`） |
-| [`agent.yaml`](config/examples/agent.yaml) | `builtin` + `pi` + `deepseek-harness`。`validate` 通过；`serve` 需本机二进制 |
 | [`ffi.yaml`](config/examples/ffi.yaml) | 黄金 `fast-response` + 同上 catalog recipe |
 
 ```bash
@@ -230,7 +228,7 @@ C ABI（`ariacompute-router-ffi` / `libaria-router_ffi`）加 `bindings/` 薄封
 
 C 头文件：[`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init`（进程内加载 YAML）、`aria_router_connect`（HTTP 连已运行的 `serve`）、`aria_router_complete` / `_stream`、`aria_router_models`、`aria_router_last_route`、`aria_router_destroy`、`aria_router_last_error`。
 
-动态库顺序：`ARIA_ROUTER_FFI_LIB` → 包内捆绑路径 → `~/.ariacompute/lib/`。实例 `setup` 仅内存 `base_url` / `token`，**禁止**写 `router.yml`。`init` 进程内跑 semantic 与 `builtin` agent；无 subprocess 的平台上 `type: pi` / `deepseek-harness` 显式 `Unsupported`。
+动态库顺序：`ARIA_ROUTER_FFI_LIB` → 包内捆绑路径 → `~/.ariacompute/lib/`。实例 `setup` 仅内存 `base_url` / `token`，**禁止**写 `router.yml`。`init` 进程内跑 semantic 与轻量 builtin agent（固定工具 + `max_turns`）；无 subprocess harness。
 
 ```bash
 cargo test -p ariacompute-router-ffi -p ariacompute-router

@@ -8,16 +8,13 @@ mod serve_account;
 mod auth_api;
 mod embed;
 
-use aria_router_agent::{task_from, AgentExtension, BuiltinExtension, FakeExtension};
+use aria_router_agent::{request_view, task_from, BuiltinAgent, ToolRuntime};
 use aria_router_algorithm::{hard_filter, select, RuntimeStats};
-use aria_router_config::{
-    resolve_keys_path, resolve_users_path, ExtensionCfg, Recipe, RouterDocument,
-};
+use aria_router_config::{resolve_keys_path, resolve_users_path, Recipe, RouterDocument};
 use aria_router_core::{
     ChatRequest, RouteDecision, RouterError, RouterKind,
 };
 use aria_router_decision::select_decision;
-use aria_router_ext::SubprocessExtension;
 use aria_router_plugin::{apply_request, extra_headers, remember_response, PluginHost, PluginOutcome};
 use aria_router_provider::{forward, forward_sse_text, PoolState};
 use aria_router_signal::extract;
@@ -353,7 +350,6 @@ fn parse_config_body(raw: &str) -> Result<RouterDocument, RouterError> {
 }
 
 fn replace_config(st: &AppState, doc: RouterDocument, raw: &str) -> Result<(), RouterError> {
-    ensure_extensions_startable(&doc)?;
     if !st.config_path.as_os_str().is_empty() {
         std::fs::write(&st.config_path, raw).map_err(|e| {
             RouterError::Io(format!("write {}: {e}", st.config_path.display()))
@@ -1022,19 +1018,24 @@ async fn route_agent(
         .agent
         .as_ref()
         .ok_or_else(|| RouterError::Config("missing agent".into()))?;
-    let ext_cfg = doc
-        .extensions
-        .iter()
-        .find(|e| e.name == agent.extension)
-        .cloned()
-        .ok_or_else(|| RouterError::Config("extension not found".into()))?;
     let all_names: Vec<String> = doc.providers.models.iter().map(|m| m.name.clone()).collect();
     let eligible = hard_filter(doc, &all_names, Some("local"), Some("text"));
     if eligible.is_empty() {
         return Err(RouterError::FailClosed("no eligible models after hard constraints".into()));
     }
-    let task = task_from(&req, eligible.clone(), agent, &ext_cfg);
-    let mut decision = invoke_extension(st, &ext_cfg, agent, task).await?;
+    let task = task_from(&req, eligible.clone(), agent);
+    let tools = ToolRuntime {
+        latency_ms: st.pool.latency_map(),
+        failures: st.pool.failures_map(),
+        request_view: request_view(&req),
+    };
+    let canned = st.fake_agents.lock().unwrap().get("builtin").cloned();
+    let builtin = BuiltinAgent {
+        endpoint: agent.endpoint.clone(),
+        model: agent.model.clone().unwrap_or_else(|| "router-llm".into()),
+        canned,
+    };
+    let mut decision = builtin.route(task, &tools).await?;
     decision.layer = "agent".into();
     if let Some(fb) = &agent.fallback {
         if !eligible.iter().any(|e| e.name == decision.model) {
@@ -1052,38 +1053,6 @@ async fn route_agent(
     let mut fwd = req;
     fwd.model = decision.model.clone();
     Ok((decision, fwd, None, vec![]))
-}
-
-async fn invoke_extension(
-    st: &AppState,
-    ext: &ExtensionCfg,
-    agent: &aria_router_config::AgentRecipe,
-    task: aria_router_agent::RouteTask,
-) -> Result<RouteDecision, RouterError> {
-    let canned = st.fake_agents.lock().unwrap().get(&ext.name).cloned();
-    if let Some(fake) = canned {
-        let f = FakeExtension {
-            name: ext.name.clone(),
-            decision: Ok(fake),
-        };
-        return f.route(task).await;
-    }
-    match ext.ext_type.as_str() {
-        "builtin" => {
-            let b = BuiltinExtension {
-                endpoint: agent.endpoint.clone().or(ext.endpoint.clone()),
-                model: agent.model.clone().unwrap_or_else(|| "router-llm".into()),
-                canned: None,
-            };
-            b.route(task).await
-        }
-        "pi" | "deepseek-harness" => {
-            let sub = SubprocessExtension { cfg: ext.clone() };
-            sub.ensure_binary()?;
-            sub.route(task).await
-        }
-        other => Err(RouterError::Unsupported(format!("extension type {other}"))),
-    }
 }
 
 fn metadata_from_headers(h: &HeaderMap) -> HashMap<String, String> {
@@ -1122,20 +1091,6 @@ impl IntoResponse for AppError {
     }
 }
 
-pub fn ensure_extensions_startable(doc: &RouterDocument) -> Result<(), RouterError> {
-    for ext in &doc.extensions {
-        match ext.ext_type.as_str() {
-            "builtin" => {}
-            "pi" | "deepseek-harness" => {
-                SubprocessExtension { cfg: ext.clone() }.ensure_binary()?;
-            }
-            other => return Err(RouterError::Config(format!("unknown extension type {other}"))),
-        }
-    }
-    Ok(())
-}
-
-/// `(active, revoked)` for CLI `--status`.
 pub fn load_keys_for_status(path: &FsPath) -> Result<(usize, usize), RouterError> {
     Ok(KeyStore::load(path)?.counts())
 }
@@ -1143,8 +1098,6 @@ pub fn load_keys_for_status(path: &FsPath) -> Result<(usize, usize), RouterError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aria_router_config::ExtensionCfg;
-    use aria_router_ext::SubprocessExtension;
     use crate::keys::ExchangeInput;
     use crate::serve_account::ServeUserInfo;
     use axum::body::to_bytes;
@@ -1189,9 +1142,6 @@ providers:
       backend_refs:
         - name: primary
           endpoint: {backend}
-extensions:
-  - name: builtin
-    type: builtin
 entrypoints:
   - model_names: [aria/semantic-auto]
     router: semantic
@@ -1222,7 +1172,8 @@ recipes:
   - name: agent-default
     router: agent
     agent:
-      extension: builtin
+      max_turns: 3
+      timeout_ms: 5000
       fallback: local/general
 global:
   require_api_key: false
@@ -1422,7 +1373,7 @@ global:
     }
 
     #[tokio::test]
-    async fn sse_and_upsert_and_missing_ext() {
+    async fn sse_and_upsert() {
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
         let (st, _dir) = isolated_state(doc);
@@ -1467,23 +1418,6 @@ global:
             .await
             .unwrap();
         assert_eq!(res.status(), 200);
-
-        let mut missing = ExtensionCfg {
-            name: "pi".into(),
-            ext_type: "pi".into(),
-            command: vec!["aria-router-pi-not-installed".into()],
-            workdir: None,
-            timeout_ms: Some(10),
-            env: Default::default(),
-            endpoint: None,
-        };
-        let err = SubprocessExtension { cfg: missing.clone() }
-            .ensure_binary()
-            .unwrap_err();
-        assert!(err.to_string().contains("not found"));
-        missing.ext_type = "deepseek-harness".into();
-        missing.command = vec!["aria-router-dsh-not-installed".into()];
-        assert!(SubprocessExtension { cfg: missing }.ensure_binary().is_err());
     }
 
     async fn oneshot_json(app: Router, req: Request<Body>) -> (StatusCode, Value) {
@@ -1570,10 +1504,10 @@ global:
         assert!(kinds.contains(&"signal"));
         assert!(kinds.contains(&"decision"));
         assert!(kinds.contains(&"model"));
-        assert!(kinds.contains(&"extension"));
+        assert!(kinds.contains(&"builtin"));
         let ids: Vec<&str> = nodes.iter().filter_map(|n| n["id"].as_str()).collect();
         assert!(ids.iter().any(|id| id.contains("needs_explain")));
-        assert!(ids.contains(&"extension:builtin"));
+        assert!(ids.contains(&"builtin:builtin"));
         assert!(ids.contains(&"model:local/general"));
     }
 

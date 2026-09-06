@@ -38,10 +38,6 @@ providers:
 global:
   require_api_key: false
 
-extensions:
-  - name: builtin
-    type: builtin
-
 entrypoints:
   - model_names: [aria/semantic-auto]
     router: semantic

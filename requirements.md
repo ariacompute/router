@@ -1,16 +1,16 @@
 # requirements.md — aria router（Rust）
 
-> 本文件为 `router` 仓库 **Semantic + Agent 并列网关 / OpenAI 兼容 HTTP / 八语言 SDK** 的功能边界、API、配置、异常与验收标准。**须经人工逐项审核**，审核通过后方可据其生成 / 执行 `task.md`。
+> 本文件为 `router` 仓库 **Semantic + 轻量 Builtin Agent 并列网关 / OpenAI 兼容 HTTP / 八语言 SDK** 的功能边界、API、配置、异常与验收标准。**须经人工逐项审核**，审核通过后方可据其生成 / 执行 `task.md`。
 >
-> 架构参考：[vLLM Semantic Router](https://github.com/vllm-project/semantic-router) YAML v0.3（运行时对等，不做 Operator/Envoy）；运维 Dashboard 对齐其 dashboard 的 Config / Topology / Playground / Replay，不接 Grafana / ML / Security。agent 面参考 [earendil-works/pi](https://github.com/earendil-works/pi) JSONL RPC 与 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 进程接入。
+> 架构参考：[vLLM Semantic Router](https://github.com/vllm-project/semantic-router) YAML v0.3（运行时对等，不做 Operator/Envoy）；运维 Dashboard 对齐其 dashboard 的 Config / Topology / Playground / Replay，不接 Grafana / ML / Security。Agent 面为 **进程内** 定制 builtin（少量固定工具 + 限 turns），不做 pi / deepseek-harness 子进程。
 
 ## 1. 目标与范围
 
-用 **Rust** 实现独立 OpenAI 兼容网关：按 entrypoint 选择 **semantic** 或 **agent** 决策器，在硬约束剪枝后选择或组合 provider 路径并转发。
+用 **Rust** 实现独立 OpenAI 兼容网关：按 entrypoint 选择 **semantic** 或 **agent**（builtin）决策器，在硬约束剪枝后选择或组合 provider 路径并转发。
 
 - **产品面**：`aria-router` CLI（`setup` / `validate` / `serve`）+ 进程内库 + C ABI + 八语言 SDK。
-- **两种 router**：`semantic`（signals → Boolean recipe → algorithm）与 `agent`（LLM agent + extensions）并列；共享 listeners / providers / 硬约束 / 转发 / replay。
-- **不做**：Operator、Helm、官网、Python `vllm-sr`、Envoy ExtProc、Grafana / Prometheus、ML wizard、Security Policy、wizmap、fleet-sim、把 TS harness 链进 crate。
+- **两种 router**：`semantic`（signals → Boolean recipe → algorithm）与 `agent`（轻量进程内 builtin：固定工具 + `max_turns`）并列；共享 listeners / providers / 硬约束 / 转发 / replay。
+- **不做**：Operator、Helm、官网、Python `vllm-sr`、Envoy ExtProc、Grafana / Prometheus、ML wizard、Security Policy、wizmap、fleet-sim、pi / deepseek-harness / 可插拔 `extensions`、把 TS harness 链进 crate。
 - **与 engine**：engine 仅本地推理；可选向本网关注册为 provider。本仓 SDK 与 `ariacompute-engine` **两套包**，`.so` 名互不覆盖。
 
 ### 1.1 阶段
@@ -18,10 +18,9 @@
 | 阶段 | 名称 | 交付深度 |
 |------|------|----------|
 | **A-semantic** | 黄金路径 | YAML 加载、keyword、Boolean、static、chat/SSE、bypass、fail closed |
-| **A-agent** | 并列黄金路径 | `builtin` tool-call JSON、硬剪枝、越权拒绝、与 semantic 入口隔离 |
+| **A-agent** | 并列黄金路径 | 进程内 builtin tool-loop、硬剪枝、越权拒绝、与 semantic 入口隔离 |
 | **B** | 启发式管线 | 启发式 signals、projections、latency-aware / multi-factor、核心 plugins |
 | **C** | 运行时对等 | learned signals（ONNX feature `ml`）、剩余 algorithm/looper/plugin；未实现显式 Unsupported |
-| **D** | 第三方 extensions | `pi` JSONL RPC、`deepseek-harness` 进程；CI 用 mock command |
 | **E** | SDK | C ABI + 八语言；`cases.json`；`run-binding-tests.sh` |
 | **F-dashboard** | 运维面 | 管理面 SPA：Overview / Config（可写热重载）/ Topology / Providers / Replay / Playground |
 | **G-cost** | 成本 + API key | 六因子成本账本；YAML `pricing`；Dashboard「API 密钥」签发；数据面 / provider 注册 Bearer；engine 传 `router_api_key` |
@@ -42,9 +41,9 @@
 
 | # | 特性 | 实现深度 |
 |---|------|----------|
-| 1 | **config** | YAML v0.3 结构：`version` / `listeners` / `providers` / `extensions` / `entrypoints` / `recipes` / `global`；`${VAR}` 替换；引用校验 |
+| 1 | **config** | YAML v0.3 结构：`version` / `listeners` / `providers` / `entrypoints` / `recipes` / `global`；`${VAR}` 替换；引用校验；**无**顶层 `extensions` |
 | 2 | **semantic** | signals、projections、Boolean AST、priority/confidence、algorithms、plugins |
-| 3 | **agent** | `AgentExtension`；`builtin` / `pi` / `deepseek-harness`；schema 校验；timeout / max_turns |
+| 3 | **agent** | 进程内 `BuiltinAgent`；固定工具 + `max_turns` / `timeout_ms`；schema 校验 |
 | 4 | **provider** | OpenAI 兼容转发、加权 `backend_refs`、health、latency 采样 |
 | 5 | **http** | 数据面 `:8899` chat/SSE/`/v1/models`；管理面默认 `127.0.0.1` health/validate/replay/providers + Dashboard API |
 | 6 | **ffi** | `libaria-router_ffi`：init/connect/complete/stream/models/last_route |
@@ -60,7 +59,7 @@
 - Envoy ExtProc、Operator、Helm、fleet-sim、Grafana / Prometheus、ML Setup、Security Policy、wizmap、独立 dashboard 端口 / 本地 OIDC/SSO（本地仅用户名+密码）
 - Hybrid 本增量用 `bfvk` 转发 gateway（仅存储与鉴权分桶）；邮箱验证码；自助注册升 admin
 - 硬 quota、Slack 告警、把 Dashboard `sk-aria_` 当 HF/ModelScope token
-- Vendoring Pi / DeepSeek Harness 源码
+- Vendoring / 子进程接入 Pi / DeepSeek Harness；YAML 自定义 tools
 - 在 Rust 内重写 Cordis
 
 ## 3. API 边界
@@ -91,11 +90,13 @@ providers:
       pricing:                    # 可选；USD / 百万 token
         input_per_mtok: 0.15
         output_per_mtok: 0.60
-extensions: []
 entrypoints:
   - model_names: [aria/semantic-auto]
     router: semantic
     recipe: mom
+  - model_names: [aria/agent-auto]
+    router: agent
+    recipe: agent-default
 recipes:
   - name: mom
     router: semantic
@@ -103,6 +104,14 @@ recipes:
       strategy: priority
       signals: { keywords: [...] }
       decisions: [...]
+  - name: agent-default
+    router: agent
+    agent:
+      endpoint: ${ROUTER_LLM_URL:-}
+      model: router-llm
+      timeout_ms: 5000
+      max_turns: 3
+      fallback: local/general
 global:
   require_api_key: true           # default true；false → 数据面可不带 Bearer
   allow_register: true            # Dashboard 普通用户自助注册
@@ -129,23 +138,21 @@ global:
 - Looper（C）：`confidence`、`fusion`、`ratings`、`remom`、`workflows`。
 - Plugins：B 至少 `header-mutation`、`request-params`、`system-prompt`、`fast-response`、`response-cache`（exact）；C 其余引用即须实现或 Unsupported。
 
-### 3.4 Agent
+### 3.4 Agent（轻量 builtin）
 
-`RouteDecision { model, algorithm?, reason, confidence }`。`model` ∈ eligible pool。
+`RouteDecision { model, algorithm?, reason, confidence }`。`model` ∈ 硬剪枝后 eligible pool。
 
-Tools（Rust 实现）：`list_eligible_models`、`get_backend_health`、`get_recent_latency`、`get_request_view`（脱敏）。
+进程内 OpenAI 兼容 chat + **固定** tool_calls 环（不可 YAML 扩展）：
 
-Extensions：
+| Tool | 作用 |
+|------|------|
+| `list_eligible_models` | 候选 name / locality / modality / capabilities |
+| `get_backend_health` | 候选健康（failures 计数） |
+| `get_recent_latency` | 近期延迟采样（若有） |
+| `get_request_view` | 脱敏请求摘要 |
+| `submit_route` | **终态**：`{model, reason, confidence?, algorithm?}` |
 
-| type | 接入 | 阶段 |
-|------|------|------|
-| `builtin` | 进程内对 OpenAI 兼容路由模型 tool-call；单测可注入假客户端 | A-agent |
-| `pi` | subprocess `pi --mode rpc` JSONL | D |
-| `deepseek-harness` | subprocess `command` + `workdir`；IPC = stdin JSON 一行决策（与 mock 一致） | D |
-
-未知 type → validate 失败。缺二进制 → serve 失败。超时/非 JSON/越权 → fail closed 或 recipe `fallback`（须为已声明 default）。
-
-移动 / 无 subprocess：`pi`/`deepseek-harness` → `Unsupported`。
+约束：`max_turns` 默认 3、clamp ≤8；`timeout_ms` 默认 5000（整段 loop）；无 `endpoint` → first-eligible / 测试 canned。超时 / 超 turns / 非法 JSON / 越权 → fail closed，或 recipe `fallback`（须为已声明 provider）。禁止 shell / 任意 HTTP / 文件 IO / 动态注册 tool。
 
 ### 3.5 HTTP
 
@@ -175,7 +182,7 @@ CLI：`aria-router setup` 仅 template + admin（默认 `allow_register=true`、
 
 ### 3.6 错误
 
-`RouterError::{Io, Config, Unsupported, InvalidParam, FailClosed, Upstream, Timeout, Extension, Unauthorized}`。禁止 panic 当控制流。
+`RouterError::{Io, Config, Unsupported, InvalidParam, FailClosed, Upstream, Timeout, Extension, Unauthorized}`（`Extension` 用于 builtin LLM/tool 路径故障）。禁止 panic 当控制流。
 
 ### 3.7 FFI / SDK
 
@@ -202,12 +209,11 @@ C API（`include/aria_router.h`）：
 ## 4. 验收
 
 - A-semantic：keyword 命中转发；实名 bypass；无路径 fail closed；SSE 至少 1 chunk。
-- A-agent：合法 JSON 采纳；非法/越权/超时 fail closed；与 semantic 入口不串扰。
+- A-agent：`submit_route` / 合法终态采纳；工具结果正确；非法/越权/超时/超 `max_turns` fail closed；与 semantic 入口不串扰。
 - B：启发式 + 三算法 + 五插件单测。
 - C：learned 无权重且被引用 → Unsupported；未知 algorithm 同。
-- D：pi/dsh mock command 产出决策；缺 command 启动失败。
 - E：八语言跑通 `cases.json` 黄金项。
-- F：`PUT /v1/router/config` 非法 YAML 不改文档；合法 tiny YAML 热重载；topology 对 semantic-tiny / agent-tiny 有预期节点；`POST /v1/router/chat` 走 keyword / fake-agent 黄金路径；`--no-dashboard` 时 `/` 不提供 SPA。
+- F：`PUT /v1/router/config` 非法 YAML 不改文档；合法 tiny YAML 热重载；topology 对 semantic-tiny / agent-tiny 有预期节点；`POST /v1/router/chat` 走 keyword / canned-agent 黄金路径；`--no-dashboard` 时 `/` 不提供 SPA。
 - G：带 `usage` 的 mock chat 计入账本；无 usage → estimate；无 pricing → `cost=0` 且 `priced=false`；`require_api_key: true` 无 Bearer 聊天与 PUT providers → 401；合法 key → 200 且 `by_key` 有 id；吊销后 401；Cost JSON 含六因子键。
 - H：register→login；`allow_register=false` 拒注册；无用户 register→503；session 门控 keys；OAuth 为 keys `kind=oauth`；`sk-bf-` Bearer → `by_serve_user`；engine 单一 `router_api_key`（双前缀）。
 
@@ -215,7 +221,7 @@ C API（`include/aria_router.h`）：
 
 ```
 router/
-  config/ signal/ decision/ algorithm/ plugin/ provider/ agent/ ext/ http/ bin/ ffi/
+  config/ signal/ decision/ algorithm/ plugin/ provider/ agent/ http/ bin/ ffi/
   dashboard/   # Vite React SPA；产物 dashboard/dist 由管理面托管
   bindings/{rust,python,go,typescript,react-native,flutter,swift,kotlin,testdata}/
   bench/       # Python report-only 路由 / DRACO 评测（§6）

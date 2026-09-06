@@ -3,12 +3,11 @@ name = "aria-router-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Agent router orchestration and builtin extension"
+description = "Lightweight in-process builtin agent for aria-router"
 
 [dependencies]
 aria-router-core.workspace = true
 aria-router-config.workspace = true
-async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
