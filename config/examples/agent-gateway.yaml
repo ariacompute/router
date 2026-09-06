@@ -1,0 +1,71 @@
+# Gateway agent gold path (YAML v0.3).
+# Entrypoint: aria/agent-auto. Builtin agent decides among ariamodel-{small,mid,large}.
+# Agent LLM + backends: Aria Gateway (cloud/gateway).
+# Requires: export GATEWAY_API_KEY=…  (never commit secrets).
+# entrypoint.router must equal recipe.router.
+
+version: v0.3
+
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+
+providers:
+  defaults:
+    default_model: ariacompute/ariamodel-mid
+  models:
+    - name: ariacompute/ariamodel-small
+      provider_model_id: ariacompute/ariamodel-small
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://gateway.ariacompute.com
+          protocol: http
+          weight: 100
+          api_key_env: ${GATEWAY_API_KEY:-}
+    - name: ariacompute/ariamodel-mid
+      provider_model_id: ariacompute/ariamodel-mid
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://gateway.ariacompute.com
+          protocol: http
+          weight: 100
+          api_key_env: ${GATEWAY_API_KEY:-}
+    - name: ariacompute/ariamodel-large
+      provider_model_id: ariacompute/ariamodel-large
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://gateway.ariacompute.com
+          protocol: http
+          weight: 100
+          api_key_env: ${GATEWAY_API_KEY:-}
+
+entrypoints:
+  - model_names: [aria/agent-auto]
+    router: agent
+    recipe: agent-default
+
+recipes:
+  - name: agent-default
+    router: agent
+    agent:
+      endpoint: https://gateway.ariacompute.com
+      model: ariacompute/ariamodel-mid
+      timeout_ms: 30000
+      max_turns: 3
+      fallback: ariacompute/ariamodel-mid
+      prompt: |
+        Use tools if needed, then submit_route with one eligible model
+        (prefer ariamodel-large for explanations; ariamodel-small for short factual asks).
+
+global:
+  require_api_key: false

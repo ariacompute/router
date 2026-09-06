@@ -1,0 +1,86 @@
+# Gateway semantic gold path (YAML v0.3).
+# Entrypoint: aria/semantic-auto. Keyword "explain" / "walk me through" → ariamodel-large;
+# otherwise default → ariamodel-small. Backends: Aria Gateway (cloud/gateway).
+# Requires: export GATEWAY_API_KEY=…  (expanded via api_key_env; never commit secrets).
+# entrypoint.router must equal recipe.router.
+
+version: v0.3
+
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+
+providers:
+  defaults:
+    default_model: ariacompute/ariamodel-mid
+  models:
+    - name: ariacompute/ariamodel-small
+      provider_model_id: ariacompute/ariamodel-small
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://gateway.ariacompute.com
+          protocol: http
+          weight: 100
+          api_key_env: ${GATEWAY_API_KEY:-}
+    - name: ariacompute/ariamodel-mid
+      provider_model_id: ariacompute/ariamodel-mid
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://gateway.ariacompute.com
+          protocol: http
+          weight: 100
+          api_key_env: ${GATEWAY_API_KEY:-}
+    - name: ariacompute/ariamodel-large
+      provider_model_id: ariacompute/ariamodel-large
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://gateway.ariacompute.com
+          protocol: http
+          weight: 100
+          api_key_env: ${GATEWAY_API_KEY:-}
+
+entrypoints:
+  - model_names: [aria/semantic-auto]
+    router: semantic
+    recipe: mom
+
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain", "walk me through"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: ariacompute/ariamodel-large
+        - name: default_small
+          priority: 1
+          rules:
+            operator: AND
+            conditions: []
+          modelRefs:
+            - model: ariacompute/ariamodel-small
+
+global:
+  require_api_key: false

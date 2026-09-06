@@ -28,9 +28,14 @@ Examples (English comments in every file):
 
 | File | Role |
 |------|------|
-| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) / [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) / [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | Gold path — `validate` + `serve` / FFI |
-| [`semantic.yaml`](config/examples/semantic.yaml) | heuristics plus `aria/semantic-catalog` (learned signal + unimplemented algorithm → chat `Unsupported`) |
-| [`ffi.yaml`](config/examples/ffi.yaml) | gold `fast-response` plus the same catalog recipe |
+| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | Daily semantic gold path — `aria/semantic-auto`; keyword heuristics → `local/general`; `validate` + `serve` with no ML weights |
+| [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — gold `aria/semantic-auto` plus `aria/semantic-catalog` (learned signal + unimplemented algorithm → chat `Unsupported`); prefer tiny for demos |
+| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — pool `ariamodel-{small,mid,large}` via `cloud/gateway` (`https://gateway.ariacompute.com`); keyword → large, else small; needs `GATEWAY_API_KEY` |
+| [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | Daily agent gold path — `aria/agent-auto`; in-process builtin tool-loop (no `endpoint` → first-eligible); demos / CI |
+| [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — symmetric to `semantic.yaml`: gold `aria/agent-auto` plus `aria/agent-catalog` (intentional `Unsupported`); prefer tiny / gateway for demos |
+| [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — same three cloud models; builtin agent LLM + backends through `cloud/gateway`; needs `GATEWAY_API_KEY` |
+| [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | FFI / binding gold path — `fast-response` canned completion (no upstream); prefer in `cases.json` / `run-binding-tests.sh` |
+| [`ffi.yaml`](config/examples/ffi.yaml) | FFI catalog — gold `fast-response` plus the same Unsupported catalog recipe as `semantic.yaml`; prefer `ffi-tiny` in binding tests |
 
 ```bash
 # Setup — template + admin (require_api_key / allow_register / OAuth via YAML or Dashboard)
@@ -38,23 +43,52 @@ aria-router setup
 aria-router setup --status
 # Flags: --template --admin-user --admin-password
 
-# Validate (default path, or pass --config)
+# Validate (default path after setup, or pass --config)
 aria-router validate
 cargo run -p aria-router -- validate --config config/examples/semantic-tiny.yaml
+cargo run -p aria-router -- validate --config config/examples/semantic.yaml
+cargo run -p aria-router -- validate --config config/examples/semantic-gateway.yaml
+cargo run -p aria-router -- validate --config config/examples/agent-tiny.yaml
+cargo run -p aria-router -- validate --config config/examples/agent.yaml
+cargo run -p aria-router -- validate --config config/examples/agent-gateway.yaml
 
-# Serve — data plane from YAML listeners (semantic-tiny: 127.0.0.1:8899);
+# Serve — data plane from YAML listeners (examples use 127.0.0.1:8899);
 # management defaults to 127.0.0.1:8080. Omit --config after setup.
-cargo run -p aria-router -- serve --config config/examples/semantic-tiny.yaml
-aria-router serve --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090
+# Keep --mgmt-bind off engine's 8080 if you will register aria-engine.
 
-# Explicit binds (keep mgmt off engine's 8080 if you will register aria-engine)
+# Daily semantic gold path (aria/semantic-auto → local/general)
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
+# Semantic catalog (aria/semantic-auto + aria/semantic-catalog; catalog chat → Unsupported)
+cargo run -p aria-router -- serve \
+  --config config/examples/semantic.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+# Daily agent gold path (aria/agent-auto; builtin tool-loop)
 cargo run -p aria-router -- serve \
   --config config/examples/agent-tiny.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+# Agent catalog (aria/agent-auto + aria/agent-catalog; catalog chat → Unsupported)
+cargo run -p aria-router -- serve \
+  --config config/examples/agent.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+# Aria Gateway backends (export GATEWAY_API_KEY first; YAML uses ${GATEWAY_API_KEY:-})
+export GATEWAY_API_KEY=…   # do not commit
+cargo run -p aria-router -- serve \
+  --config config/examples/semantic-gateway.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+cargo run -p aria-router -- serve \
+  --config config/examples/agent-gateway.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 ```
@@ -322,10 +356,53 @@ Suggested binds when comparing side-by-side: **aria-router `:8899`**, **vLLM SR 
 
 Quality modes for routing/research (`--quality`): `label`, `overlap`, `judge` (needs `--judge-url`).
 
+Two common tracks (same `routing` / `compare` CLIs; different what you measure):
+
+| Track | What runs | Flags | Measures |
+|-------|-----------|-------|----------|
+| Gateway pool-only | Chat **directly** at Aria Gateway model URLs | `--pool` + `--model-id` + `--api-key` only; **no** `--router` | Backend quality / cost ladder among `ariamodel-{small,mid,large}` (no local router process) |
+| Multi-router ladder | Chat via **live routers**, then (optionally) shared pools | `--router` + `--entrypoint` / `--pick-header`, plus `--pool` for always/oracle baselines | Router pick quality (aria-router vs vLLM SR, etc.) on ADR-040 / MCQ |
+
+Optional middle step: serve `semantic-gateway` / `agent-gateway` locally and add `--router aria_router=…` to the Gateway track so picks go through the router into the same cloud pool.
+
 ```bash
 python -m unittest discover -s bench/tests -t .
 
-# Multi-router ADR-040 ladder (aria vs vLLM SR)
+# --- Track A: Aria Gateway pool-only (no local router required) ---
+export GATEWAY_BASE=https://gateway.ariacompute.com
+export GATEWAY_API_KEY=…   # do not commit
+# Adapt expected_model to ariacompute/ariamodel-{small,large} (see out/routing_gateway.json)
+
+python -m bench routing \
+  --pool small=$GATEWAY_BASE --pool mid=$GATEWAY_BASE --pool large=$GATEWAY_BASE \
+  --model-id small=ariacompute/ariamodel-small \
+  --model-id mid=ariacompute/ariamodel-mid \
+  --model-id large=ariacompute/ariamodel-large \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --quality label \
+  --corpus ./out/routing_gateway.json \
+  --report ./out/gateway_routing.json
+
+python -m bench compare \
+  --pool small=$GATEWAY_BASE --pool mid=$GATEWAY_BASE --pool large=$GATEWAY_BASE \
+  --model-id small=ariacompute/ariamodel-small \
+  --model-id mid=ariacompute/ariamodel-mid \
+  --model-id large=ariacompute/ariamodel-large \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --corpus bench/corpus/mmlu_tiny.jsonl \
+  --report ./out/gateway_compare.json
+
+# Optional: serve semantic-gateway or agent-gateway, then append to the commands above:
+#   --router aria_router=http://127.0.0.1:8899 \
+#   --entrypoint aria_router=aria/semantic-auto \   # or aria/agent-auto
+#   --pick-header aria_router=x-aria-router-model
+```
+
+```bash
+# --- Track B: multi-router ADR-040 ladder (aria-router vs vLLM Semantic Router) ---
+# Requires local aria-router (:8899), vLLM SR (:8890), and pool backends (:9001+ / :8000).
+# --router evaluates live pick quality; --pool still runs always_* / oracle baselines.
+
 python -m bench routing \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
@@ -338,7 +415,7 @@ python -m bench routing \
   --corpus bench/corpus/routing_tiny.json \
   --report ./out/vs_vsr_routing.json
 
-# MCQ compare (accuracy / latency / tokens)
+# MCQ compare (accuracy / latency / tokens) through each router
 python -m bench compare \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \

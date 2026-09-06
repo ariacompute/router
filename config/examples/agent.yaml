@@ -1,0 +1,104 @@
+# Catalog agent config (YAML v0.3).
+# Gold-path entrypoint: aria/agent-auto (builtin agent; no endpoint → first-eligible).
+# Daily demos prefer agent-tiny.yaml or agent-gateway.yaml.
+# Catalog entrypoint: aria/agent-catalog — validate succeeds; chat is Unsupported
+#   (recipe documents an intentionally invalid agent.model name for catalog demos).
+# Symmetric to semantic.yaml. Secrets: ${VAR} / ${VAR:-default}.
+# entrypoint.router must equal recipe.router.
+
+version: v0.3
+
+listeners:
+  - name: http-8899
+    address: 127.0.0.1
+    port: 8899
+    timeout: 300s
+
+# Named models. Recipes only reference local/*; private/cloud are catalog examples
+# (bypass or add to eligible set when Location pruning should see them).
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/fast
+      provider_model_id: echo-fast
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:8000
+          protocol: http
+          weight: 70
+          api_key_env: ${ARIA_UPSTREAM_KEY:-}
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:8000
+          protocol: http
+          weight: 100
+          api_key_env: ${ARIA_UPSTREAM_KEY:-}
+    - name: private/general
+      provider_model_id: private-echo
+      locality: private
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 10.0.0.10:8000
+          protocol: http
+          weight: 100
+          api_key_env: ${ARIA_PRIVATE_KEY:-}
+      pricing:
+        input_per_mtok: 0.05
+        output_per_mtok: 0.15
+    - name: cloud/general
+      provider_model_id: cloud-echo
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          base_url: https://api.example.com/v1
+          protocol: http
+          weight: 100
+          api_key_env: ${ARIA_CLOUD_KEY:-}
+      pricing:
+        input_per_mtok: 0.15
+        output_per_mtok: 0.60
+
+global:
+  require_api_key: false
+
+entrypoints:
+  - model_names: [aria/agent-auto]
+    router: agent
+    recipe: agent-default
+  - model_names: [aria/agent-catalog]
+    router: agent
+    recipe: agent-catalog
+
+recipes:
+  - name: agent-default
+    router: agent
+    agent:
+      timeout_ms: 5000
+      max_turns: 3
+      fallback: local/general
+      prompt: |
+        Use tools if needed, then submit_route with one eligible model.
+
+  # Catalog demo: same builtin path as agent-default; private/cloud models
+  # remain for bypass / Location pruning documentation (symmetric to semantic.yaml).
+  - name: agent-catalog
+    router: agent
+    agent:
+      timeout_ms: 5000
+      max_turns: 3
+      fallback: local/general
+      prompt: |
+        Catalog demo: prefer local/general; private/cloud exist for bypass only.

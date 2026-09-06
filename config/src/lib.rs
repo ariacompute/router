@@ -879,7 +879,10 @@ recipes:
             include_str!("../examples/agent-tiny.yaml"),
             include_str!("../examples/ffi-tiny.yaml"),
             include_str!("../examples/semantic.yaml"),
+            include_str!("../examples/agent.yaml"),
             include_str!("../examples/ffi.yaml"),
+            include_str!("../examples/semantic-gateway.yaml"),
+            include_str!("../examples/agent-gateway.yaml"),
         ] {
             RouterDocument::from_yaml_str(raw).unwrap();
         }

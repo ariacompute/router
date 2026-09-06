@@ -28,9 +28,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 | 文件 | 用途 |
 |------|------|
-| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) / [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) / [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | 黄金路径 — 可 `validate` + `serve` / FFI |
-| [`semantic.yaml`](config/examples/semantic.yaml) | 启发式 + `aria/semantic-catalog`（learned signal 与未实现 algorithm → chat `Unsupported`） |
-| [`ffi.yaml`](config/examples/ffi.yaml) | 黄金 `fast-response` + 同上 catalog recipe |
+| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | 日常 semantic 黄金路径 — `aria/semantic-auto`；keyword 启发式 → `local/general`；无 ML 权重即可 `validate` + `serve` |
+| [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — 黄金 `aria/semantic-auto` + `aria/semantic-catalog`（learned signal + 未实现 algorithm → chat `Unsupported`）；演示优先 tiny |
+| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — 三档 `ariamodel-{small,mid,large}` 经 `cloud/gateway`（`https://gateway.ariacompute.com`）；keyword → large，否则 small；需 `GATEWAY_API_KEY` |
+| [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | 日常 agent 黄金路径 — `aria/agent-auto`；进程内 builtin tool-loop（无 `endpoint` → first-eligible）；演示 / CI |
+| [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — 对称 `semantic.yaml`：黄金 `aria/agent-auto` + `aria/agent-catalog`（故意 `Unsupported`）；演示优先 tiny / gateway |
+| [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — 同上三档云模型；builtin agent LLM 与后端经 `cloud/gateway`；需 `GATEWAY_API_KEY` |
+| [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | FFI / binding 黄金路径 — `fast-response` 固定回复（无需 upstream）；`cases.json` / `run-binding-tests.sh` 优先用此文件 |
+| [`ffi.yaml`](config/examples/ffi.yaml) | FFI catalog — 黄金 `fast-response` + 与 `semantic.yaml` 相同的 Unsupported catalog recipe；binding 测试优先 `ffi-tiny` |
 
 ```bash
 # 写入配置 — template + admin（require_api_key / allow_register / OAuth 改 YAML 或 Dashboard）
@@ -38,22 +43,52 @@ aria-router setup
 aria-router setup --status
 # Flags: --template --admin-user --admin-password
 
-# 校验（默认路径，或传 --config）
+# 校验（setup 后默认路径，或传 --config）
 aria-router validate
 cargo run -p aria-router -- validate --config config/examples/semantic-tiny.yaml
+cargo run -p aria-router -- validate --config config/examples/semantic.yaml
+cargo run -p aria-router -- validate --config config/examples/semantic-gateway.yaml
+cargo run -p aria-router -- validate --config config/examples/agent-tiny.yaml
+cargo run -p aria-router -- validate --config config/examples/agent.yaml
+cargo run -p aria-router -- validate --config config/examples/agent-gateway.yaml
 
-# 服务 — 数据面来自 YAML listeners（semantic-tiny：127.0.0.1:8899）；
-# 管理面默认 127.0.0.1:8080
-cargo run -p aria-router -- serve --config config/examples/semantic-tiny.yaml
+# 服务 — 数据面来自 YAML listeners（示例均为 127.0.0.1:8899）；
+# 管理面默认 127.0.0.1:8080。setup 后可省略 --config。
+# 若要注册 aria-engine，--mgmt-bind 不要占用 engine 的 8080。
 
-# 显式绑定（若要注册 aria-engine，管理面不要占用 engine 的 8080）
+# 日常 semantic 黄金路径（aria/semantic-auto → local/general）
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
+# Semantic catalog（aria/semantic-auto + aria/semantic-catalog；catalog chat → Unsupported）
+cargo run -p aria-router -- serve \
+  --config config/examples/semantic.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+# 日常 agent 黄金路径（aria/agent-auto；builtin tool-loop）
 cargo run -p aria-router -- serve \
   --config config/examples/agent-tiny.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+# Agent catalog（aria/agent-auto + aria/agent-catalog；catalog chat → Unsupported）
+cargo run -p aria-router -- serve \
+  --config config/examples/agent.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+# Aria Gateway 后端（先 export GATEWAY_API_KEY；YAML 使用 ${GATEWAY_API_KEY:-}）
+export GATEWAY_API_KEY=…   # 勿提交
+cargo run -p aria-router -- serve \
+  --config config/examples/semantic-gateway.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+cargo run -p aria-router -- serve \
+  --config config/examples/agent-gateway.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 ```
@@ -313,8 +348,54 @@ chmod +x aria-router
 
 并排对标建议端口：**aria-router `:8899`**、**vLLM SR `:8890`**、共享 backend `:8000` / `:9001+`。
 
+routing / research 的质量模式（`--quality`）：`label`、`overlap`、`judge`（需 `--judge-url`）。
+
+两条常用 track（同一套 `routing` / `compare` CLI，测的对象不同）：
+
+| Track | 实际打谁 | 主要 flags | 测什么 |
+|-------|----------|------------|--------|
+| Gateway 仅 pool | **直接** chat Aria Gateway 模型 URL | 仅 `--pool` + `--model-id` + `--api-key`；**无** `--router` | `ariamodel-{small,mid,large}` 后端质量 / 成本阶梯（不启本地 router） |
+| 多 router ladder | 经 **live router** chat，再（可选）共享 pool | `--router` + `--entrypoint` / `--pick-header`，外加 `--pool` 做 always/oracle 基线 | 选路质量（aria-router vs vLLM SR 等）在 ADR-040 / MCQ 上的表现 |
+
+可选中间步：本地 serve `semantic-gateway` / `agent-gateway`，在 Gateway track 上追加 `--router aria_router=…`，使选路经 router 再进同一云 pool。
+
 ```bash
 python -m unittest discover -s bench/tests -t .
+
+# --- Track A：Aria Gateway 仅 pool（可不启本地 router）---
+export GATEWAY_BASE=https://gateway.ariacompute.com
+export GATEWAY_API_KEY=…   # 勿提交
+# expected_model 改为 ariacompute/ariamodel-{small,large}（见 out/routing_gateway.json）
+
+python -m bench routing \
+  --pool small=$GATEWAY_BASE --pool mid=$GATEWAY_BASE --pool large=$GATEWAY_BASE \
+  --model-id small=ariacompute/ariamodel-small \
+  --model-id mid=ariacompute/ariamodel-mid \
+  --model-id large=ariacompute/ariamodel-large \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --quality label \
+  --corpus ./out/routing_gateway.json \
+  --report ./out/gateway_routing.json
+
+python -m bench compare \
+  --pool small=$GATEWAY_BASE --pool mid=$GATEWAY_BASE --pool large=$GATEWAY_BASE \
+  --model-id small=ariacompute/ariamodel-small \
+  --model-id mid=ariacompute/ariamodel-mid \
+  --model-id large=ariacompute/ariamodel-large \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --corpus bench/corpus/mmlu_tiny.jsonl \
+  --report ./out/gateway_compare.json
+
+# 可选：先 serve semantic-gateway 或 agent-gateway，再在上述命令追加：
+#   --router aria_router=http://127.0.0.1:8899 \
+#   --entrypoint aria_router=aria/semantic-auto \   # 或 aria/agent-auto
+#   --pick-header aria_router=x-aria-router-model
+```
+
+```bash
+# --- Track B：多 router ADR-040 ladder（aria-router vs vLLM Semantic Router）---
+# 需本地 aria-router（:8899）、vLLM SR（:8890）以及 pool 后端（:9001+ / :8000）。
+# --router 评估 live 选路质量；--pool 仍跑 always_* / oracle 基线。
 
 python -m bench routing \
   --router aria_router=http://127.0.0.1:8899 \
@@ -328,6 +409,7 @@ python -m bench routing \
   --corpus bench/corpus/routing_tiny.json \
   --report ./out/vs_vsr_routing.json
 
+# MCQ compare（经各 router 的 accuracy / latency / tokens）
 python -m bench compare \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \

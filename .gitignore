@@ -16,3 +16,4 @@ bindings/kotlin/build/
 bindings/flutter/.dart_tool/
 bindings/flutter/build/
 .codebuddy/
+out/

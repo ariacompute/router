@@ -60,7 +60,12 @@ class ChatResult:
 
 
 def _headers(cfg: EndpointConfig) -> dict[str, str]:
-    h = {"Content-Type": "application/json", "Accept": "application/json"}
+    h = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        # Cloudflare / gateway edges often reject empty UA (Error 1010).
+        "User-Agent": "aria-router-bench/0.1 (+https://github.com/ariacompute)",
+    }
     if cfg.api_key:
         h["Authorization"] = f"Bearer {cfg.api_key}"
     return h
