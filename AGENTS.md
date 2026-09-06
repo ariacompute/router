@@ -20,7 +20,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `ffi/`：`ariacompute-router-ffi`（`libaria-router_ffi`）
 - `bindings/`：rust / python / go / typescript / react-native / flutter / swift / kotlin
 - `dashboard/`：管理面 SPA（Login/Account/Keys/Users/Cost + Overview…）
-- `bench/`：Python report-only 路由矩阵（ADR-040）+ DRACO research 评测
+- `bench/`：Python report-only（ADR-040 / DRACO / vs vLLM SR `compare`）
 - 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
 
 ## 开发规范
@@ -39,15 +39,16 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `npm --prefix dashboard ci && npm --prefix dashboard run build`
 - `./scripts/run-binding-tests.sh`
 - `python -m unittest discover -s bench/tests -t .`
-- `python -m bench routing --corpus bench/corpus/routing_tiny.json --report ./out/r.json …`
+- `python -m unittest discover -s bench/tests -t .`
+- `python -m bench routing --router aria_router=… --router vllm_sr=… …`
+- `python -m bench compare --corpus bench/corpus/mmlu_tiny.jsonl …`
 
 ## 进行中需求
-Spec 见 `requirements.md`（含 **§6 bench**）。阶段 A–H / I–J 已落地；阶段 K = Router bench。
+Spec 见 `requirements.md`（**§6 bench** 含多 router + compare）。阶段 K/L = bench。
 engine 去 hybrid；`--router` / `--router-api-key`（sk-aria_ 或 sk-bf-）。
 
 ## 注意事项
 - 黄金路径：keyword decision → static 转发 mock/engine；agent builtin JSON 决策。
 - 四维：Models=候选路径；Compute=pool 排名；Location=硬剪枝；Preference=档位/信号。
 - 一次请求禁止串跑 semantic+agent。未知 extension type / 缺二进制 → 启动失败，不降级。
-- 移动端 `init` 仅 semantic + builtin；pi/dsh → `Unsupported`。
-- Bench report-only（`ci_fail: false`）；不启 router/provider；质量 `label|overlap|judge`。
+- Bench report-only；不启进程；对标时 aria `:8899`、vLLM SR `:8890`。

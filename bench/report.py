@@ -42,8 +42,9 @@ def render_markdown(report: dict[str, Any]) -> str:
             "entrypoint",
             "eps",
             "ref_model",
+            "routers",
         ):
-            if k in meta:
+            if k in meta and meta[k] is not None:
                 lines.append(f"- {k}: `{meta[k]}`")
     lines.append("")
 
@@ -83,7 +84,33 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append("")
 
     systems = report.get("systems") or []
-    if systems:
+    if systems and mode == "router_compare":
+        lines.append("## Systems (accuracy / latency / tokens)")
+        lines.append("")
+        lines.append(
+            "| system | accuracy | mean_ms | p50_ms | p95_ms | "
+            "avg_completion_tokens | avg_total_tokens | Δacc vs always |"
+        )
+        lines.append(
+            "|--------|----------|---------|--------|--------|"
+            "----------------------|-----------------|----------------|"
+        )
+        for s in systems:
+            lat = s.get("latency_ms") or {}
+            lines.append(
+                "| {sys} | {acc} | {mean} | {p50} | {p95} | {ct} | {tt} | {d} |".format(
+                    sys=s.get("system"),
+                    acc=_fmt(s.get("accuracy"), 4),
+                    mean=_fmt(lat.get("mean_ms"), 1),
+                    p50=_fmt(lat.get("p50_ms"), 1),
+                    p95=_fmt(lat.get("p95_ms"), 1),
+                    ct=_fmt(s.get("avg_completion_tokens"), 1),
+                    tt=_fmt(s.get("avg_total_tokens"), 1),
+                    d=_fmt(s.get("accuracy_delta_vs_best_always"), 4),
+                )
+            )
+        lines.append("")
+    elif systems:
         lines.append("## Systems")
         lines.append("")
         lines.append(

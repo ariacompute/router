@@ -308,43 +308,51 @@ Cut a **GitHub Release** — language package publishes are **fail-pass** and do
 
 ## Bench
 
-Python ≥3.10 **report-only** harness under [`bench/`](bench/) (stdlib; aligns with `engine/bench`). Does **not** start `aria-router` or providers — start them yourself, then point `--router` / `--pool` at live OpenAI-compatible URLs. Reports always set `ci_fail: false`.
+Python ≥3.10 **report-only** harness under [`bench/`](bench/) (stdlib; aligns with `engine/bench`). Does **not** start `aria-router`, [vLLM Semantic Router](https://github.com/vllm-project/semantic-router), or providers — start them yourself, then point `--router` / `--pool` at live OpenAI-compatible URLs. Reports always set `ci_fail: false`.
 
 | Subcommand | Purpose |
 |------------|---------|
-| `routing` | ADR-040 Q×M matrix + always / oracle / domain / knn / live `aria_router` ladder |
-| `research` | Perplexity DRACO-shaped JSONL + rubric axes vs always_X |
+| `routing` | ADR-040 Q×M matrix + always / oracle / domain / knn / **multi live router** ladder |
+| `research` | Perplexity DRACO-shaped JSONL + rubric axes vs always_X + routers |
+| `compare` | MCQ **accuracy + E2E latency + tokens** (parity with VSR public bench narrative) |
 | `list-corpus` | Print bundled tiny fixtures |
-| `download-draco` | Optional HF `perplexity-ai/draco` fetch (skip on network failure) |
+| `download-draco` / `download-mmlu` | Optional HF fetch (skip on network failure) |
 
-Quality modes (`--quality`): `label` (expected_model / expected_hits), `overlap` (Jaccard vs `--ref-model`), `judge` (needs `--judge-url`).
+`--router` is repeatable as `NAME=URL` (bare URL → `aria_router`). Use `--entrypoint NAME=MODEL`, `--pick-header NAME=HEADER`, `--pick-map FOREIGN=POOL_MODEL`.
+
+Suggested binds when comparing side-by-side: **aria-router `:8899`**, **vLLM SR `:8890`**, shared backends `:8000` / `:9001+`.
+
+Quality modes for routing/research (`--quality`): `label`, `overlap`, `judge` (needs `--judge-url`).
 
 ```bash
-# Unit tests (mock HTTP; no network)
 python -m unittest discover -s bench/tests -t .
 
-# Routing ladder (label mode, tiny corpus)
+# Multi-router ADR-040 ladder (aria vs vLLM SR)
 python -m bench routing \
-  --router http://127.0.0.1:8899 \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=aria/semantic-auto \
+  --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
   --pool small=http://127.0.0.1:9001 --pool large=http://127.0.0.1:9002 \
   --model-id small=local/small --model-id large=local/large \
-  --entrypoint aria/semantic-auto \
   --quality label \
   --corpus bench/corpus/routing_tiny.json \
-  --report ./out/router_routing.json
+  --report ./out/vs_vsr_routing.json
 
-# Research rubric (label mode)
-python -m bench research \
-  --router http://127.0.0.1:8899 \
-  --pool large=http://127.0.0.1:9002 \
-  --model-id large=local/large \
-  --entrypoint aria/semantic-auto \
-  --quality label \
-  --corpus bench/corpus/research_tiny.jsonl \
-  --report ./out/router_research.json
+# MCQ compare (accuracy / latency / tokens)
+python -m bench compare \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=aria/semantic-auto \
+  --entrypoint vllm_sr=auto \
+  --pool base=http://127.0.0.1:8000 \
+  --model-id base=Qwen/Qwen3-0.6B \
+  --corpus bench/corpus/mmlu_tiny.jsonl \
+  --report ./out/vs_vsr_compare.json
 ```
 
-See [`bench/corpus/README.md`](bench/corpus/README.md) for downloading the full DRACO set. Spec: [`requirements.md`](requirements.md) §6.
+See [`bench/corpus/README.md`](bench/corpus/README.md). Spec: [`requirements.md`](requirements.md) §6.
 
 ## Engineering Conventions
 

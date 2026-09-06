@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ..http_client import (
     ChatFn,
@@ -18,6 +18,7 @@ from ..prices import cost_of, load_prices
 from ..quality.judge import judge_overall
 from ..quality.label import label_score
 from ..quality.overlap import token_overlap
+from ..router_targets import RouterSpec, resolve_pick
 from .matrix import Cell, RoutingMatrix
 from .policies import (
     always_policy,
@@ -88,14 +89,36 @@ def _score_cell_quality(
     raise ValueError(f"unknown quality mode {quality_mode!r}")
 
 
+def _normalize_routers(
+    routers: Sequence[RouterSpec] | None,
+    router: EndpointConfig | None,
+    entrypoint: str,
+) -> list[RouterSpec]:
+    """Accept multi-router list or legacy single ``router`` + ``entrypoint``."""
+    if routers:
+        return list(routers)
+    if router is not None:
+        return [
+            RouterSpec(
+                name="aria_router",
+                endpoint=router,
+                entrypoint=entrypoint,
+                pick_headers=["x-aria-router-model"],
+            )
+        ]
+    return []
+
+
 def run_routing(
     *,
     corpus: list[dict[str, Any]],
     pool: Mapping[str, EndpointConfig],
     model_ids: Mapping[str, str],
     quality: str = "label",
+    routers: Sequence[RouterSpec] | None = None,
     router: EndpointConfig | None = None,
     entrypoint: str = "aria/semantic-auto",
+    pick_map: Mapping[str, str] | None = None,
     ref_model: str | None = None,
     prices: Mapping[str, float] | None = None,
     eps: float = 0.03,
@@ -113,25 +136,21 @@ def run_routing(
     if not pool:
         raise ValueError("at least one --pool is required")
 
+    router_list = _normalize_routers(routers, router, entrypoint)
+    pmap = dict(pick_map) if pick_map else {}
     price_table = dict(prices) if prices is not None else load_prices(None)
     fn = chat_fn or chat_completion
     notes: list[str] = []
 
-    # Resolve pool alias -> served model id
-    alias_to_model = {
-        alias: model_ids.get(alias, alias) for alias in pool.keys()
-    }
-    models = [alias_to_model[a] for a in pool.keys()]
-    # unique preserve order
+    alias_to_model = {alias: model_ids.get(alias, alias) for alias in pool.keys()}
     seen: set[str] = set()
-    models_u: list[str] = []
+    models: list[str] = []
     alias_by_model: dict[str, str] = {}
     for alias, mid in alias_to_model.items():
         alias_by_model[mid] = alias
         if mid not in seen:
             seen.add(mid)
-            models_u.append(mid)
-    models = models_u
+            models.append(mid)
 
     probes: dict[str, Any] = {}
     if not skip_probe:
@@ -140,19 +159,17 @@ def run_routing(
             probes[alias] = {"ok": ok, "detail": detail}
             if not ok:
                 notes.append(f"pool {alias} probe failed: {detail}")
-        if router is not None:
-            ok, detail = probe_models(router)
-            probes["router"] = {"ok": ok, "detail": detail}
+        for rs in router_list:
+            ok, detail = probe_models(rs.endpoint)
+            probes[f"router:{rs.name}"] = {"ok": ok, "detail": detail}
             if not ok:
-                notes.append(f"router probe failed: {detail}")
+                notes.append(f"router {rs.name} probe failed: {detail}")
 
-    # For overlap: need ref completions per question
     ref_mid = ref_model
     if quality == "overlap":
         if not ref_mid:
             ref_mid = models[0]
         if ref_mid not in models and ref_mid not in alias_by_model:
-            # allow alias
             if ref_mid in alias_to_model:
                 ref_mid = alias_to_model[ref_mid]
             else:
@@ -160,17 +177,13 @@ def run_routing(
 
     question_ids = [str(q["id"]) for q in corpus]
     domains = {
-        str(q["id"]): str(q["domain"])
-        for q in corpus
-        if q.get("domain")
+        str(q["id"]): str(q["domain"]) for q in corpus if q.get("domain")
     }
-    # also derive from id prefix
     for q in corpus:
         qid = str(q["id"])
         if qid not in domains and "-" in qid:
             domains[qid] = qid.split("-", 1)[0]
 
-    # Chat cache: (alias_or_router, model, prompt) — we key by model id
     completions: dict[tuple[str, str], dict[str, Any]] = {}
 
     def _chat_pool(model: str, prompt: str) -> dict[str, Any]:
@@ -179,13 +192,17 @@ def run_routing(
             return completions[key]
         alias = alias_by_model.get(model)
         if alias is None:
-            # find alias whose model_ids maps to model
             for a, m in alias_to_model.items():
                 if m == model:
                     alias = a
                     break
         if alias is None or alias not in pool:
-            rec = {"status": "error", "content": "", "tokens": 0, "error": "model not in pool"}
+            rec = {
+                "status": "error",
+                "content": "",
+                "tokens": 0,
+                "error": "model not in pool",
+            }
             completions[key] = rec
             return rec
         cfg = pool[alias]
@@ -199,17 +216,6 @@ def run_routing(
                 "latency_ms": result.latency_ms,
             }
         else:
-            tok, src = estimate_tokens(
-                result.content,
-                result.total_tokens
-                if result.total_tokens
-                else (
-                    (result.prompt_tokens or 0) + (result.completion_tokens or 0)
-                    if result.prompt_tokens or result.completion_tokens
-                    else result.completion_tokens
-                ),
-            )
-            # Prefer completion tokens for cost if available
             if result.completion_tokens and result.completion_tokens > 0:
                 tok, src = result.completion_tokens, "usage"
             elif result.total_tokens and result.total_tokens > 0:
@@ -226,7 +232,6 @@ def run_routing(
         completions[key] = rec
         return rec
 
-    # Prefetch ref completions for overlap
     ref_texts: dict[str, str] = {}
     if quality == "overlap" and ref_mid:
         for q in corpus:
@@ -249,8 +254,6 @@ def run_routing(
                     detail={"error": rec.get("error")},
                 )
                 continue
-            # For label mode, quality is whether THIS model is the expected one
-            # (cell quality = 1 if model==expected else 0), matching ADR decision accuracy.
             if quality == "label":
                 qscore = label_score(model, expected)
                 detail: dict[str, Any] = {
@@ -296,51 +299,56 @@ def run_routing(
         meta={"quality": quality, "eps": eps},
     )
 
-    # Live router picks
-    live_picks: dict[str, str | None] = {}
+    live_by_router: dict[str, dict[str, str | None]] = {}
     live_errors: list[dict[str, Any]] = []
-    if router is not None:
+    if not router_list:
+        notes.append("no --router; live router policies omitted")
+    for rs in router_list:
+        picks: dict[str, str | None] = {}
         for q in corpus:
             qid = str(q["id"])
             result = fn(
-                router,
-                model=entrypoint,
+                rs.endpoint,
+                model=rs.entrypoint,
                 prompt=q["prompt"],
                 max_tokens=max_tokens,
                 temperature=0.0,
             )
             if result.status != "ok":
-                live_picks[qid] = None
+                picks[qid] = None
                 live_errors.append(
-                    {"question_id": qid, "status": "error", "error": result.error}
+                    {
+                        "router": rs.name,
+                        "question_id": qid,
+                        "status": "error",
+                        "error": result.error,
+                    }
                 )
                 continue
-            picked = result.router_model
-            if picked and picked not in models:
-                # try match via alias map values / keys
-                if picked in alias_to_model:
-                    picked = alias_to_model[picked]
-                elif picked in alias_by_model:
-                    pass
-                else:
-                    live_errors.append(
-                        {
-                            "question_id": qid,
-                            "status": "error",
-                            "error": f"pick {picked!r} not in pool {models}",
-                        }
-                    )
-                    live_picks[qid] = picked  # still record; evaluate will error
-                    continue
-            live_picks[qid] = picked
-    else:
-        notes.append("no --router; aria_router policy omitted")
+            raw_pick = result.picked_model(rs.pick_headers)
+            resolved, err = resolve_pick(
+                raw_pick,
+                models=models,
+                alias_to_model=alias_to_model,
+                pick_map=pmap,
+            )
+            if err:
+                live_errors.append(
+                    {
+                        "router": rs.name,
+                        "question_id": qid,
+                        "status": "error",
+                        "error": err,
+                    }
+                )
+            picks[qid] = resolved
+        live_by_router[rs.name] = picks
 
     policy_rows: list[dict[str, Any]] = []
     for mid in models:
-        row = evaluate_policy(matrix, always_policy(mid), policy_name=f"always_{mid}")
-        policy_rows.append(row)
-
+        policy_rows.append(
+            evaluate_policy(matrix, always_policy(mid), policy_name=f"always_{mid}")
+        )
     policy_rows.append(
         evaluate_policy(matrix, oracle_quality(matrix), policy_name="oracle_quality")
     )
@@ -358,24 +366,23 @@ def run_routing(
         policy_rows.append(
             evaluate_policy(matrix, knn_router(matrix, k=3), policy_name="knn_router")
         )
-    if router is not None:
+    for rs in router_list:
         policy_rows.append(
             evaluate_policy(
-                matrix, router_policy(live_picks), policy_name="aria_router"
+                matrix,
+                router_policy(live_by_router[rs.name]),
+                policy_name=rs.name,
             )
         )
 
     ladder = analyse(policy_rows)
-    # Strip picks from ladder summary for compactness? Keep in report under picks
     ladder_summary = []
     picks_by_policy = {}
     for row in ladder:
         picks_by_policy[row["policy"]] = row.get("picks")
-        summary_row = {k: v for k, v in row.items() if k != "picks"}
-        ladder_summary.append(summary_row)
+        ladder_summary.append({k: v for k, v in row.items() if k != "picks"})
 
     skipped = sum(1 for c in cells.values() if c.status == "skipped")
-    errors = sum(1 for c in cells.values() if c.status == "error") + len(live_errors)
 
     return {
         "mode": "router_routing",
@@ -384,7 +391,17 @@ def run_routing(
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "quality": quality,
             "eps": eps,
-            "entrypoint": entrypoint,
+            "routers": [
+                {
+                    "name": rs.name,
+                    "base_url": rs.endpoint.base_url,
+                    "entrypoint": rs.entrypoint,
+                    "pick_headers": rs.pick_headers,
+                }
+                for rs in router_list
+            ],
+            "entrypoint": router_list[0].entrypoint if len(router_list) == 1 else None,
+            "pick_map": pmap,
             "ref_model": ref_mid,
             "models": models,
             "pool_aliases": alias_to_model,
@@ -396,6 +413,7 @@ def run_routing(
             "cells_skipped": skipped,
             "cells_error": sum(1 for c in cells.values() if c.status == "error"),
             "live_router_errors": len(live_errors),
+            "live_routers": len(router_list),
             "policies": len(ladder_summary),
         },
         "probes": probes,

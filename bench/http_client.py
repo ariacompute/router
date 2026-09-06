@@ -35,15 +35,28 @@ class ChatResult:
     raw: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
 
-    @property
-    def router_model(self) -> str | None:
-        """Prefer x-aria-router-model header, else body model."""
-        for k, v in self.headers.items():
-            if k.lower() == "x-aria-router-model" and v:
-                return v.strip()
+    def picked_model(self, pick_headers: list[str] | None = None) -> str | None:
+        """Prefer configured response headers, else body ``model``.
+
+        Default headers: ``x-aria-router-model`` (aria-router). Pass an empty
+        list to use body ``model`` only (typical for vLLM Semantic Router).
+        """
+        headers = (
+            ["x-aria-router-model"] if pick_headers is None else list(pick_headers)
+        )
+        for want in headers:
+            want_l = want.lower()
+            for k, v in self.headers.items():
+                if k.lower() == want_l and v:
+                    return v.strip()
         if self.model:
             return self.model
         return None
+
+    @property
+    def router_model(self) -> str | None:
+        """Backward-compatible: aria pick header then body model."""
+        return self.picked_model(None)
 
 
 def _headers(cfg: EndpointConfig) -> dict[str, str]:

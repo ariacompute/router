@@ -183,3 +183,22 @@
 ### T24 — 文档与验收
 - [x] corpus README；Bench README 节验收说明
 - [x] `python -m unittest discover -s bench/tests -t .` 全绿（27/27）
+
+## 阶段 L — aria-router vs vLLM Semantic Router
+
+### T25 — Spec
+- [x] `requirements.md` §6 多 router + `compare`；端口约定
+- [x] 本清单阶段 L；`AGENTS.md` / README 双语对标示例
+
+### T26 — 多 router CLI / HTTP
+- [x] `--router NAME=URL`（裸 URL → `aria_router`）；`--entrypoint` / `--pick-header` / `--pick-map`
+- [x] `picked_model(pick_headers)`；api-key `router_<NAME>`
+
+### T27 — runners + compare
+- [x] `routing` / `research` 多 live router ladder/systems
+- [x] `compare`：grade + runner + `mmlu_tiny.jsonl` + `download-mmlu`
+- [x] unittest：双 router mock、compare、裸 URL 兼容
+
+### T28 — 文档与验收
+- [x] corpus README（MMLU）；README 双语
+- [x] `python -m unittest discover -s bench/tests -t .` 全绿

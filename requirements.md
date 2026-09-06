@@ -231,61 +231,86 @@ router/
 
 **目标**
 
-- **`routing`**（ADR-040）：对 corpus × pool 建 `(quality, tokens[, signal])` 矩阵；离线策略 `always_X` / `oracle_quality` / `oracle_cost_optimal(ε=0.03)` / 可选 `domain` / `knn`；live `aria_router` 取 pick；报告 quality、cost、$q/$、**% of oracle**。
-- **`research`**（Perplexity DRACO 形）：任务 completion + rubric 四轴加权 MET/UNMET；对比 `always_X` 与 `aria_router`。
-- **质量** `--quality label|overlap|judge`（Mode A 可离线 CI；Mode B 需 judge URL）。
+- **`routing`**（ADR-040）：对 corpus × pool 建 `(quality, tokens[, signal])` 矩阵；离线策略 `always_X` / `oracle_quality` / `oracle_cost_optimal(ε=0.03)` / 可选 `domain` / `knn`；**一个或多个** live router（如 `aria_router`、`vllm_sr`）取 pick；报告 quality、cost、$q/$、**% of oracle**。
+- **`research`**（Perplexity DRACO 形）：任务 completion + rubric 四轴加权 MET/UNMET；对比 `always_X` 与各 live router。
+- **`compare`**（对齐 [vLLM Semantic Router](https://github.com/vllm-project/semantic-router) 公开 bench）：MCQ **accuracy + E2E latency + tokens**（可选 USD via `prices.py`）；同语料并排 always_X 与各 router。
+- **质量**（routing/research）`--quality label|overlap|judge`（Mode A 可离线 CI；Mode B 需 judge URL）。
 
 **非目标**
 
-- 不 vendoring 完整 HF DRACO（~100 题）或 OpenRouter 密钥；`download-draco` 失败则 skip。
-- 不因分数阈值让 CI 失败；不在 bench 内 `cargo run` / 拉起 mock upstream。
-- 不做 metaharness 全量 deep-research fusion / embedding 训练管线（k-NN / domain 仅为矩阵上 leave-one-out 可选 policy）。
+- 不 vendoring 完整 HF DRACO / MMLU-Pro；`download-draco` / `download-mmlu` 失败则 skip。
+- 不依赖 `vllm-semantic-router-bench` 包；不在 bench 内启 Envoy / `vllm-sr` / `cargo run` / mock upstream。
+- 不因分数阈值让 CI 失败；不做 VSR Evaluation Plane / Dashboard 集成。
+- 不做 metaharness 全量 deep-research fusion / embedding 训练管线。
 
-### 6.2 CLI
+### 6.2 多 router CLI
+
+- `--router` 可重复：`NAME=URL`；裸 URL 兼容映射为 `aria_router`。
+- `--entrypoint` 可重复：`NAME=MODEL`；裸字符串为默认 entrypoint（缺省 `aria/semantic-auto`）。
+- `--pick-header` 可重复：`NAME=HEADER`；`aria_router` 默认 `x-aria-router-model`；其它 router 默认仅 body `model`。
+- `--pick-map FOREIGN=POOL_MODEL`：把外部分配的 model id 映射到 pool。
+- `--api-key`：`ALIAS=KEY`；router 可用 `router`（单）或 `router_<NAME>` / `<NAME>`。
+
+端口约定（文档）：共享 backend `:8000`/`:9001+`；aria-router `:8899`；vLLM Semantic Router `:8890`（避免抢默认 8899）。
+
+### 6.3 CLI 示例
 
 ```bash
 python -m bench routing \
-  --router http://127.0.0.1:8899 \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=aria/semantic-auto \
+  --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
   --pool small=http://127.0.0.1:9001 --pool large=http://127.0.0.1:9002 \
   --model-id small=local/small --model-id large=local/large \
-  --entrypoint aria/semantic-auto \
   --quality label \
   --corpus bench/corpus/routing_tiny.json \
-  --report ./out/router_routing.json
+  --report ./out/vs_vsr_routing.json
 
 python -m bench research \
-  --router http://127.0.0.1:8899 \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
   --pool large=http://127.0.0.1:9002 \
   --model-id large=local/large \
-  --entrypoint aria/semantic-auto \
   --quality label \
   --corpus bench/corpus/research_tiny.jsonl \
-  --report ./out/router_research.json
+  --report ./out/vs_vsr_research.json
+
+python -m bench compare \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=aria/semantic-auto \
+  --entrypoint vllm_sr=auto \
+  --pool base=http://127.0.0.1:8000 \
+  --model-id base=Qwen/Qwen3-0.6B \
+  --corpus bench/corpus/mmlu_tiny.jsonl \
+  --report ./out/vs_vsr_compare.json
 
 python -m bench list-corpus
 python -m bench download-draco --out ./out/draco_test.jsonl
+python -m bench download-mmlu --out ./out/mmlu_pro.jsonl
 ```
 
 公共：`--prices JSON`、`--api-key`、`--timeout`、`--max-tokens`、`--ref-model`（overlap）、`--judge-url` / `--judge-model` / `--judge-api-key`（judge）、`--skip-probe`。
 
-### 6.3 字段契约
+### 6.4 字段契约
 
 | 模式 | 语料 | 报告 `mode` | 核心产出 |
 |------|------|-------------|----------|
-| routing | JSON list：`{id, prompt, expected_model?, domain?}` | `router_routing` | cells + ladder（policies）+ 可选 picks |
-| research | JSONL：`{id, domain, problem, answer}`（`answer`=rubric JSON 或对象；tiny 可含 `expected_hits`） | `router_research` | 系统×域均值、四轴 breakdown、相对 always 差 |
+| routing | JSON list：`{id, prompt, expected_model?, domain?}` | `router_routing` | cells + ladder（含各 live router）+ picks |
+| research | JSONL：`{id, domain, problem, answer}`（tiny 可含 `expected_hits`） | `router_research` | 系统×域均值、四轴、相对 always 差 |
+| compare | JSONL：`{id, question, choices?, answer, category?}` | `router_compare` | 每 system accuracy / latency p50·p95 / tokens；相对 best-always |
 
-- **label**：`expected_model` 命中 → quality 1.0 / 0.0；research tiny 用 `expected_hits` 关键词近似（非官方 DRACO）。
-- **overlap**：相对 `--ref-model` 空白分词 Jaccard（对齐 engine `token_overlap`）。
-- **judge**：routing 要 0–1 float；research 按 criterion MET/UNMET；无 `--judge-url` → skip/error，不崩溃。
-- **rubric**：四轴 `factual-accuracy` / `breadth-and-depth` / `presentation` / `citation`；加权聚合。
-- Live router：请求 `--entrypoint`；pick 来自 `x-aria-router-model` 或 body `model`；pick ∉ pool → `error` 行继续。
+- **label** / **overlap** / **judge** / **rubric**：同阶段 K。
+- Live router：按 NAME 请求对应 entrypoint；pick = 配置头优先，否则 body `model`；经 `--pick-map` 后仍 ∉ pool → `error` 行继续。
+- **compare**：从 completion 抽选项字母 / Yes-No / 短答；`avg_cost_usd` 可选。
 - Cost：`prices.py` USD/MTok；`cost = tokens/1e6 * rate`。
 
-### 6.4 验收
+### 6.5 验收
 
-1. `python -m unittest discover -s bench/tests -t .` 全绿（无外网、无 live router；注入假 HTTP）。
-2. `routing` + `label` tiny → JSON+MD，含 oracle 与至少一行 always。
-3. `research` + `label` tiny → 含四轴字段。
+1. `python -m unittest discover -s bench/tests -t .` 全绿（无外网；双 router mock；裸 `--router URL` 兼容）。
+2. `routing` 双 router → ladder 同时含 `aria_router` 与 `vllm_sr`。
+3. `compare` + `mmlu_tiny` → JSON+MD 含 accuracy / latency / tokens；缺 router 时该 system skip。
 4. 缺 `--judge-url` 时 `judge` → 清晰 skip/error。
 5. `cargo test` 不受影响（纯 Python 包）。

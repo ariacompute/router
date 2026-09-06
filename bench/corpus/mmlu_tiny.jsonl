@@ -1,0 +1,12 @@
+{"id": "sci-1", "category": "biology", "question": "What is the primary pigment used in photosynthesis?", "choices": ["Chlorophyll", "Hemoglobin", "Melanin", "Keratin"], "answer": "A"}
+{"id": "sci-2", "category": "physics", "question": "What is the SI unit of electric current?", "choices": ["Volt", "Ampere", "Ohm", "Watt"], "answer": "B"}
+{"id": "sci-3", "category": "chemistry", "question": "What is the chemical symbol for gold?", "choices": ["Go", "Gd", "Au", "Ag"], "answer": "C"}
+{"id": "tech-1", "category": "cs", "question": "Which data structure uses FIFO ordering?", "choices": ["Stack", "Queue", "Tree", "Graph"], "answer": "B"}
+{"id": "tech-2", "category": "cs", "question": "HTTP status code 404 means?", "choices": ["OK", "Created", "Forbidden", "Not Found"], "answer": "D"}
+{"id": "tech-3", "category": "networking", "question": "Which protocol resolves domain names to IP addresses?", "choices": ["FTP", "DNS", "SMTP", "SSH"], "answer": "B"}
+{"id": "gen-1", "category": "geography", "question": "What is the capital of France?", "choices": ["Berlin", "Madrid", "Paris", "Rome"], "answer": "C"}
+{"id": "gen-2", "category": "math", "question": "What is 7 × 8?", "choices": ["54", "56", "63", "64"], "answer": "B"}
+{"id": "gen-3", "category": "history", "question": "In which year did the first Moon landing occur?", "choices": ["1965", "1969", "1972", "1959"], "answer": "B"}
+{"id": "yn-1", "category": "logic", "question": "Is 2 a prime number?", "answer": "yes"}
+{"id": "yn-2", "category": "logic", "question": "Is the sun a planet?", "answer": "no"}
+{"id": "free-1", "category": "cs", "question": "Name the Linux kernel creator (surname).", "answer": "Torvalds"}
