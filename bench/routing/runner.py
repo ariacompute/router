@@ -117,7 +117,7 @@ def run_routing(
     quality: str = "label",
     routers: Sequence[RouterSpec] | None = None,
     router: EndpointConfig | None = None,
-    entrypoint: str = "aria/semantic-auto",
+    entrypoint: str = "ariacompute/semantic-auto",
     pick_map: Mapping[str, str] | None = None,
     ref_model: str | None = None,
     prices: Mapping[str, float] | None = None,

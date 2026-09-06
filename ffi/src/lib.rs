@@ -128,7 +128,7 @@ fn complete_inner(h: &AriaRouterHandle, messages_json: &str, options_json: &str)
     let model = opts
         .get("model")
         .and_then(|m| m.as_str())
-        .unwrap_or("aria/semantic-auto");
+        .unwrap_or("ariacompute/semantic-auto");
     let messages: serde_json::Value =
         serde_json::from_str(messages_json).map_err(|e| e.to_string())?;
     let mut req_json = serde_json::json!({
@@ -299,7 +299,7 @@ mod tests {
         let h = aria_router_init(p.as_ptr());
         assert!(!h.is_null());
         let msgs = CString::new(r#"[{"role":"user","content":"hi"}]"#).unwrap();
-        let opts = CString::new(r#"{"model":"aria/semantic-auto"}"#).unwrap();
+        let opts = CString::new(r#"{"model":"ariacompute/semantic-auto"}"#).unwrap();
         let mut buf = vec![0u8; 8192];
         let rc = aria_router_complete(
             h,
@@ -333,7 +333,7 @@ mod tests {
         let h = aria_router_init(p.as_ptr());
         assert!(!h.is_null());
         let msgs = CString::new(r#"[{"role":"user","content":"hi"}]"#).unwrap();
-        let opts = CString::new(r#"{"model":"aria/semantic-auto"}"#).unwrap();
+        let opts = CString::new(r#"{"model":"ariacompute/semantic-auto"}"#).unwrap();
         let mut buf = vec![0u8; 8192];
         extern "C" fn cb(_chunk: *const c_char, hits: *mut libc::c_void) {
             unsafe {

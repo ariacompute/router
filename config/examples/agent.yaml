@@ -1,7 +1,7 @@
 # Catalog agent config (YAML v0.3).
-# Gold-path entrypoint: aria/agent-auto (builtin agent; no endpoint → first-eligible).
+# Gold-path entrypoint: ariacompute/agent-auto (builtin agent; no endpoint → first-eligible).
 # Daily demos prefer agent-tiny.yaml or agent-gateway.yaml.
-# Catalog entrypoint: aria/agent-catalog — validate succeeds; chat is Unsupported
+# Catalog entrypoint: ariacompute/agent-catalog — validate succeeds; chat is Unsupported
 #   (recipe documents an intentionally invalid agent.model name for catalog demos).
 # Symmetric to semantic.yaml. Secrets: ${VAR} / ${VAR:-default}.
 # entrypoint.router must equal recipe.router.
@@ -75,10 +75,10 @@ global:
   require_api_key: false
 
 entrypoints:
-  - model_names: [aria/agent-auto]
+  - model_names: [ariacompute/agent-auto]
     router: agent
     recipe: agent-default
-  - model_names: [aria/agent-catalog]
+  - model_names: [ariacompute/agent-catalog]
     router: agent
     recipe: agent-catalog
 

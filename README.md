@@ -28,11 +28,11 @@ Examples (English comments in every file):
 
 | File | Role |
 |------|------|
-| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | Daily semantic gold path — `aria/semantic-auto`; keyword heuristics → `local/general`; `validate` + `serve` with no ML weights |
-| [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — gold `aria/semantic-auto` plus `aria/semantic-catalog` (learned signal + unimplemented algorithm → chat `Unsupported`); prefer tiny for demos |
+| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | Daily semantic gold path — `ariacompute/semantic-auto`; keyword heuristics → `local/general`; `validate` + `serve` with no ML weights |
+| [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — gold `ariacompute/semantic-auto` plus `ariacompute/semantic-catalog` (learned signal + unimplemented algorithm → chat `Unsupported`); prefer tiny for demos |
 | [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — pool `ariamodel-{small,mid,large}` via `cloud/gateway` (`https://gateway.ariacompute.com`); keyword → large, else small; needs `GATEWAY_API_KEY` |
-| [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | Daily agent gold path — `aria/agent-auto`; in-process builtin tool-loop (no `endpoint` → first-eligible); demos / CI |
-| [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — symmetric to `semantic.yaml`: gold `aria/agent-auto` plus `aria/agent-catalog` (intentional `Unsupported`); prefer tiny / gateway for demos |
+| [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | Daily agent gold path — `ariacompute/agent-auto`; in-process builtin tool-loop (no `endpoint` → first-eligible); demos / CI |
+| [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — symmetric to `semantic.yaml`: gold `ariacompute/agent-auto` plus `ariacompute/agent-catalog` (intentional `Unsupported`); prefer tiny / gateway for demos |
 | [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — same three cloud models; builtin agent LLM + backends through `cloud/gateway`; needs `GATEWAY_API_KEY` |
 | [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | FFI / binding gold path — `fast-response` canned completion (no upstream); prefer in `cases.json` / `run-binding-tests.sh` |
 | [`ffi.yaml`](config/examples/ffi.yaml) | FFI catalog — gold `fast-response` plus the same Unsupported catalog recipe as `semantic.yaml`; prefer `ffi-tiny` in binding tests |
@@ -56,25 +56,25 @@ cargo run -p aria-router -- validate --config config/examples/agent-gateway.yaml
 # management defaults to 127.0.0.1:8080. Omit --config after setup.
 # Keep --mgmt-bind off engine's 8080 if you will register aria-engine.
 
-# Daily semantic gold path (aria/semantic-auto → local/general)
+# Daily semantic gold path (ariacompute/semantic-auto → local/general)
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# Semantic catalog (aria/semantic-auto + aria/semantic-catalog; catalog chat → Unsupported)
+# Semantic catalog (ariacompute/semantic-auto + ariacompute/semantic-catalog; catalog chat → Unsupported)
 cargo run -p aria-router -- serve \
   --config config/examples/semantic.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# Daily agent gold path (aria/agent-auto; builtin tool-loop)
+# Daily agent gold path (ariacompute/agent-auto; builtin tool-loop)
 cargo run -p aria-router -- serve \
   --config config/examples/agent-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# Agent catalog (aria/agent-auto + aria/agent-catalog; catalog chat → Unsupported)
+# Agent catalog (ariacompute/agent-auto + ariacompute/agent-catalog; catalog chat → Unsupported)
 cargo run -p aria-router -- serve \
   --config config/examples/agent.yaml \
   --bind 127.0.0.1:8899 \
@@ -176,7 +176,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
   }' | jq .
 ```
 
-`serve` on engine does `PUT {router}/v1/router/providers` with `{name, endpoint, provider_model_id, locality}` and **exits** if that fails. `aria/semantic-auto` / `aria/agent-auto` only hit that engine if YAML `modelRefs` / `default_model` use the same registered name.
+`serve` on engine does `PUT {router}/v1/router/providers` with `{name, endpoint, provider_model_id, locality}` and **exits** if that fails. `ariacompute/semantic-auto` / `ariacompute/agent-auto` only hit that engine if YAML `modelRefs` / `default_model` use the same registered name.
 
 Manual upsert (same contract):
 
@@ -203,7 +203,7 @@ curl -s http://127.0.0.1:8899/v1/models | jq .
 curl -s http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
-    "model": "aria/semantic-auto",
+    "model": "ariacompute/semantic-auto",
     "messages":[{"role":"user","content":"please explain rust"}],
     "max_tokens": 32
   }' | jq .
@@ -212,7 +212,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
 curl -s http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
-    "model": "aria/agent-auto",
+    "model": "ariacompute/agent-auto",
     "messages":[{"role":"user","content":"Hello"}],
     "max_tokens": 32
   }' | jq .
@@ -221,7 +221,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
 curl -sN http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
-    "model": "aria/semantic-auto",
+    "model": "ariacompute/semantic-auto",
     "messages":[{"role":"user","content":"please explain rust"}],
     "stream": true
   }'
@@ -237,7 +237,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
 # Route headers (layer = semantic | agent | bypass)
 curl -sD - -o /dev/null http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model":"aria/semantic-auto","messages":[{"role":"user","content":"please explain rust"}]}' \
+  -d '{"model":"ariacompute/semantic-auto","messages":[{"role":"user","content":"please explain rust"}]}' \
   | grep -i x-aria-router
 
 # Management
@@ -289,7 +289,7 @@ r = Router().init("config/examples/ffi-tiny.yaml")
 print(r.models())
 print(r.complete(
     [{"role": "user", "content": "hi"}],
-    {"model": "aria/semantic-auto"},
+    {"model": "ariacompute/semantic-auto"},
 ))
 print(r.last_route())
 r.close()
@@ -310,7 +310,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     r.init("config/examples/ffi-tiny.yaml")?;
     let out = r.complete(
         json!([{"role": "user", "content": "hi"}]),
-        json!({"model": "aria/semantic-auto"}),
+        json!({"model": "ariacompute/semantic-auto"}),
     )?;
     println!("{out}");
     Ok(())
@@ -394,7 +394,7 @@ python -m bench compare \
 
 # Optional: serve semantic-gateway or agent-gateway, then append to the commands above:
 #   --router aria_router=http://127.0.0.1:8899 \
-#   --entrypoint aria_router=aria/semantic-auto \   # or aria/agent-auto
+#   --entrypoint aria_router=ariacompute/semantic-auto \   # or ariacompute/agent-auto
 #   --pick-header aria_router=x-aria-router-model
 ```
 
@@ -406,7 +406,7 @@ python -m bench compare \
 python -m bench routing \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
-  --entrypoint aria_router=aria/semantic-auto \
+  --entrypoint aria_router=ariacompute/semantic-auto \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pool small=http://127.0.0.1:9001 --pool large=http://127.0.0.1:9002 \
@@ -419,7 +419,7 @@ python -m bench routing \
 python -m bench compare \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
-  --entrypoint aria_router=aria/semantic-auto \
+  --entrypoint aria_router=ariacompute/semantic-auto \
   --entrypoint vllm_sr=auto \
   --pool base=http://127.0.0.1:8000 \
   --model-id base=Qwen/Qwen3-0.6B \

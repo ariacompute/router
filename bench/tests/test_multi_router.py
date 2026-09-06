@@ -24,13 +24,13 @@ class TestRouterTargets(unittest.TestCase):
                 "vllm_sr=http://127.0.0.1:8890",
             ],
             entrypoint_args=[
-                "aria_router=aria/semantic-auto",
+                "aria_router=ariacompute/semantic-auto",
                 "vllm_sr=auto",
             ],
             pick_header_args=["aria_router=x-aria-router-model"],
         )
         by = {s.name: s for s in specs}
-        self.assertEqual(by["aria_router"].entrypoint, "aria/semantic-auto")
+        self.assertEqual(by["aria_router"].entrypoint, "ariacompute/semantic-auto")
         self.assertEqual(by["vllm_sr"].entrypoint, "auto")
         self.assertEqual(by["vllm_sr"].pick_headers, [])
 
@@ -85,7 +85,7 @@ class TestDualRouterE2E(unittest.TestCase):
             RouterSpec(
                 "aria_router",
                 EndpointConfig("http://127.0.0.1:8899"),
-                entrypoint="aria/semantic-auto",
+                entrypoint="ariacompute/semantic-auto",
                 pick_headers=["x-aria-router-model"],
             ),
             RouterSpec(

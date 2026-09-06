@@ -1,5 +1,5 @@
 # Gateway agent gold path (YAML v0.3).
-# Entrypoint: aria/agent-auto. Builtin agent decides among ariamodel-{small,mid,large}.
+# Entrypoint: ariacompute/agent-auto. Builtin agent decides among ariamodel-{small,mid,large}.
 # Agent LLM + backends: Aria Gateway (cloud/gateway).
 # Requires: export GATEWAY_API_KEY=…  (never commit secrets).
 # entrypoint.router must equal recipe.router.
@@ -50,7 +50,7 @@ providers:
           api_key_env: ${GATEWAY_API_KEY:-}
 
 entrypoints:
-  - model_names: [aria/agent-auto]
+  - model_names: [ariacompute/agent-auto]
     router: agent
     recipe: agent-default
 

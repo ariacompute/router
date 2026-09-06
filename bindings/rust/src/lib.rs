@@ -77,7 +77,7 @@ impl Router {
         let model = options
             .get("model")
             .and_then(|m| m.as_str())
-            .unwrap_or("aria/semantic-auto");
+            .unwrap_or("ariacompute/semantic-auto");
         let req = serde_json::json!({"model": model, "messages": messages});
         if let Some(st) = &self.state {
             let app = data_router(st.clone());
@@ -168,7 +168,7 @@ mod tests {
         };
         r.init(path.to_str().unwrap()).unwrap();
         let m = r.models().unwrap();
-        assert!(m["data"].as_array().unwrap().iter().any(|x| x == "aria/semantic-auto"));
+        assert!(m["data"].as_array().unwrap().iter().any(|x| x == "ariacompute/semantic-auto"));
     }
 
     #[test]

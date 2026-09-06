@@ -16,7 +16,7 @@ class RouterSpec:
 
     name: str
     endpoint: EndpointConfig
-    entrypoint: str = "aria/semantic-auto"
+    entrypoint: str = "ariacompute/semantic-auto"
     pick_headers: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -35,7 +35,7 @@ def parse_router_args(
     pick_header_args: Sequence[str] | None = None,
     api_keys: dict[str, str] | None = None,
     timeout_s: float = 120.0,
-    default_entrypoint: str = "aria/semantic-auto",
+    default_entrypoint: str = "ariacompute/semantic-auto",
 ) -> list[RouterSpec]:
     """Parse CLI ``--router`` / ``--entrypoint`` / ``--pick-header`` lists.
 

@@ -21,7 +21,7 @@ class TestRoutingE2E(unittest.TestCase):
 
         def chat_fn(cfg: EndpointConfig, *, model: str, prompt: str, **kwargs):
             # Router path
-            if "8899" in cfg.base_url or model.startswith("aria/"):
+            if "8899" in cfg.base_url or model.startswith("ariacompute/"):
                 # Pick expected model based on prompt keywords for sci-q1 / tech-q1 → large
                 if "photosynthesis" in prompt or "reverse proxy" in prompt:
                     pick = "local/large"
@@ -53,7 +53,7 @@ class TestRoutingE2E(unittest.TestCase):
             model_ids={"small": "local/small", "large": "local/large"},
             quality="label",
             router=router,
-            entrypoint="aria/semantic-auto",
+            entrypoint="ariacompute/semantic-auto",
             skip_probe=True,
             chat_fn=chat_fn,
         )

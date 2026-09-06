@@ -61,7 +61,7 @@ def run_research(
     quality: str = "label",
     routers: Sequence[RouterSpec] | None = None,
     router: EndpointConfig | None = None,
-    entrypoint: str = "aria/semantic-auto",
+    entrypoint: str = "ariacompute/semantic-auto",
     max_tokens: int = 512,
     skip_probe: bool = False,
     judge_url: str | None = None,

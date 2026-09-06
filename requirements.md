@@ -91,10 +91,10 @@ providers:
         input_per_mtok: 0.15
         output_per_mtok: 0.60
 entrypoints:
-  - model_names: [aria/semantic-auto]
+  - model_names: [ariacompute/semantic-auto]
     router: semantic
     recipe: mom
-  - model_names: [aria/agent-auto]
+  - model_names: [ariacompute/agent-auto]
     router: agent
     recipe: agent-default
 recipes:
@@ -252,7 +252,7 @@ router/
 ### 6.2 多 router CLI
 
 - `--router` 可重复：`NAME=URL`；裸 URL 兼容映射为 `aria_router`。
-- `--entrypoint` 可重复：`NAME=MODEL`；裸字符串为默认 entrypoint（缺省 `aria/semantic-auto`）。
+- `--entrypoint` 可重复：`NAME=MODEL`；裸字符串为默认 entrypoint（缺省 `ariacompute/semantic-auto`）。
 - `--pick-header` 可重复：`NAME=HEADER`；`aria_router` 默认 `x-aria-router-model`；其它 router 默认仅 body `model`。
 - `--pick-map FOREIGN=POOL_MODEL`：把外部分配的 model id 映射到 pool。
 - `--api-key`：`ALIAS=KEY`；router 可用 `router`（单）或 `router_<NAME>` / `<NAME>`。
@@ -265,7 +265,7 @@ router/
 python -m bench routing \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
-  --entrypoint aria_router=aria/semantic-auto \
+  --entrypoint aria_router=ariacompute/semantic-auto \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pool small=http://127.0.0.1:9001 --pool large=http://127.0.0.1:9002 \
@@ -286,7 +286,7 @@ python -m bench research \
 python -m bench compare \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
-  --entrypoint aria_router=aria/semantic-auto \
+  --entrypoint aria_router=ariacompute/semantic-auto \
   --entrypoint vllm_sr=auto \
   --pool base=http://127.0.0.1:8000 \
   --model-id base=Qwen/Qwen3-0.6B \

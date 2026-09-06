@@ -26,7 +26,7 @@ func TestInitComplete(t *testing.T) {
 	if !contains(string(raw), "semantic-auto") {
 		t.Fatalf("models: %s", raw)
 	}
-	out, err := r.Complete([]map[string]string{{"role": "user", "content": "hi"}}, map[string]string{"model": "aria/semantic-auto"})
+	out, err := r.Complete([]map[string]string{{"role": "user", "content": "hi"}}, map[string]string{"model": "ariacompute/semantic-auto"})
 	if err != nil {
 		t.Fatal(err)
 	}

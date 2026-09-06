@@ -777,7 +777,7 @@ providers:
         - name: primary
           endpoint: 127.0.0.1:9
 entrypoints:
-  - model_names: [aria/semantic-auto]
+  - model_names: [ariacompute/semantic-auto]
     router: semantic
     recipe: mom
 recipes:

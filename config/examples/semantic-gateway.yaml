@@ -1,5 +1,5 @@
 # Gateway semantic gold path (YAML v0.3).
-# Entrypoint: aria/semantic-auto. Keyword "explain" / "walk me through" → ariamodel-large;
+# Entrypoint: ariacompute/semantic-auto. Keyword "explain" / "walk me through" → ariamodel-large;
 # otherwise default → ariamodel-small. Backends: Aria Gateway (cloud/gateway).
 # Requires: export GATEWAY_API_KEY=…  (expanded via api_key_env; never commit secrets).
 # entrypoint.router must equal recipe.router.
@@ -50,7 +50,7 @@ providers:
           api_key_env: ${GATEWAY_API_KEY:-}
 
 entrypoints:
-  - model_names: [aria/semantic-auto]
+  - model_names: [ariacompute/semantic-auto]
     router: semantic
     recipe: mom
 

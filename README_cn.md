@@ -28,11 +28,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 | 文件 | 用途 |
 |------|------|
-| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | 日常 semantic 黄金路径 — `aria/semantic-auto`；keyword 启发式 → `local/general`；无 ML 权重即可 `validate` + `serve` |
-| [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — 黄金 `aria/semantic-auto` + `aria/semantic-catalog`（learned signal + 未实现 algorithm → chat `Unsupported`）；演示优先 tiny |
+| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | 日常 semantic 黄金路径 — `ariacompute/semantic-auto`；keyword 启发式 → `local/general`；无 ML 权重即可 `validate` + `serve` |
+| [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — 黄金 `ariacompute/semantic-auto` + `ariacompute/semantic-catalog`（learned signal + 未实现 algorithm → chat `Unsupported`）；演示优先 tiny |
 | [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — 三档 `ariamodel-{small,mid,large}` 经 `cloud/gateway`（`https://gateway.ariacompute.com`）；keyword → large，否则 small；需 `GATEWAY_API_KEY` |
-| [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | 日常 agent 黄金路径 — `aria/agent-auto`；进程内 builtin tool-loop（无 `endpoint` → first-eligible）；演示 / CI |
-| [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — 对称 `semantic.yaml`：黄金 `aria/agent-auto` + `aria/agent-catalog`（故意 `Unsupported`）；演示优先 tiny / gateway |
+| [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | 日常 agent 黄金路径 — `ariacompute/agent-auto`；进程内 builtin tool-loop（无 `endpoint` → first-eligible）；演示 / CI |
+| [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — 对称 `semantic.yaml`：黄金 `ariacompute/agent-auto` + `ariacompute/agent-catalog`（故意 `Unsupported`）；演示优先 tiny / gateway |
 | [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — 同上三档云模型；builtin agent LLM 与后端经 `cloud/gateway`；需 `GATEWAY_API_KEY` |
 | [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | FFI / binding 黄金路径 — `fast-response` 固定回复（无需 upstream）；`cases.json` / `run-binding-tests.sh` 优先用此文件 |
 | [`ffi.yaml`](config/examples/ffi.yaml) | FFI catalog — 黄金 `fast-response` + 与 `semantic.yaml` 相同的 Unsupported catalog recipe；binding 测试优先 `ffi-tiny` |
@@ -56,25 +56,25 @@ cargo run -p aria-router -- validate --config config/examples/agent-gateway.yaml
 # 管理面默认 127.0.0.1:8080。setup 后可省略 --config。
 # 若要注册 aria-engine，--mgmt-bind 不要占用 engine 的 8080。
 
-# 日常 semantic 黄金路径（aria/semantic-auto → local/general）
+# 日常 semantic 黄金路径（ariacompute/semantic-auto → local/general）
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# Semantic catalog（aria/semantic-auto + aria/semantic-catalog；catalog chat → Unsupported）
+# Semantic catalog（ariacompute/semantic-auto + ariacompute/semantic-catalog；catalog chat → Unsupported）
 cargo run -p aria-router -- serve \
   --config config/examples/semantic.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# 日常 agent 黄金路径（aria/agent-auto；builtin tool-loop）
+# 日常 agent 黄金路径（ariacompute/agent-auto；builtin tool-loop）
 cargo run -p aria-router -- serve \
   --config config/examples/agent-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# Agent catalog（aria/agent-auto + aria/agent-catalog；catalog chat → Unsupported）
+# Agent catalog（ariacompute/agent-auto + ariacompute/agent-catalog；catalog chat → Unsupported）
 cargo run -p aria-router -- serve \
   --config config/examples/agent.yaml \
   --bind 127.0.0.1:8899 \
@@ -170,7 +170,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
   }' | jq .
 ```
 
-engine 的 `serve` 会 `PUT {router}/v1/router/providers`（`{name, endpoint, provider_model_id, locality}`），失败则 **退出**。`aria/semantic-auto` / `aria/agent-auto` 只有在 YAML 的 `modelRefs` / `default_model` 写成同一注册名时才会打到该 engine。
+engine 的 `serve` 会 `PUT {router}/v1/router/providers`（`{name, endpoint, provider_model_id, locality}`），失败则 **退出**。`ariacompute/semantic-auto` / `ariacompute/agent-auto` 只有在 YAML 的 `modelRefs` / `default_model` 写成同一注册名时才会打到该 engine。
 
 手动 upsert（同一契约）：
 
@@ -197,7 +197,7 @@ curl -s http://127.0.0.1:8899/v1/models | jq .
 curl -s http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
-    "model": "aria/semantic-auto",
+    "model": "ariacompute/semantic-auto",
     "messages":[{"role":"user","content":"please explain rust"}],
     "max_tokens": 32
   }' | jq .
@@ -206,7 +206,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
 curl -s http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
-    "model": "aria/agent-auto",
+    "model": "ariacompute/agent-auto",
     "messages":[{"role":"user","content":"Hello"}],
     "max_tokens": 32
   }' | jq .
@@ -215,7 +215,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
 curl -sN http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
-    "model": "aria/semantic-auto",
+    "model": "ariacompute/semantic-auto",
     "messages":[{"role":"user","content":"please explain rust"}],
     "stream": true
   }'
@@ -231,7 +231,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
 # 路由响应头（layer = semantic | agent | bypass）
 curl -sD - -o /dev/null http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model":"aria/semantic-auto","messages":[{"role":"user","content":"please explain rust"}]}' \
+  -d '{"model":"ariacompute/semantic-auto","messages":[{"role":"user","content":"please explain rust"}]}' \
   | grep -i x-aria-router
 
 # 管理面
@@ -283,7 +283,7 @@ r = Router().init("config/examples/ffi-tiny.yaml")
 print(r.models())
 print(r.complete(
     [{"role": "user", "content": "hi"}],
-    {"model": "aria/semantic-auto"},
+    {"model": "ariacompute/semantic-auto"},
 ))
 print(r.last_route())
 r.close()
@@ -304,7 +304,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     r.init("config/examples/ffi-tiny.yaml")?;
     let out = r.complete(
         json!([{"role": "user", "content": "hi"}]),
-        json!({"model": "aria/semantic-auto"}),
+        json!({"model": "ariacompute/semantic-auto"}),
     )?;
     println!("{out}");
     Ok(())
@@ -388,7 +388,7 @@ python -m bench compare \
 
 # 可选：先 serve semantic-gateway 或 agent-gateway，再在上述命令追加：
 #   --router aria_router=http://127.0.0.1:8899 \
-#   --entrypoint aria_router=aria/semantic-auto \   # 或 aria/agent-auto
+#   --entrypoint aria_router=ariacompute/semantic-auto \   # 或 ariacompute/agent-auto
 #   --pick-header aria_router=x-aria-router-model
 ```
 
@@ -400,7 +400,7 @@ python -m bench compare \
 python -m bench routing \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
-  --entrypoint aria_router=aria/semantic-auto \
+  --entrypoint aria_router=ariacompute/semantic-auto \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pool small=http://127.0.0.1:9001 --pool large=http://127.0.0.1:9002 \
@@ -413,7 +413,7 @@ python -m bench routing \
 python -m bench compare \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
-  --entrypoint aria_router=aria/semantic-auto \
+  --entrypoint aria_router=ariacompute/semantic-auto \
   --entrypoint vllm_sr=auto \
   --pool base=http://127.0.0.1:8000 \
   --model-id base=Qwen/Qwen3-0.6B \

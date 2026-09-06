@@ -1,7 +1,7 @@
 # Catalog semantic config (YAML v0.3).
-# Gold-path entrypoint: aria/semantic-auto (heuristic signals only; serve + chat work
+# Gold-path entrypoint: ariacompute/semantic-auto (heuristic signals only; serve + chat work
 #   if backends are up). Daily serve should still prefer semantic-tiny.yaml.
-# Catalog entrypoint: aria/semantic-catalog — validate succeeds; every chat on this
+# Catalog entrypoint: ariacompute/semantic-catalog — validate succeeds; every chat on this
 #   virtual model is Unsupported (a decision references a learned signal, and one
 #   decision uses an unimplemented algorithm).
 # Does not declare pi / deepseek-harness, so serve is not blocked on those binaries.
@@ -83,10 +83,10 @@ global:
 
 # Virtual model names → recipe. Concrete provider names bypass recipes.
 entrypoints:
-  - model_names: [aria/semantic-auto]
+  - model_names: [ariacompute/semantic-auto]
     router: semantic
     recipe: mom
-  - model_names: [aria/semantic-catalog]
+  - model_names: [ariacompute/semantic-catalog]
     router: semantic
     recipe: mom-catalog
 
@@ -190,7 +190,7 @@ recipes:
             - name: response-cache
 
   # Catalog only: learned signal referenced + unimplemented algorithm (knn).
-  # validate succeeds (names are known). Chat on aria/semantic-catalog → Unsupported
+  # validate succeeds (names are known). Chat on ariacompute/semantic-catalog → Unsupported
   # because extract() scans every decision in this recipe for learned types.
   - name: mom-catalog
     router: semantic

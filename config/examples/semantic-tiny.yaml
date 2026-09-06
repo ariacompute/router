@@ -1,5 +1,5 @@
 # Gold-path semantic config (YAML v0.3).
-# Entrypoint: aria/semantic-auto. Keyword "explain" / "walk me through" → local/general.
+# Entrypoint: ariacompute/semantic-auto. Keyword "explain" / "walk me through" → local/general.
 # validate and serve work without ML weights or extra binaries.
 # Prefer this file for daily serve. See semantic.yaml for the stage B–C catalog.
 # entrypoint.router must equal recipe.router.
@@ -30,7 +30,7 @@ providers:
 
 # Virtual name → recipe. Concrete provider names bypass recipes.
 entrypoints:
-  - model_names: [aria/semantic-auto]
+  - model_names: [ariacompute/semantic-auto]
     router: semantic
     recipe: mom
 

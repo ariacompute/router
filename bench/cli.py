@@ -242,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         pick_map = _parse_kv_list(args.pick_map)
 
         # Default entrypoint when none given
-        ep_args = list(args.entrypoint) if args.entrypoint else ["aria/semantic-auto"]
+        ep_args = list(args.entrypoint) if args.entrypoint else ["ariacompute/semantic-auto"]
         routers = parse_router_args(
             args.router,
             entrypoint_args=ep_args,

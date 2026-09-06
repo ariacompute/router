@@ -3,7 +3,7 @@ import { sendJson } from '../api';
 import styles from './page.module.css';
 
 export default function Playground() {
-  const [model, setModel] = useState('aria/semantic-auto');
+  const [model, setModel] = useState('ariacompute/semantic-auto');
   const [prompt, setPrompt] = useState('please explain rust');
   const [out, setOut] = useState('');
   const [hdrs, setHdrs] = useState('');

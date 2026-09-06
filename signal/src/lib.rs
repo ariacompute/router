@@ -291,7 +291,7 @@ mod tests {
         let doc = RouterDocument::from_yaml_str(raw).unwrap();
         let recipe = doc.recipe("mom").unwrap();
         let req = ChatRequest {
-            model: "aria/semantic-auto".into(),
+            model: "ariacompute/semantic-auto".into(),
             messages: vec![aria_router_core::ChatMessage {
                 role: "user".into(),
                 content: serde_json::Value::String("please explain rust".into()),

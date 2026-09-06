@@ -1143,10 +1143,10 @@ providers:
         - name: primary
           endpoint: {backend}
 entrypoints:
-  - model_names: [aria/semantic-auto]
+  - model_names: [ariacompute/semantic-auto]
     router: semantic
     recipe: mom
-  - model_names: [aria/agent-auto]
+  - model_names: [ariacompute/agent-auto]
     router: agent
     recipe: agent-default
 recipes:
@@ -1217,7 +1217,7 @@ global:
         let (st, _dir) = isolated_state(doc);
         let app = data_router(st);
         let body = json!({
-            "model": "aria/semantic-auto",
+            "model": "ariacompute/semantic-auto",
             "messages": [{"role":"user","content":"please explain rust"}]
         });
         let res = app
@@ -1284,7 +1284,7 @@ global:
         );
         let app = data_router(st.clone());
         let body = json!({
-            "model": "aria/agent-auto",
+            "model": "ariacompute/agent-auto",
             "messages": [{"role":"user","content":"hi"}]
         });
         let res = app
@@ -1301,7 +1301,7 @@ global:
 
         let app2 = data_router(st);
         let body = json!({
-            "model": "aria/semantic-auto",
+            "model": "ariacompute/semantic-auto",
             "messages": [{"role":"user","content":"please explain"}]
         });
         let res = app2
@@ -1335,7 +1335,7 @@ global:
         );
         let app = data_router(st);
         let body = json!({
-            "model": "aria/agent-auto",
+            "model": "ariacompute/agent-auto",
             "messages": [{"role":"user","content":"hi"}]
         });
         let res = app
@@ -1464,7 +1464,7 @@ global:
         let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
         let (st, _dir) = isolated_state_with_path(doc, path.clone());
         let admin = mgmt_router(st.clone());
-        let replaced = yaml.replace("aria/semantic-auto", "aria/semantic-renamed");
+        let replaced = yaml.replace("ariacompute/semantic-auto", "ariacompute/semantic-renamed");
         let (status, body) = oneshot_json(
             admin,
             Request::put("/v1/router/config")
@@ -1482,7 +1482,7 @@ global:
         .await;
         assert_eq!(got.0, 200);
         let names = got.1["document"]["entrypoints"][0]["model_names"][0].as_str();
-        assert_eq!(names, Some("aria/semantic-renamed"));
+        assert_eq!(names, Some("ariacompute/semantic-renamed"));
         let _ = std::fs::remove_file(path);
     }
 
@@ -1535,7 +1535,7 @@ global:
                     .header("content-type", "application/json")
                     .body(Body::from(
                         json!({
-                            "model": "aria/semantic-auto",
+                            "model": "ariacompute/semantic-auto",
                             "messages": [{"role":"user","content":"please explain rust"}]
                         })
                         .to_string(),
@@ -1667,7 +1667,7 @@ providers:
           protocol: http
           weight: 100
 entrypoints:
-  - model_names: [aria/semantic-auto]
+  - model_names: [ariacompute/semantic-auto]
     router: semantic
     recipe: mom
 recipes:
@@ -1704,7 +1704,7 @@ global:
         let (st, _dir) = isolated_state(doc);
         let app = data_router(st.clone());
         let body = json!({
-            "model": "aria/semantic-auto",
+            "model": "ariacompute/semantic-auto",
             "user": "alice",
             "messages": [{"role":"user","content":"please explain rust"}]
         });
@@ -1736,7 +1736,7 @@ global:
         let created = st.keys.lock().unwrap().create("ci").unwrap();
         let app = data_router(st.clone());
         let body = json!({
-            "model": "aria/semantic-auto",
+            "model": "ariacompute/semantic-auto",
             "messages": [{"role":"user","content":"please explain"}]
         });
         let res = app

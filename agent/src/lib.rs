@@ -432,7 +432,7 @@ mod tests {
         };
         let t = task_from(
             &ChatRequest {
-                model: "aria/agent-auto".into(),
+                model: "ariacompute/agent-auto".into(),
                 messages: vec![],
                 stream: false,
                 max_tokens: None,

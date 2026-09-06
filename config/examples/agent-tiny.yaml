@@ -1,5 +1,5 @@
 # Gold-path agent config (YAML v0.3).
-# Entrypoint: aria/agent-auto. In-process builtin agent (fixed tools + max_turns).
+# Entrypoint: ariacompute/agent-auto. In-process builtin agent (fixed tools + max_turns).
 # No endpoint → first-eligible (demo/CI). Set agent.endpoint for a real router LLM.
 # entrypoint.router must equal recipe.router.
 
@@ -24,7 +24,7 @@ providers:
           endpoint: 127.0.0.1:8000
 
 entrypoints:
-  - model_names: [aria/agent-auto]
+  - model_names: [ariacompute/agent-auto]
     router: agent
     recipe: agent-default
 

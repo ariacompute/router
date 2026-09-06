@@ -102,7 +102,7 @@ class TestCompareE2E(unittest.TestCase):
                 RouterSpec(
                     "aria_router",
                     EndpointConfig("http://127.0.0.1:8899"),
-                    entrypoint="aria/semantic-auto",
+                    entrypoint="ariacompute/semantic-auto",
                     pick_headers=["x-aria-router-model"],
                 ),
                 RouterSpec(

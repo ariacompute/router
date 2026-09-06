@@ -1,5 +1,5 @@
 # Gold-path FFI config (YAML v0.3).
-# Entrypoint: aria/semantic-auto. fast-response returns a canned completion so
+# Entrypoint: ariacompute/semantic-auto. fast-response returns a canned completion so
 # binding tests need no upstream. Backend 127.0.0.1:9 is unused on this path.
 # Prefer this file in cases.json / run-binding-tests.sh. See ffi.yaml for catalog.
 # entrypoint.router must equal recipe.router.
@@ -27,7 +27,7 @@ providers:
           endpoint: 127.0.0.1:9
 
 entrypoints:
-  - model_names: [aria/semantic-auto]
+  - model_names: [ariacompute/semantic-auto]
     router: semantic
     recipe: mom
 

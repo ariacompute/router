@@ -1,7 +1,7 @@
 # Catalog FFI config (YAML v0.3).
-# Gold-path entrypoint: aria/semantic-auto — in-process FFI tests need no upstream
+# Gold-path entrypoint: ariacompute/semantic-auto — in-process FFI tests need no upstream
 #   (fast-response plugin). Same contract as ffi-tiny.yaml.
-# Catalog entrypoint: aria/semantic-catalog — validate succeeds; chat is Unsupported
+# Catalog entrypoint: ariacompute/semantic-catalog — validate succeeds; chat is Unsupported
 #   (learned signal referenced + unimplemented algorithm).
 # Does not declare pi / deepseek-harness so aria_router_init can load this file
 #   without a subprocess check. Prefer ffi-tiny.yaml in binding tests.
@@ -39,10 +39,10 @@ global:
   require_api_key: false
 
 entrypoints:
-  - model_names: [aria/semantic-auto]
+  - model_names: [ariacompute/semantic-auto]
     router: semantic
     recipe: mom
-  - model_names: [aria/semantic-catalog]
+  - model_names: [ariacompute/semantic-catalog]
     router: semantic
     recipe: mom-catalog
 

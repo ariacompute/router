@@ -21,7 +21,7 @@ class TestResearchE2E(unittest.TestCase):
         self.assertEqual(len(corpus), 2)
 
         def chat_fn(cfg: EndpointConfig, *, model: str, prompt: str, **kwargs):
-            if model.startswith("aria/"):
+            if model.startswith("ariacompute/"):
                 text = (
                     "Vaccines elicit antibody responses and memory cells. "
                     if "vaccine" in prompt.lower()
@@ -49,7 +49,7 @@ class TestResearchE2E(unittest.TestCase):
             model_ids={"large": "local/large"},
             quality="label",
             router=EndpointConfig("http://127.0.0.1:8899"),
-            entrypoint="aria/semantic-auto",
+            entrypoint="ariacompute/semantic-auto",
             skip_probe=True,
             chat_fn=chat_fn,
         )

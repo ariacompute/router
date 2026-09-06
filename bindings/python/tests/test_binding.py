@@ -18,11 +18,11 @@ class BindingTests(unittest.TestCase):
         self.assertTrue(any("semantic-auto" in str(x) for x in m.get("data", [])))
 
     def test_complete_ok(self):
-        out = self.r.complete([{"role": "user", "content": "hi"}], {"model": "aria/semantic-auto"})
+        out = self.r.complete([{"role": "user", "content": "hi"}], {"model": "ariacompute/semantic-auto"})
         self.assertIn("hello-from-router", json.dumps(out))
 
     def test_last_route(self):
-        self.r.complete([{"role": "user", "content": "hi"}], {"model": "aria/semantic-auto"})
+        self.r.complete([{"role": "user", "content": "hi"}], {"model": "ariacompute/semantic-auto"})
         lr = self.r.last_route()
         self.assertEqual(lr.get("layer"), "semantic")
 
