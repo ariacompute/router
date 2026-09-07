@@ -403,9 +403,21 @@ python -m bench compare \
 # --- Track B: multi-router ADR-040 ladder (aria-router vs vLLM Semantic Router) ---
 # Requires local aria-router (:8899), vLLM SR (:8890), and pool backends (:9001+ / :8000).
 # Start vLLM SR yourself (see bench/vllm-sr/README.md):
-#   vllm-sr validate --config bench/vllm-sr/config.yaml
-#   vllm-sr serve --config bench/vllm-sr/config.yaml
+#   vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
+#   vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
 # --router evaluates live pick quality; --pool still runs always_* / oracle baselines.
+
+aria-router serve \
+  --config config/examples/semantic-gateway.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+aria-router serve \
+  --config config/examples/agent-gateway.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
 
 python -m bench routing \
   --router aria_router=http://127.0.0.1:8899 \

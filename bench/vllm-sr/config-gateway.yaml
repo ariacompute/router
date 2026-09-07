@@ -1,0 +1,86 @@
+# vLLM Semantic Router v0.3 → Aria Gateway (parity with config/examples/semantic-gateway.yaml).
+# Listener :8890 (aria-router semantic-gateway stays on :8899).
+# Keyword "explain" / "walk me through" → ariamodel-large; else → ariamodel-small.
+# default_model: ariamodel-mid. Schema: https://vllm-sr.ai/docs/installation/configuration/
+# Requires: export GATEWAY_API_KEY=…  (never commit secrets).
+# Do not append /v1 to base_url.
+
+version: v0.3
+
+listeners:
+  - name: http-8890
+    address: 0.0.0.0
+    port: 8890
+    timeout: 300s
+
+providers:
+  defaults:
+    default_model: ariacompute/ariamodel-mid
+  models:
+    - name: ariacompute/ariamodel-small
+      provider_model_id: ariacompute/ariamodel-small
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://gateway.ariacompute.com
+          protocol: https
+          weight: 100
+          api_key_env: GATEWAY_API_KEY
+    - name: ariacompute/ariamodel-mid
+      provider_model_id: ariacompute/ariamodel-mid
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://gateway.ariacompute.com
+          protocol: https
+          weight: 100
+          api_key_env: GATEWAY_API_KEY
+    - name: ariacompute/ariamodel-large
+      provider_model_id: ariacompute/ariamodel-large
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://gateway.ariacompute.com
+          protocol: https
+          weight: 100
+          api_key_env: GATEWAY_API_KEY
+
+routing:
+  strategy: priority
+  modelCards:
+    - name: ariacompute/ariamodel-small
+      modality: text
+      capabilities: [chat]
+    - name: ariacompute/ariamodel-mid
+      modality: text
+      capabilities: [chat]
+    - name: ariacompute/ariamodel-large
+      modality: text
+      capabilities: [chat]
+  signals:
+    keywords:
+      - name: needs_explanation
+        operator: OR
+        keywords: ["explain", "walk me through"]
+  decisions:
+    - name: explanatory_answer
+      description: Prefer ariamodel-large when the request asks for an explanation.
+      priority: 100
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: needs_explanation
+      modelRefs:
+        - model: ariacompute/ariamodel-large
+    - name: default_small
+      description: Fallback to ariamodel-small for ordinary requests.
+      priority: 1
+      rules:
+        operator: AND
+        conditions: []
+      modelRefs:
+        - model: ariacompute/ariamodel-small
+
+global:
+  services:
+    observability:
+      metrics:
+        enabled: true
