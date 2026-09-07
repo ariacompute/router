@@ -12,7 +12,7 @@ Reference [v0.3 config](https://vllm-sr.ai/docs/installation/configuration/) so 
 - Upstream `vllm-sr` CLI ([vLLM Semantic Router](https://github.com/vllm-project/semantic-router))
 - Docker (required by `vllm-sr serve` on Linux / macOS / WSL2)
 - **Local config**: backend on host `:8000` (edit `provider_model_id` / `endpoint`; do **not** append `/v1`)
-- **Gateway config**: `export GATEWAY_API_KEY=…` (never commit secrets)
+- **Gateway config**: `export GATEWAY_API_KEY=…` (never commit secrets); `base_url` **must** end with `/v1`
 
 ## Validate and serve
 
@@ -31,7 +31,9 @@ vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
 
 Data plane for clients / bench: `http://127.0.0.1:8890`.
 
-`config-gateway.yaml` routing (parity with `semantic-gateway` recipe `mom`): keyword explain → large; long prompt → latency-aware {small,mid,large}; multi-turn / multi-question → mid; fallback multi-factor pool {small,mid,large}. `default_model` = mid.
+`config-gateway.yaml` routing (parity with `semantic-gateway` recipe `mom`): keyword explain → large; long prompt → latency-aware {small,mid,large}; multi-turn / multi-question → mid; else static → small. `default_model` = mid.
+
+Gateway `backend_refs` must set `provider`/`type: openai` (+ Bearer `api_key_env`); missing `type` → auth 500 after route. Use `base_url: https://gateway.ariacompute.com/v1` (without `/v1`, Envoy posts `/chat/completions` → Gateway 405). Keep `global.stores.semantic_cache.enabled: false` unless mmbert embeddings are ready.
 
 ## Point bench at it
 

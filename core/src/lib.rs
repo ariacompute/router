@@ -138,6 +138,16 @@ impl ChatRequest {
             .collect::<Vec<_>>()
             .join("\n")
     }
+
+    /// Latest user turn only — keyword / language / structure eligibility for chat.
+    pub fn last_user_text(&self) -> String {
+        self.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.text())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

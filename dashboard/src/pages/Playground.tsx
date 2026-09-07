@@ -107,7 +107,8 @@ export default function Playground() {
 
     try {
       await streamChat(
-        { model, messages: history, max_tokens: 1024 },
+        // Omit max_tokens so upstream uses its default (matches curl / OpenAI clients).
+        { model, messages: history },
         {
           signal: ac.signal,
           onHeaders: (headers) => {

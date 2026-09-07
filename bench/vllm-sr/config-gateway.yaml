@@ -5,7 +5,11 @@
 # Listener :8890 (aria-router stays on :8899).
 # Schema: https://vllm-sr.ai/docs/installation/configuration/
 # Requires: export GATEWAY_API_KEY=…  (never commit secrets).
-# Do not append /v1 to base_url.
+# Do not enable semantic-cache here unless embedding models are ready
+# (mmbert missing → Playground 500 on cache lookup).
+# HTTPS Gateway backends need provider+type (openai) or auth resolves to
+# "provider profile has empty type" → ExtProc 500 after a successful route.
+# base_url must include /v1 (Envoy uses chat_path=/chat/completions relative to it).
 
 version: v0.3
 
@@ -23,25 +27,37 @@ providers:
       provider_model_id: ariacompute/ariamodel-small
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com
+          base_url: https://gateway.ariacompute.com/v1
           protocol: https
           weight: 100
+          provider: openai
+          type: openai
+          auth_header: Authorization
+          auth_prefix: Bearer
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-mid
       provider_model_id: ariacompute/ariamodel-mid
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com
+          base_url: https://gateway.ariacompute.com/v1
           protocol: https
           weight: 100
+          provider: openai
+          type: openai
+          auth_header: Authorization
+          auth_prefix: Bearer
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-large
       provider_model_id: ariacompute/ariamodel-large
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com
+          base_url: https://gateway.ariacompute.com/v1
           protocol: https
           weight: 100
+          provider: openai
+          type: openai
+          auth_header: Authorization
+          auth_prefix: Bearer
           api_key_env: GATEWAY_API_KEY
 
 routing:
@@ -66,9 +82,9 @@ routing:
         description: English-language requests.
     context:
       - name: long_prompt
-        min_tokens: "32"
+        min_tokens: "256"
         max_tokens: "8192"
-        description: Medium/long prompts.
+        description: Long prompts (above short Playground turns).
     role_bindings:
       - name: admin_role
         description: Requests from administrators.
@@ -134,9 +150,8 @@ routing:
             add:
               - name: x-aria-route
                 value: explanatory
-        - type: request_params
-          configuration:
-            max_tokens_limit: 64
+        # No request_params max_tokens_limit — Gateway large models use reasoning
+        # tokens first; a low cap yields empty Playground content.
     - name: long_context
       description: Long prompt → latency-aware ranking
       priority: 80
@@ -180,31 +195,23 @@ routing:
       algorithm:
         type: static
     - name: fallback_pool
-      description: Default pool → multi-factor + exact response cache
+      description: Default gold path → ariamodel-small (static; no semantic-cache — needs embeddings)
       priority: 1
       rules:
         operator: AND
         conditions: []
       modelRefs:
         - model: ariacompute/ariamodel-small
-        - model: ariacompute/ariamodel-mid
-        - model: ariacompute/ariamodel-large
       algorithm:
-        type: multi_factor
-        multi_factor:
-          weights:
-            quality: 0.4
-            latency: 0.2
-            cost: 0.2
-            load: 0.2
-          on_no_candidates: cheapest
-      plugins:
-        - type: semantic-cache
-          configuration:
-            enabled: true
+        type: static
 
 global:
   services:
     observability:
       metrics:
         enabled: true
+  stores:
+    # Default install enables semantic_cache; without mmbert embeddings
+    # cache lookups fail closed as Playground 500.
+    semantic_cache:
+      enabled: false

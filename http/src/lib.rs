@@ -1284,6 +1284,123 @@ global:
         )
     }
 
+    /// Gold-path Gateway recipe: explain → large; else → small (static fallback).
+    fn gateway_yaml(backend: &str) -> String {
+        format!(
+            r#"version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: ariacompute/ariamodel-mid
+  models:
+    - name: ariacompute/ariamodel-small
+      provider_model_id: echo-small
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: {backend}
+    - name: ariacompute/ariamodel-mid
+      provider_model_id: echo-mid
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: {backend}
+    - name: ariacompute/ariamodel-large
+      provider_model_id: echo-large
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: {backend}
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain", "walk me through"]
+        context:
+          - name: long_prompt
+            min_tokens: 256
+            max_tokens: 8192
+        conversation:
+          - name: multi_turn
+            min_messages: 2
+        structure:
+          - name: multi_question
+            min_questions: 2
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: ariacompute/ariamodel-large
+          algorithm: static
+        - name: long_context
+          priority: 80
+          rules:
+            operator: AND
+            conditions:
+              - type: context
+                name: long_prompt
+          modelRefs:
+            - model: ariacompute/ariamodel-small
+            - model: ariacompute/ariamodel-mid
+            - model: ariacompute/ariamodel-large
+          algorithm: latency-aware
+        - name: multi_turn
+          priority: 60
+          rules:
+            operator: AND
+            conditions:
+              - type: conversation
+                name: multi_turn
+          modelRefs:
+            - model: ariacompute/ariamodel-mid
+          algorithm: static
+        - name: multi_question
+          priority: 50
+          rules:
+            operator: AND
+            conditions:
+              - type: structure
+                name: multi_question
+          modelRefs:
+            - model: ariacompute/ariamodel-mid
+          algorithm: static
+        - name: fallback_pool
+          priority: 1
+          rules:
+            operator: AND
+            conditions: []
+          modelRefs:
+            - model: ariacompute/ariamodel-small
+          algorithm: static
+global:
+  require_api_key: false
+"#
+        )
+    }
+
     async fn mock_upstream() -> String {
         use axum::response::IntoResponse;
         use axum::routing::post;
@@ -1380,6 +1497,94 @@ global:
         let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
         let v: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["choices"][0]["message"]["content"], "ok");
+    }
+
+    #[tokio::test]
+    async fn gateway_hi_routes_to_small_not_large() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&gateway_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        // Seed latency favoring large — must not steal the static fallback gold path.
+        st.pool.record("ariacompute/ariamodel-large", 5.0, true);
+        st.pool.record("ariacompute/ariamodel-small", 500.0, true);
+        let app = data_router(st.clone());
+        let body = json!({
+            "model": "ariacompute/semantic-auto",
+            "messages": [{"role":"user","content":"hi"}]
+        });
+        let res = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers().get("x-aria-router-model").unwrap(),
+            "ariacompute/ariamodel-small"
+        );
+        assert_eq!(
+            res.headers().get("x-aria-router-decision").unwrap(),
+            "fallback_pool"
+        );
+
+        let app = data_router(st);
+        let body = json!({
+            "model": "ariacompute/semantic-auto",
+            "messages": [{"role":"user","content":"please explain rust"}]
+        });
+        let res = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers().get("x-aria-router-model").unwrap(),
+            "ariacompute/ariamodel-large"
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_hi_after_explain_not_stuck_on_large() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&gateway_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st);
+        // Prior user "explain" must not keep keyword sticky; multi-turn → mid.
+        let body = json!({
+            "model": "ariacompute/semantic-auto",
+            "messages": [
+                {"role":"user","content":"explain C/C++/Rust/Go"},
+                {"role":"assistant","content":"…"},
+                {"role":"user","content":"hi"}
+            ]
+        });
+        let res = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers().get("x-aria-router-decision").unwrap(),
+            "multi_turn"
+        );
+        assert_eq!(
+            res.headers().get("x-aria-router-model").unwrap(),
+            "ariacompute/ariamodel-mid"
+        );
     }
 
     #[tokio::test]

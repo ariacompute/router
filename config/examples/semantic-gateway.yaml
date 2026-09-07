@@ -1,7 +1,8 @@
 # Gateway semantic config (YAML v0.3).
-# Entrypoint: ariacompute/semantic-auto → recipe mom (full stage-B signals / projections /
-#   algorithms / plugins from semantic.yaml), with Aria Gateway backends.
-# modelRefs: local/fast → ariamodel-small, mid → ariamodel-mid, local/general → ariamodel-large.
+# Entrypoint: ariacompute/semantic-auto → recipe mom (stage-B signals / decisions),
+# Aria Gateway backends. Gold path: keyword explain → large; multi-turn/question → mid;
+# long prompt → latency-aware pool; else → small.
+# modelRefs: fast→small, mid→mid, general→large.
 # Requires: export GATEWAY_API_KEY=…  (expanded via api_key_env; never commit secrets).
 # entrypoint.router must equal recipe.router.
 
@@ -73,7 +74,9 @@ recipes:
             code: en
         context:
           - name: long_prompt
-            min_tokens: 32
+            # Keep well above short Playground turns ("hi") so latency-aware
+            # does not steal the default gold path.
+            min_tokens: 256
             max_tokens: 8192
         authz:
           - name: admin_role
@@ -129,8 +132,8 @@ recipes:
             - name: header-mutation
               set:
                 x-aria-route: explanatory
-            - name: request-params
-              max_tokens: 64
+            # Do not cap max_tokens here: Gateway large models spend budget on
+            # reasoning first; a low cap (e.g. 64) yields empty assistant content.
         - name: long_context
           description: Long prompt → latency-aware ranking
           priority: 80
@@ -167,18 +170,16 @@ recipes:
             - model: ariacompute/ariamodel-mid
           algorithm: static
         - name: fallback_pool
-          description: Default pool → multi-factor + exact response cache
+          description: Default gold path → ariamodel-small (not multi-factor; avoids latency bias to large)
           priority: 1
           rules:
             operator: AND
             conditions: []
           modelRefs:
             - model: ariacompute/ariamodel-small
-            - model: ariacompute/ariamodel-mid
-            - model: ariacompute/ariamodel-large
-          algorithm: multi-factor
-          plugins:
-            - name: response-cache
+          algorithm: static
+          # response-cache omitted: in-process exact cache keys on entrypoint model
+          # vs selected model and is unrelated to hi→large; skip for Gateway gold path.
 
 global:
   require_api_key: false

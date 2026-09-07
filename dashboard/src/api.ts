@@ -117,32 +117,35 @@ export async function streamChat(
   const decoder = new TextDecoder();
   let buffer = '';
   let full = '';
+  const consumeLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) return;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === '[DONE]') return;
+    try {
+      const chunk = JSON.parse(data) as {
+        choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+      };
+      const delta =
+        chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.message?.content ?? '';
+      if (delta) {
+        full += delta;
+        handlers.onDelta?.(delta);
+      }
+    } catch {
+      /* ignore malformed SSE lines */
+    }
+  };
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const parts = buffer.split('\n');
     buffer = parts.pop() ?? '';
-    for (const line of parts) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('data:')) continue;
-      const data = trimmed.slice(5).trim();
-      if (!data || data === '[DONE]') continue;
-      try {
-        const chunk = JSON.parse(data) as {
-          choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
-        };
-        const delta =
-          chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.message?.content ?? '';
-        if (delta) {
-          full += delta;
-          handlers.onDelta?.(delta);
-        }
-      } catch {
-        /* ignore malformed SSE lines */
-      }
-    }
+    for (const line of parts) consumeLine(line);
   }
+  buffer += decoder.decode();
+  if (buffer.trim()) consumeLine(buffer);
   return full;
 }
 

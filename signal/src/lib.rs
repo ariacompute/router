@@ -63,13 +63,16 @@ pub fn extract(
         )));
     }
     let prompt = req.prompt_text();
+    let last_user = req.last_user_text();
     let mut hits = vec![];
     let s = &routing.signals;
     if needed.iter().any(|k| k == "keyword") {
-        hits.extend(eval_keywords(s, &prompt));
+        // Match the latest user turn only so prior "explain …" history does not
+        // keep stealing later short turns (e.g. Playground "hi") to explanatory.
+        hits.extend(eval_keywords(s, &last_user));
     }
     if needed.iter().any(|k| k == "language") {
-        hits.extend(eval_language(s, &prompt));
+        hits.extend(eval_language(s, &last_user));
     }
     if needed.iter().any(|k| k == "context") {
         hits.extend(eval_context(s, &prompt));
@@ -84,10 +87,10 @@ pub fn extract(
         hits.extend(eval_metadata(s, metadata));
     }
     if needed.iter().any(|k| k == "event") {
-        hits.extend(eval_event(s, &prompt));
+        hits.extend(eval_event(s, &last_user));
     }
     if needed.iter().any(|k| k == "structure") {
-        hits.extend(eval_structure(s, &prompt));
+        hits.extend(eval_structure(s, &last_user));
     }
     let _ = doc;
     Ok(SignalSet { hits })
@@ -303,6 +306,40 @@ mod tests {
         };
         let set = extract(&doc, recipe, &req, &HashMap::new()).unwrap();
         assert!(set.matched("keyword", "needs_explain"));
+    }
+
+    #[test]
+    fn keyword_uses_last_user_turn_only() {
+        let raw = include_str!("../../config/examples/semantic-gateway.yaml");
+        let doc = RouterDocument::from_yaml_str(raw).unwrap();
+        let recipe = doc.recipe("mom").unwrap();
+        let req = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: serde_json::Value::String("please explain rust".into()),
+                },
+                aria_router_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: serde_json::Value::String("Rust is…".into()),
+                },
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: serde_json::Value::String("hi".into()),
+                },
+            ],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let set = extract(&doc, recipe, &req, &HashMap::new()).unwrap();
+        assert!(
+            !set.matched("keyword", "needs_explain"),
+            "prior explain must not match after a later hi"
+        );
+        assert!(set.matched("conversation", "multi_turn"));
     }
 
     #[test]
