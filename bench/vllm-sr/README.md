@@ -31,7 +31,7 @@ vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
 
 Data plane for clients / bench: `http://127.0.0.1:8890`.
 
-`config-gateway.yaml` routing: keyword `explain` / `walk me through` → `ariamodel-large`; else → `ariamodel-small`; `default_model` = `ariamodel-mid`.
+`config-gateway.yaml` routing (parity with `semantic-gateway` recipe `mom`): keyword explain → large; long prompt → latency-aware {small,mid,large}; multi-turn / multi-question → mid; fallback multi-factor pool {small,mid,large}. `default_model` = mid.
 
 ## Point bench at it
 

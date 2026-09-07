@@ -1,6 +1,7 @@
-# Gateway semantic gold path (YAML v0.3).
-# Entrypoint: ariacompute/semantic-auto. Keyword "explain" / "walk me through" → ariamodel-large;
-# otherwise default → ariamodel-small. Backends: Aria Gateway (cloud/gateway).
+# Gateway semantic config (YAML v0.3).
+# Entrypoint: ariacompute/semantic-auto → recipe mom (full stage-B signals / projections /
+#   algorithms / plugins from semantic.yaml), with Aria Gateway backends.
+# modelRefs: local/fast → ariamodel-small, mid → ariamodel-mid, local/general → ariamodel-large.
 # Requires: export GATEWAY_API_KEY=…  (expanded via api_key_env; never commit secrets).
 # entrypoint.router must equal recipe.router.
 
@@ -49,12 +50,15 @@ providers:
           weight: 100
           api_key_env: ${GATEWAY_API_KEY:-}
 
+# Virtual model names → recipe. Concrete provider names bypass recipes.
 entrypoints:
   - model_names: [ariacompute/semantic-auto]
     router: semantic
     recipe: mom
 
 recipes:
+  # Stage B: heuristics + projections + implemented algorithms/plugins
+  # (parity with semantic.yaml recipe mom; Gateway model names).
   - name: mom
     router: semantic
     routing:
@@ -64,8 +68,52 @@ recipes:
           - name: needs_explain
             operator: OR
             keywords: ["explain", "walk me through"]
+        language:
+          - name: english
+            code: en
+        context:
+          - name: long_prompt
+            min_tokens: 32
+            max_tokens: 8192
+        authz:
+          - name: admin_role
+            role: admin
+        conversation:
+          - name: multi_turn
+            min_messages: 2
+        metadata:
+          - name: tenant_acme
+            key: tenant
+            value: acme
+        event:
+          - name: ticket
+            code: TICKET-
+        structure:
+          - name: multi_question
+            min_questions: 2
+      # partition / score / mapping (computed; not eligibility).
+      projections:
+        - name: topic
+          type: partition
+          signals: [needs_explain, ticket]
+        - name: explain_score
+          type: score
+          weights:
+            needs_explain: 1.0
+            long_prompt: 0.3
+        - name: explain_band
+          type: mapping
+          from: explain_score
+          bands:
+            - name: high
+              min: 0.8
+              max: 1.0
+            - name: default
+              min: 0.0
+              max: 0.8
       decisions:
         - name: explanatory
+          description: Keyword hit → static pick + request plugins
           priority: 100
           rules:
             operator: AND
@@ -74,13 +122,63 @@ recipes:
                 name: needs_explain
           modelRefs:
             - model: ariacompute/ariamodel-large
-        - name: default_small
+          algorithm: static
+          plugins:
+            - name: system-prompt
+              content: Answer briefly and cite the routed model.
+            - name: header-mutation
+              set:
+                x-aria-route: explanatory
+            - name: request-params
+              max_tokens: 64
+        - name: long_context
+          description: Long prompt → latency-aware ranking
+          priority: 80
+          rules:
+            operator: AND
+            conditions:
+              - type: context
+                name: long_prompt
+          modelRefs:
+            - model: ariacompute/ariamodel-small
+            - model: ariacompute/ariamodel-mid
+            - model: ariacompute/ariamodel-large
+          algorithm: latency-aware
+        - name: multi_turn
+          description: Multi-turn chat → static mid tier
+          priority: 60
+          rules:
+            operator: AND
+            conditions:
+              - type: conversation
+                name: multi_turn
+          modelRefs:
+            - model: ariacompute/ariamodel-mid
+          algorithm: static
+        - name: multi_question
+          description: Multi-question structure → static mid tier
+          priority: 50
+          rules:
+            operator: AND
+            conditions:
+              - type: structure
+                name: multi_question
+          modelRefs:
+            - model: ariacompute/ariamodel-mid
+          algorithm: static
+        - name: fallback_pool
+          description: Default pool → multi-factor + exact response cache
           priority: 1
           rules:
             operator: AND
             conditions: []
           modelRefs:
             - model: ariacompute/ariamodel-small
+            - model: ariacompute/ariamodel-mid
+            - model: ariacompute/ariamodel-large
+          algorithm: multi-factor
+          plugins:
+            - name: response-cache
 
 global:
   require_api_key: false
