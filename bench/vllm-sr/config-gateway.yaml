@@ -61,7 +61,7 @@ routing:
         operator: OR
         keywords: ["explain", "walk me through"]
     language:
-      - name: english
+      - name: en
         description: English-language requests.
     context:
       - name: long_prompt
