@@ -17,3 +17,4 @@ bindings/flutter/.dart_tool/
 bindings/flutter/build/
 .codebuddy/
 out/
+bench/vllm-sr/.vllm-sr/
