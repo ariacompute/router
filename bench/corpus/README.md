@@ -51,3 +51,5 @@ Do **not** commit full DRACO / MMLU-Pro dumps or API keys.
 | Shared backend | `:8000` / `:9001+` |
 | aria-router | `:8899` |
 | vLLM Semantic Router (Envoy `/v1`) | `:8890` (avoid colliding with aria’s default 8899) |
+
+Bundled minimal config + commands: [`../vllm-sr/`](../vllm-sr/) (`config.yaml`, `vllm-sr validate` / `serve`). This harness does not start `vllm-sr`.

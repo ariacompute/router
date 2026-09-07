@@ -1,0 +1,53 @@
+# Minimal vLLM Semantic Router v0.3 config for aria-router Track B bench.
+# Listener :8890 avoids colliding with aria-router default :8899.
+# Schema: https://vllm-sr.ai/docs/installation/configuration/
+# Adjust providers.models[].provider_model_id and backend_refs[].endpoint
+# to your local OpenAI-compatible backend (do not append /v1).
+
+version: v0.3
+
+listeners:
+  - name: http-8890
+    address: 0.0.0.0
+    port: 8890
+    timeout: 300s
+
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: my-served-model
+      backend_refs:
+        - name: primary
+          endpoint: host.docker.internal:8000
+          protocol: http
+
+routing:
+  strategy: priority
+  modelCards:
+    - name: local/general
+      modality: text
+      capabilities: [chat]
+  signals:
+    keywords:
+      - name: needs_explanation
+        operator: OR
+        keywords: ["explain", "walk me through"]
+  decisions:
+    - name: explanatory_answer
+      description: Prefer an explanatory answer when the request asks for one.
+      priority: 100
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: needs_explanation
+      modelRefs:
+        - model: local/general
+
+global:
+  services:
+    observability:
+      metrics:
+        enabled: true

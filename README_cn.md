@@ -395,6 +395,9 @@ python -m bench compare \
 ```bash
 # --- Track B：多 router ADR-040 ladder（aria-router vs vLLM Semantic Router）---
 # 需本地 aria-router（:8899）、vLLM SR（:8890）以及 pool 后端（:9001+ / :8000）。
+# 自行启动 vLLM SR（见 bench/vllm-sr/README.md）：
+#   vllm-sr validate --config bench/vllm-sr/config.yaml
+#   vllm-sr serve --config bench/vllm-sr/config.yaml
 # --router 评估 live 选路质量；--pool 仍跑 always_* / oracle 基线。
 
 python -m bench routing \
@@ -421,7 +424,7 @@ python -m bench compare \
   --report ./out/vs_vsr_compare.json
 ```
 
-详见 [`bench/corpus/README.md`](bench/corpus/README.md)。规格：[`requirements.md`](requirements.md) §6。
+详见 [`bench/corpus/README.md`](bench/corpus/README.md) 与 [`bench/vllm-sr/`](bench/vllm-sr/)（外部 `vllm-sr` 配置与 validate/serve）。规格：[`requirements.md`](requirements.md) §6。
 
 ## 工程约定
 
