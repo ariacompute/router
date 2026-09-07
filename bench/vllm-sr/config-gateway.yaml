@@ -1,6 +1,7 @@
 # vLLM Semantic Router v0.3 → Aria Gateway.
 # Routing parity with config/examples/semantic-gateway.yaml recipe mom
-# (signals / projections intent / decisions → ariamodel-{small,mid,large}).
+# (signals / decisions → ariamodel-{small,mid,large}; aria-style projections omitted —
+# vLLM SR partition members must be domain/embedding only).
 # Listener :8890 (aria-router stays on :8899).
 # Schema: https://vllm-sr.ai/docs/installation/configuration/
 # Requires: export GATEWAY_API_KEY=…  (never commit secrets).
@@ -106,37 +107,9 @@ routing:
             pattern: '[?？]'
         predicate:
           gte: 2
-  projections:
-    partitions:
-      - name: topic
-        semantics: exclusive
-        members: [needs_explain, ticket]
-        default: needs_explain
-    scores:
-      - name: explain_score
-        method: weighted_sum
-        inputs:
-          - type: keyword
-            name: needs_explain
-            weight: 1.0
-            value_source: confidence
-            match: 1.0
-            miss: 0.0
-          - type: context
-            name: long_prompt
-            weight: 0.3
-            value_source: confidence
-            match: 1.0
-            miss: 0.0
-    mappings:
-      - name: explain_band
-        source: explain_score
-        method: threshold_bands
-        outputs:
-          - name: high
-            gte: 0.8
-          - name: default
-            lt: 0.8
+  # Aria semantic-gateway mom projections (partition over keyword/event) are omitted:
+  # vLLM SR requires partition members to be domain or embedding signals only.
+  # Decisions below do not reference projections.
   decisions:
     - name: explanatory
       description: Keyword hit → static pick + request plugins
