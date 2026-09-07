@@ -16,7 +16,7 @@ use aria_router_core::{
 };
 use aria_router_decision::select_decision;
 use aria_router_plugin::{apply_request, extra_headers, remember_response, PluginHost, PluginOutcome};
-use aria_router_provider::{forward, forward_sse_text, PoolState};
+use aria_router_provider::{forward, forward_sse_stream, PoolState, SseByteStream};
 use aria_router_signal::extract;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -169,6 +169,7 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
         .route("/v1/router/config", get(get_config).put(put_config))
         .route("/v1/router/overview", get(overview_ep))
         .route("/v1/router/topology", get(topology_ep))
+        .route("/v1/router/models", get(list_models_mgmt))
         .route("/v1/router/chat", post(chat_mgmt))
         .route("/v1/router/cost", get(cost_ep))
         .route("/v1/router/keys", get(list_keys).post(create_key))
@@ -468,6 +469,10 @@ async fn list_models(State(st): State<Arc<AppState>>) -> Json<Value> {
     Json(list_models_json(&st))
 }
 
+async fn list_models_mgmt(State(st): State<Arc<AppState>>) -> Json<Value> {
+    Json(list_models_json(&st))
+}
+
 fn list_models_json(st: &AppState) -> Value {
     let doc = st.doc.lock().unwrap();
     let mut data = vec![];
@@ -578,6 +583,7 @@ struct ChatAuth {
     serve_site: Option<String>,
 }
 
+#[derive(Clone)]
 struct CostCtx {
     user: String,
     key_id: Option<String>,
@@ -730,24 +736,13 @@ async fn route_and_forward(
             let doc = snapshot_doc(&st);
             if want_stream {
                 fwd.stream = true;
-                let text = forward_sse_text(&doc, &decision.model, &fwd, &hdrs, &st.pool).await?;
-                let (pt, ct, src) = parse_sse_usage(&text, prompt_est);
-                record_cost(
-                    &st,
-                    &ctx,
-                    &decision,
-                    CostUsage {
-                        turns_in_request,
-                        upstream_requests: 1,
-                        prompt_tokens: pt,
-                        completion_tokens: ct,
-                        tokens_source: src,
-                    },
-                );
+                let sse =
+                    forward_sse_stream(&doc, &decision.model, &fwd, &hdrs, &st.pool).await?;
+                let body = sse_response_body(st.clone(), sse, decision.clone(), ctx, turns_in_request, prompt_est);
                 let mut res = Response::builder()
                     .status(200)
                     .header(header::CONTENT_TYPE, "text/event-stream")
-                    .body(Body::from(text))
+                    .body(body)
                     .unwrap();
                 attach_route_headers(res.headers_mut(), &decision);
                 Ok(res)
@@ -771,6 +766,89 @@ async fn route_and_forward(
                 attach_route_headers(res.headers_mut(), &decision);
                 Ok(res)
             }
+        }
+    }
+}
+
+/// Stream upstream SSE bytes to the client; record pool latency + cost when the body finishes.
+fn sse_response_body(
+    st: Arc<AppState>,
+    sse: SseByteStream,
+    decision: RouteDecision,
+    ctx: CostCtx,
+    turns_in_request: u32,
+    prompt_est: u64,
+) -> Body {
+    use futures_util::StreamExt;
+    let stream = SseCostStream {
+        inner: sse,
+        st,
+        decision,
+        ctx,
+        turns_in_request,
+        prompt_est,
+        recorded: false,
+    };
+    Body::from_stream(stream.map(|item| {
+        item.map_err(|e| std::io::Error::other(e.to_string()))
+    }))
+}
+
+struct SseCostStream {
+    inner: SseByteStream,
+    st: Arc<AppState>,
+    decision: RouteDecision,
+    ctx: CostCtx,
+    turns_in_request: u32,
+    prompt_est: u64,
+    recorded: bool,
+}
+
+impl SseCostStream {
+    fn finish(&mut self, ok: bool) {
+        if self.recorded {
+            return;
+        }
+        self.recorded = true;
+        self.st
+            .pool
+            .record(self.inner.model(), self.inner.elapsed_ms(), ok);
+        let text = self.inner.accumulated();
+        let (pt, ct, src) = parse_sse_usage(&text, self.prompt_est);
+        record_cost(
+            &self.st,
+            &self.ctx,
+            &self.decision,
+            CostUsage {
+                turns_in_request: self.turns_in_request,
+                upstream_requests: 1,
+                prompt_tokens: pt,
+                completion_tokens: ct,
+                tokens_source: src,
+            },
+        );
+    }
+}
+
+impl futures_util::Stream for SseCostStream {
+    type Item = Result<bytes::Bytes, RouterError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        match std::pin::Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(b))) => Poll::Ready(Some(Ok(b))),
+            Poll::Ready(Some(Err(e))) => {
+                self.finish(false);
+                Poll::Ready(Some(Err(e)))
+            }
+            Poll::Ready(None) => {
+                self.finish(true);
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -854,6 +932,31 @@ fn attach_route_headers(h: &mut HeaderMap, d: &RouteDecision) {
     );
     if let Ok(v) = d.model.parse() {
         h.insert("x-aria-router-model", v);
+    }
+    if let Some(algo) = &d.algorithm {
+        if let Ok(v) = algo.parse() {
+            h.insert("x-aria-router-algorithm", v);
+        }
+    }
+    if !d.reason.is_empty() {
+        // Header values must be visible ASCII; sanitize non-ASCII / control chars.
+        let reason: String = d
+            .reason
+            .chars()
+            .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' })
+            .take(200)
+            .collect();
+        if let Ok(v) = reason.parse() {
+            h.insert("x-aria-router-reason", v);
+        }
+    }
+    let conf = format!("{:.4}", d.confidence);
+    if let Ok(v) = conf.parse() {
+        h.insert("x-aria-router-confidence", v);
+    }
+    let bypass = if d.bypass { "true" } else { "false" };
+    if let Ok(v) = bypass.parse() {
+        h.insert("x-aria-router-bypass", v);
     }
 }
 
@@ -1182,24 +1285,64 @@ global:
     }
 
     async fn mock_upstream() -> String {
+        use axum::response::IntoResponse;
         use axum::routing::post;
-        async fn echo(Json(v): Json<Value>) -> Json<Value> {
+        async fn echo(Json(v): Json<Value>) -> Response {
             let model = v.get("model").cloned().unwrap_or(json!("echo"));
-            Json(json!({
-                "id": "chatcmpl-mock",
-                "object": "chat.completion",
-                "model": model,
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "ok"},
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": 12,
-                    "completion_tokens": 3,
-                    "total_tokens": 15
-                }
-            }))
+            let stream = v.get("stream").and_then(|x| x.as_bool()).unwrap_or(false);
+            if stream {
+                let chunk = json!({
+                    "id": "chatcmpl-mock",
+                    "object": "chat.completion.chunk",
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "ok"},
+                        "finish_reason": null
+                    }]
+                });
+                let usage = json!({
+                    "id": "chatcmpl-mock",
+                    "object": "chat.completion.chunk",
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 12,
+                        "completion_tokens": 3,
+                        "total_tokens": 15
+                    }
+                });
+                let body = format!(
+                    "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                    chunk, usage
+                );
+                Response::builder()
+                    .status(200)
+                    .header(header::CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from(body))
+                    .unwrap()
+            } else {
+                Json(json!({
+                    "id": "chatcmpl-mock",
+                    "object": "chat.completion",
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 12,
+                        "completion_tokens": 3,
+                        "total_tokens": 15
+                    }
+                }))
+                .into_response()
+            }
         }
         let app = Router::new().route("/v1/chat/completions", post(echo));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1399,6 +1542,14 @@ global:
             res.headers().get("content-type").unwrap(),
             "text/event-stream"
         );
+        assert!(res.headers().get("x-aria-router-model").is_some());
+        assert!(res.headers().get("x-aria-router-algorithm").is_some()
+            || res.headers().get("x-aria-router-reason").is_some()
+            || res.headers().get("x-aria-router-confidence").is_some());
+        let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("data:"), "expected SSE chunks, got {text}");
+        assert!(text.contains("ok"), "expected content in SSE, got {text}");
 
         let admin = mgmt_router(st);
         let res = admin
@@ -1418,6 +1569,61 @@ global:
             .await
             .unwrap();
         assert_eq!(res.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn mgmt_models_lists_entrypoints() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let (status, body) = oneshot_json(
+            mgmt_router(st),
+            Request::get("/v1/router/models").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let data = body["data"].as_array().unwrap();
+        let ids: Vec<&str> = data.iter().filter_map(|m| m["id"].as_str()).collect();
+        assert!(ids.contains(&"ariacompute/semantic-auto"));
+        assert!(ids.contains(&"local/general"));
+    }
+
+    #[tokio::test]
+    async fn playground_stream_passthrough() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let admin = mgmt_router(st);
+        let res = admin
+            .oneshot(
+                Request::post("/v1/router/chat")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "ariacompute/semantic-auto",
+                            "stream": true,
+                            "messages": [{"role":"user","content":"please explain rust"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "text/event-stream"
+        );
+        assert_eq!(
+            res.headers().get("x-aria-router-layer").unwrap(),
+            "semantic"
+        );
+        assert!(res.headers().get("x-aria-router-confidence").is_some());
+        let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("data:"));
+        assert!(text.contains("[DONE]") || text.contains("ok"));
     }
 
     async fn oneshot_json(app: Router, req: Request<Body>) -> (StatusCode, Value) {

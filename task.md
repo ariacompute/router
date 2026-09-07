@@ -212,3 +212,13 @@
 - [x] `agent-tiny` / setup template；http `route_agent`；topology / Dashboard 文案
 - [x] engine README / requirements 同步（semantic + builtin agent）
 - [x] `cargo test` 全绿
+
+## 阶段 N — Playground 对齐 vLLM SR（核心体验）
+
+### T31 — Playground chat UX
+- [x] Spec：`requirements.md` §3.5 / §1.2 / F 验收；本清单
+- [x] `GET /v1/router/models`；扩展 `x-aria-router-algorithm|reason|confidence|bypass`
+- [x] provider/http：SSE `bytes_stream` 透传；流结束后 cost；单测
+- [x] Dashboard：多轮气泡、Composer、RouteHeaders、markdown、SSE client、localStorage 会话侧栏
+- [x] 不做 MCP / Claw / Web Search / 附件 / 语音
+- [x] `cargo test` + `npm --prefix dashboard run build`

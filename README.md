@@ -103,6 +103,7 @@ The management listener serves a Vite React SPA at `http://{mgmt}/` when `dashbo
 |-----------------------------|--------|
 | **Local (router Dashboard)** | Login / Register · API keys (`sk-aria_…`) · Users (admin) |
 | **OAuth (Aria Compute)** | Account — linked user, `sk-bf-…` reveal/paste/OAuth |
+| **Routing** | Config · Topology · Providers · Replay · **Playground** (multi-turn chat, SSE, route headers; no MCP/Claw) |
 
 Cost splits **Local users** vs **OAuth users**. Build:
 

@@ -103,6 +103,7 @@ cargo run -p aria-router -- serve \
 |------------------------|------|
 | **Local (router Dashboard)** | Login / Register · API 密钥（`sk-aria_…`）· Users（admin） |
 | **OAuth (Aria Compute)** | Account — 已关联用户、`sk-bf-…` 展示/粘贴/OAuth |
+| **Routing** | Config · Topology · Providers · Replay · **Playground**（多轮聊天、SSE、路由 Header；不做 MCP/Claw） |
 
 Cost 分 **Local users** 与 **OAuth users**。构建：
 

@@ -2,6 +2,8 @@
 
 Ops SPA served from the management listener (`--mgmt-bind`). Pages: Overview, Config, Topology, Providers, Replay, Playground.
 
+**Playground** (aligned with vLLM SR core chat UX): multi-turn bubbles, model dropdown (`GET /v1/router/models`), SSE streaming via `POST /v1/router/chat`, routing `x-aria-router-*` header panel, markdown replies, localStorage conversation sidebar. No MCP / Claw / web search / attachments.
+
 ```bash
 npm --prefix dashboard ci
 npm --prefix dashboard run build

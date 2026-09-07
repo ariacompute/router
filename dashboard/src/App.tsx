@@ -229,11 +229,13 @@ export default function App() {
     );
   }
 
+  const fullBleed = loc.pathname === '/playground';
+
   return (
     <div className={styles.shell}>
       <Sidebar user={user!} />
       <main className={styles.main}>
-        <div className="page">{routes}</div>
+        {fullBleed ? routes : <div className="page">{routes}</div>}
       </main>
     </div>
   );

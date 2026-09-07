@@ -1,85 +1,194 @@
-import { useState } from 'react';
-import { sendJson } from '../api';
-import styles from './page.module.css';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  listRouterModels,
+  streamChat,
+  type ChatMessage,
+  type ModelListItem,
+} from '../api';
+import ChatViewport from '../components/playground/ChatViewport';
+import Composer from '../components/playground/Composer';
+import ConversationSidebar from '../components/playground/ConversationSidebar';
+import styles from '../components/playground/playground.module.css';
+import {
+  newId,
+  titleFromPrompt,
+  type PlaygroundMessage,
+} from '../components/playground/types';
+import { useConversationStore } from '../components/playground/useConversationStore';
+
+const PREFERRED_MODEL = 'ariacompute/semantic-auto';
 
 export default function Playground() {
-  const [model, setModel] = useState('ariacompute/semantic-auto');
-  const [prompt, setPrompt] = useState('please explain rust');
-  const [out, setOut] = useState('');
-  const [hdrs, setHdrs] = useState('');
-  const [err, setErr] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelListItem[]>([]);
+  const [defaultModel, setDefaultModel] = useState(PREFERRED_MODEL);
+  const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
-  async function send() {
-    setBusy(true);
+  const {
+    conversations,
+    active,
+    activeId,
+    setActiveId,
+    updateActive,
+    newConversation,
+    deleteConversation,
+    hydrated,
+  } = useConversationStore(defaultModel);
+
+  useEffect(() => {
+    let cancelled = false;
+    listRouterModels()
+      .then((list) => {
+        if (cancelled) return;
+        setModels(list);
+        const preferred =
+          list.find((m) => m.id === PREFERRED_MODEL)?.id ?? list[0]?.id ?? PREFERRED_MODEL;
+        setDefaultModel(preferred);
+      })
+      .catch(() => {
+        /* keep preferred default */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const model = active?.model ?? defaultModel;
+
+  const setModel = useCallback(
+    (m: string) => {
+      updateActive((c) => ({ ...c, model: m }));
+    },
+    [updateActive],
+  );
+
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setBusy(false);
+  }, []);
+
+  const send = useCallback(async () => {
+    const prompt = input.trim();
+    if (!prompt || !active || busy) return;
+
     setErr(null);
+    setInput('');
+    setBusy(true);
+
+    const userMsg: PlaygroundMessage = {
+      id: newId('msg'),
+      role: 'user',
+      content: prompt,
+    };
+    const assistantId = newId('msg');
+    const assistantMsg: PlaygroundMessage = {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      streaming: true,
+    };
+
+    updateActive((c) => ({
+      ...c,
+      title: c.messages.length === 0 ? titleFromPrompt(prompt) : c.title,
+      messages: [...c.messages, userMsg, assistantMsg],
+    }));
+
+    const history: ChatMessage[] = [
+      ...active.messages.map((m) => ({ role: m.role, content: m.content })),
+      { role: 'user', content: prompt },
+    ];
+
+    const ac = new AbortController();
+    abortRef.current = ac;
+
     try {
-      const { data, headers } = await sendJson<Record<string, unknown>>(
-        '/v1/router/chat',
-        'POST',
+      await streamChat(
+        { model, messages: history, max_tokens: 1024 },
         {
-          model,
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 64,
+          signal: ac.signal,
+          onHeaders: (headers) => {
+            updateActive((c) => ({
+              ...c,
+              messages: c.messages.map((m) =>
+                m.id === assistantId ? { ...m, headers } : m,
+              ),
+            }));
+          },
+          onDelta: (delta) => {
+            updateActive((c) => ({
+              ...c,
+              messages: c.messages.map((m) =>
+                m.id === assistantId ? { ...m, content: m.content + delta } : m,
+              ),
+            }));
+          },
         },
       );
-      setHdrs(
-        [
-          headers.get('x-aria-router-layer'),
-          headers.get('x-aria-router-decision'),
-          headers.get('x-aria-router-model'),
-        ]
-          .filter(Boolean)
-          .join(' / '),
-      );
-      setOut(JSON.stringify(data, null, 2));
+      updateActive((c) => ({
+        ...c,
+        messages: c.messages.map((m) =>
+          m.id === assistantId ? { ...m, streaming: false } : m,
+        ),
+      }));
     } catch (e) {
-      setErr((e as Error).message);
+      if ((e as Error).name === 'AbortError') {
+        updateActive((c) => ({
+          ...c,
+          messages: c.messages.map((m) =>
+            m.id === assistantId
+              ? { ...m, streaming: false, content: m.content || '(stopped)' }
+              : m,
+          ),
+        }));
+      } else {
+        const message = (e as Error).message || 'request failed';
+        setErr(message);
+        updateActive((c) => ({
+          ...c,
+          messages: c.messages.map((m) =>
+            m.id === assistantId
+              ? { ...m, streaming: false, error: message, content: m.content }
+              : m,
+          ),
+        }));
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
     }
+  }, [active, busy, input, model, updateActive]);
+
+  if (!hydrated || !active) {
+    return <div className={styles.root}>Loading…</div>;
   }
 
   return (
-    <>
-      <h1 className={styles.h1}>Playground</h1>
-      <div className="stack" style={{ maxWidth: '42rem' }}>
-        <div className="stack" style={{ gap: '0.35rem' }}>
-          <label className="stat-label" htmlFor="model">
-            Model
-          </label>
-          <input
-            id="model"
-            className="input-field"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-          />
-        </div>
-        <div className="stack" style={{ gap: '0.35rem' }}>
-          <label className="stat-label" htmlFor="prompt">
-            Message
-          </label>
-          <textarea
-            id="prompt"
-            className="input-field"
-            rows={5}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-          />
-        </div>
-        <div className={styles.row}>
-          <button type="button" className="btn-primary" onClick={send} disabled={busy}>
-            Send
-          </button>
-          {hdrs ? <span className="badge badge-accent">{hdrs}</span> : null}
-          {err ? (
-            <span className="alert alert-err" style={{ padding: '0.4rem 0.8rem' }}>
-              {err}
-            </span>
-          ) : null}
-        </div>
+    <div className={styles.root}>
+      <ConversationSidebar
+        items={conversations}
+        activeId={activeId}
+        onSelect={setActiveId}
+        onNew={() => newConversation(defaultModel)}
+        onDelete={deleteConversation}
+      />
+      <div className={styles.main}>
+        <ChatViewport messages={active.messages} busy={busy} />
+        {err ? <div className={styles.errBanner}>{err}</div> : null}
+        <Composer
+          model={model}
+          models={models.length ? models : [{ id: model }]}
+          value={input}
+          busy={busy}
+          onModelChange={setModel}
+          onChange={setInput}
+          onSend={send}
+          onStop={stop}
+        />
       </div>
-      <pre className={styles.mono}>{out}</pre>
-    </>
+    </div>
   );
 }

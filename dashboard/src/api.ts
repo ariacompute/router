@@ -58,6 +58,105 @@ export async function sendJson<T>(
   return { data, headers: res.headers };
 }
 
+export type ChatMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+};
+
+export type RouteHeaders = Record<string, string>;
+
+const ROUTE_HEADER_KEYS = [
+  'x-aria-router-layer',
+  'x-aria-router-decision',
+  'x-aria-router-model',
+  'x-aria-router-algorithm',
+  'x-aria-router-reason',
+  'x-aria-router-confidence',
+  'x-aria-router-bypass',
+] as const;
+
+export function pickRouteHeaders(headers: Headers): RouteHeaders {
+  const out: RouteHeaders = {};
+  for (const k of ROUTE_HEADER_KEYS) {
+    const v = headers.get(k);
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
+export type StreamChatHandlers = {
+  onHeaders?: (headers: RouteHeaders) => void;
+  onDelta?: (text: string) => void;
+  signal?: AbortSignal;
+};
+
+/** POST /v1/router/chat with stream:true; yields assistant text deltas from SSE. */
+export async function streamChat(
+  body: {
+    model: string;
+    messages: ChatMessage[];
+    max_tokens?: number;
+  },
+  handlers: StreamChatHandlers = {},
+): Promise<string> {
+  const res = await fetch('/v1/router/chat', {
+    method: 'POST',
+    credentials: 'include',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ ...body, stream: true }),
+    signal: handlers.signal,
+  });
+  if (!res.ok) {
+    throw new Error(await errorMessage(res));
+  }
+  handlers.onHeaders?.(pickRouteHeaders(res.headers));
+  if (!res.body) {
+    throw new Error('empty stream body');
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let full = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n');
+    buffer = parts.pop() ?? '';
+    for (const line of parts) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const data = trimmed.slice(5).trim();
+      if (!data || data === '[DONE]') continue;
+      try {
+        const chunk = JSON.parse(data) as {
+          choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+        };
+        const delta =
+          chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.message?.content ?? '';
+        if (delta) {
+          full += delta;
+          handlers.onDelta?.(delta);
+        }
+      } catch {
+        /* ignore malformed SSE lines */
+      }
+    }
+  }
+  return full;
+}
+
+export type ModelListItem = {
+  id: string;
+  object?: string;
+  owned_by?: string;
+};
+
+export async function listRouterModels(): Promise<ModelListItem[]> {
+  const data = await getJson<{ data?: ModelListItem[] }>('/v1/router/models');
+  return data.data ?? [];
+}
+
 export async function putText(path: string, body: string, contentType: string): Promise<void> {
   const res = await fetch(path, {
     method: 'PUT',

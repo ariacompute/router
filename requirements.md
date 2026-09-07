@@ -22,7 +22,7 @@
 | **B** | 启发式管线 | 启发式 signals、projections、latency-aware / multi-factor、核心 plugins |
 | **C** | 运行时对等 | learned signals（ONNX feature `ml`）、剩余 algorithm/looper/plugin；未实现显式 Unsupported |
 | **E** | SDK | C ABI + 八语言；`cases.json`；`run-binding-tests.sh` |
-| **F-dashboard** | 运维面 | 管理面 SPA：Overview / Config（可写热重载）/ Topology / Providers / Replay / Playground |
+| **F-dashboard** | 运维面 | 管理面 SPA：Overview / Config（可写热重载）/ Topology / Providers / Replay / Playground（多轮聊天气泡 + SSE + 路由 Header 面板；对齐 vLLM SR 核心体验，不做 MCP/Claw/联网/附件） |
 | **G-cost** | 成本 + API key | 六因子成本账本；YAML `pricing`；Dashboard「API 密钥」签发；数据面 / provider 注册 Bearer；engine 传 `router_api_key` |
 | **H-accounts** | 本地用户 + OAuth | Dashboard 注册/登录（密码）；本地 `sk-aria_` 归属用户；OAuth（Aria Compute）关联 + `sk-bf-`；cost `by_local_user` / `by_serve_user`；CLI 扁平 setup |
 
@@ -57,6 +57,7 @@
 ### 2.1 非目标
 
 - Envoy ExtProc、Operator、Helm、fleet-sim、Grafana / Prometheus、ML Setup、Security Policy、wizmap、独立 dashboard 端口 / 本地 OIDC/SSO（本地仅用户名+密码）
+- Playground 不做 MCP / Claw / Web Search / 附件 / 语音 / Feedback（对齐 vLLM SR **核心**聊天体验即可）
 - Hybrid 本增量用 `bfvk` 转发 gateway（仅存储与鉴权分桶）；邮箱验证码；自助注册升 admin
 - 硬 quota、Slack 告警、把 Dashboard `sk-aria_` 当 HF/ModelScope token
 - Vendoring / 子进程接入 Pi / DeepSeek Harness；YAML 自定义 tools
@@ -160,7 +161,8 @@ global:
 
 - `POST /v1/chat/completions` JSON + SSE
 - `GET /v1/models`：entrypoint 虚拟名 + 实名 provider 名
-- 响应头 `x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`
+- 响应头 `x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`；另可选 `x-aria-router-algorithm` / `x-aria-router-reason` / `x-aria-router-confidence` / `x-aria-router-bypass`
+- SSE（`stream: true`）：上游 `bytes_stream` **透传**至客户端（`text/event-stream`）；流结束后再记 cost
 - `global.require_api_key: true` 时须 `Authorization: Bearer` 或 `x-api-key` 命中未吊销 **本地** `sk-aria_` **或** 已配置的 OAuth `sk-bf-`，否则 **401**
 - Cost 事件：`identity` = `local_user` | `local` | `serve` | `anonymous` | `playground`；报告含 `by_local_user` / `by_serve_user`
 
@@ -170,7 +172,7 @@ global:
 - Auth（公开）：`POST /v1/router/auth/register`、`POST /v1/router/auth/login`、`GET /v1/router/auth/register-status`；无用户且未 setup → register **503**
 - Auth（会话）：`POST /v1/router/auth/logout`、`GET /v1/router/auth/me`、`POST /v1/router/auth/password`
 - Users（admin）：`GET/POST /v1/router/users`、禁用/重置密码、`PUT /v1/router/settings/allow_register`
-- 既有 validate/replay/config/overview/providers/topology/chat/cost/keys；keys 带 `owner_user_id`；用户非空时除公开 auth/health/OAuth callback 外须 session
+- 既有 validate/replay/config/overview/providers/topology/chat/cost/keys；`GET /v1/router/models`（与数据面 `/v1/models` 同源 JSON，供 Dashboard Playground）；keys 带 `owner_user_id`；用户非空时除公开 auth/health/OAuth callback 外须 session
 - OAuth（公开登录）：`POST /v1/router/auth/oauth/start`（返回 serve authorize_url）→ `GET /v1/router/auth/oauth/callback`（换 code、upsert 绑定 serve 用户并签发本地会话；回跳仅 `127.0.0.1|localhost` loopback）。遗留 `/v1/router/serve/link/*` mgmt 端点与回调已删除；serve 账户（会话）：`GET /v1/router/serve/account`；`POST /v1/router/serve/account/sync` 自动从 serve 同步 `sk-bf-` 明文（serve `GET /api/api-keys` 现返回 secret，router 轮询写入 `kind:oauth` 记录的 `api_key`；新增 key 自动采用、401/403 或空列表 → 标记 `api_key_deleted`）。**手动粘贴入口 `POST /v1/router/serve/account/key` 已删除**——dashboard Account 页不再提供粘贴框，纯自动同步。
 - `GET /` 与 SPA fallback → `dashboard/dist`
 
@@ -213,7 +215,7 @@ C API（`include/aria_router.h`）：
 - B：启发式 + 三算法 + 五插件单测。
 - C：learned 无权重且被引用 → Unsupported；未知 algorithm 同。
 - E：八语言跑通 `cases.json` 黄金项。
-- F：`PUT /v1/router/config` 非法 YAML 不改文档；合法 tiny YAML 热重载；topology 对 semantic-tiny / agent-tiny 有预期节点；`POST /v1/router/chat` 走 keyword / canned-agent 黄金路径；`--no-dashboard` 时 `/` 不提供 SPA。
+- F：`PUT /v1/router/config` 非法 YAML 不改文档；合法 tiny YAML 热重载；topology 对 semantic-tiny / agent-tiny 有预期节点；`POST /v1/router/chat` 走 keyword / canned-agent 黄金路径；`GET /v1/router/models` 含 entrypoint；`stream:true` 返回 `text/event-stream` 且透传至少 1 chunk；响应含扩展 `x-aria-router-*`；Dashboard Playground：多轮气泡 + 模型下拉 + Header 面板 + markdown + 本地会话侧栏；`--no-dashboard` 时 `/` 不提供 SPA。
 - G：带 `usage` 的 mock chat 计入账本；无 usage → estimate；无 pricing → `cost=0` 且 `priced=false`；`require_api_key: true` 无 Bearer 聊天与 PUT providers → 401；合法 key → 200 且 `by_key` 有 id；吊销后 401；Cost JSON 含六因子键。
 - H：register→login；`allow_register=false` 拒注册；无用户 register→503；session 门控 keys；OAuth 为 keys `kind=oauth`；`sk-bf-` Bearer → `by_serve_user`；engine 单一 `router_api_key`（双前缀）。
 

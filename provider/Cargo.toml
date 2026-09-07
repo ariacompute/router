@@ -8,6 +8,8 @@ description = "OpenAI-compatible upstream forwarding for aria-router"
 [dependencies]
 aria-router-core.workspace = true
 aria-router-config.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

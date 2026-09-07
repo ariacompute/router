@@ -165,6 +165,7 @@ dependencies = [
  "axum",
  "bytes",
  "chrono",
+ "futures-util",
  "hex",
  "http-body-util",
  "password-hash",
@@ -196,6 +197,8 @@ version = "0.1.0"
 dependencies = [
  "aria-router-config",
  "aria-router-core",
+ "bytes",
+ "futures-util",
  "reqwest",
  "serde",
  "serde_json",
