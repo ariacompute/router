@@ -425,7 +425,10 @@ aria-router serve \
 # vLLM Semantic Router data plane :8890 — same Gateway models (parity with semantic-gateway).
 # validate first: vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
 # Needs GATEWAY_API_KEY. Bench uses --entrypoint vllm_sr=auto.
+vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
 vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
+# vllm-sr status
+# vllm-sr stop
 
 # Live-router ADR-040 ladder: chat via aria_router + vllm_sr; --pool still builds always/oracle matrix.
 # Align --pool/--model-id with your backends (local :9001+ below, or Gateway like Track A).

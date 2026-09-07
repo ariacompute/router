@@ -419,7 +419,10 @@ aria-router serve \
 # vLLM Semantic Router 数据面 :8890 — 同一 Gateway 模型（对齐 semantic-gateway）。
 # 建议先 validate：vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
 # 需 GATEWAY_API_KEY。bench 使用 --entrypoint vllm_sr=auto。
+vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
 vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
+# vllm-sr status
+# vllm-sr stop
 
 # Live-router ADR-040 ladder：经 aria_router + vllm_sr chat；--pool 仍建 always/oracle 矩阵。
 # --pool/--model-id 与后端对齐（下方本地 :9001+，或像 Track A 用 Gateway）。
