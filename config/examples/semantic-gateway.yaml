@@ -1,7 +1,7 @@
 # Gateway semantic config (YAML v0.3).
 # Entrypoint: ariacompute/semantic-auto → recipe mom (stage-B signals / decisions),
-# Aria Gateway backends. Gold path: keyword explain → large; multi-turn/question → mid;
-# long prompt → latency-aware pool; else → small.
+# Aria Gateway backends. Gold path: keyword explain → large; systems/trade-off → mid;
+# multi-turn/question → mid; long prompt → latency-aware pool; else → small.
 # modelRefs: fast→small, mid→mid, general→large.
 # Requires: export GATEWAY_API_KEY=…  (expanded via api_key_env; never commit secrets).
 # entrypoint.router must equal recipe.router.
@@ -69,6 +69,10 @@ recipes:
           - name: needs_explain
             operator: OR
             keywords: ["explain", "walk me through"]
+          # Systems / design questions (bench tech-q1 / tech-q3) → mid tier.
+          - name: needs_mid
+            operator: OR
+            keywords: ["reverse proxy", "trade-off", "tradeoff", "architecture"]
         language:
           - name: english
             code: en
@@ -98,11 +102,12 @@ recipes:
       projections:
         - name: topic
           type: partition
-          signals: [needs_explain, ticket]
+          signals: [needs_explain, needs_mid, ticket]
         - name: explain_score
           type: score
           weights:
             needs_explain: 1.0
+            needs_mid: 0.5
             long_prompt: 0.3
         - name: explain_band
           type: mapping
@@ -147,6 +152,21 @@ recipes:
             - model: ariacompute/ariamodel-mid
             - model: ariacompute/ariamodel-large
           algorithm: latency-aware
+        - name: systems_mid
+          description: Systems / trade-off prompts → static mid tier
+          priority: 70
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_mid
+          modelRefs:
+            - model: ariacompute/ariamodel-mid
+          algorithm: static
+          plugins:
+            - name: header-mutation
+              set:
+                x-aria-route: systems_mid
         - name: multi_turn
           description: Multi-turn chat → static mid tier
           priority: 60

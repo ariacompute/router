@@ -1284,7 +1284,7 @@ global:
         )
     }
 
-    /// Gold-path Gateway recipe: explain → large; else → small (static fallback).
+    /// Gold-path Gateway recipe: explain → large; systems/trade-off → mid; else → small.
     fn gateway_yaml(backend: &str) -> String {
         format!(
             r#"version: v0.3
@@ -1334,6 +1334,9 @@ recipes:
           - name: needs_explain
             operator: OR
             keywords: ["explain", "walk me through"]
+          - name: needs_mid
+            operator: OR
+            keywords: ["reverse proxy", "trade-off", "tradeoff", "architecture"]
         context:
           - name: long_prompt
             min_tokens: 256
@@ -1367,6 +1370,16 @@ recipes:
             - model: ariacompute/ariamodel-mid
             - model: ariacompute/ariamodel-large
           algorithm: latency-aware
+        - name: systems_mid
+          priority: 70
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_mid
+          modelRefs:
+            - model: ariacompute/ariamodel-mid
+          algorithm: static
         - name: multi_turn
           priority: 60
           rules:
@@ -1580,6 +1593,36 @@ global:
         assert_eq!(
             res.headers().get("x-aria-router-decision").unwrap(),
             "multi_turn"
+        );
+        assert_eq!(
+            res.headers().get("x-aria-router-model").unwrap(),
+            "ariacompute/ariamodel-mid"
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_systems_mid_routes_reverse_proxy() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&gateway_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st);
+        let body = json!({
+            "model": "ariacompute/semantic-auto",
+            "messages": [{"role":"user","content":"Name one benefit of using an HTTP reverse proxy."}]
+        });
+        let res = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers().get("x-aria-router-decision").unwrap(),
+            "systems_mid"
         );
         assert_eq!(
             res.headers().get("x-aria-router-model").unwrap(),

@@ -371,8 +371,9 @@ python -m unittest discover -s bench/tests -t .
 
 # --- Track A: Aria Gateway pool-only (no local router required) ---
 export GATEWAY_BASE=https://gateway.ariacompute.com
-export GATEWAY_API_KEY=…   # do not commit
-# Adapt expected_model to ariacompute/ariamodel-{small,large} (see out/routing_gateway.json)
+export GATEWAY_API_KEY=your-api-key
+# Adapt expected_model to ariacompute/ariamodel-{small,mid,large}
+# (see bench/corpus/routing_gateway.json — systems/trade-off → mid).
 
 # ADR-040 ladder: chat Gateway pools directly (always_* / oracle / domain / knn; no --router).
 # --quality label scores against corpus expected_model; writes out/gateway_routing.{json,md}.
@@ -383,7 +384,7 @@ python -m bench routing \
   --model-id large=ariacompute/ariamodel-large \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
   --quality label \
-  --corpus ./out/routing_gateway.json \
+  --corpus bench/corpus/routing_gateway.json \
   --report ./out/gateway_routing.json
 
 # MCQ accuracy + E2E latency + tokens on mmlu_tiny via the same Gateway pools (always_* only).
@@ -407,9 +408,11 @@ python -m bench compare \
 # Requires local aria-router (:8899), vLLM SR (:8890), and pool backends (:9001+ / :8000).
 # Start routers yourself (see bench/vllm-sr/README.md). Pick ONE aria-router config below
 # (semantic XOR agent — same --bind). --router = live pick quality; --pool = always/oracle baselines.
+export GATEWAY_BASE=https://gateway.ariacompute.com
+export GATEWAY_API_KEY=your-api-key
 
 # aria-router data plane :8899 — semantic keyword route → Gateway ariamodel-{small,mid,large}.
-# Needs GATEWAY_API_KEY. Use --entrypoint ariacompute/semantic-auto in bench below.
+# Use --entrypoint ariacompute/semantic-auto in bench below.
 aria-router serve \
   --config config/examples/semantic-gateway.yaml \
   --bind 127.0.0.1:8899 \
@@ -424,7 +427,7 @@ aria-router serve \
 
 # vLLM Semantic Router data plane :8890 — same Gateway models (parity with semantic-gateway).
 # validate first: vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
-# Needs GATEWAY_API_KEY. Bench uses --entrypoint vllm_sr=auto.
+# Bench uses --entrypoint vllm_sr=auto.
 vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
 vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
 # vllm-sr status
@@ -438,10 +441,16 @@ python -m bench routing \
   --entrypoint aria_router=ariacompute/semantic-auto \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
-  --pool small=http://127.0.0.1:9001 --pool large=http://127.0.0.1:9002 \
-  --model-id small=local/small --model-id large=local/large \
+  --pick-header vllm_sr=x-vsr-selected-model \
+  --pool small=https://gateway.ariacompute.com \
+  --pool mid=https://gateway.ariacompute.com \
+  --pool large=https://gateway.ariacompute.com \
+  --model-id small=ariacompute/ariamodel-small \
+  --model-id mid=ariacompute/ariamodel-mid \
+  --model-id large=ariacompute/ariamodel-large \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
   --quality label \
-  --corpus bench/corpus/routing_tiny.json \
+  --corpus bench/corpus/routing_gateway.json \
   --report ./out/vs_vsr_routing.json
 
 # MCQ compare through each live router (accuracy / latency / tokens) vs always_* on --pool.
@@ -450,6 +459,8 @@ python -m bench compare \
   --router vllm_sr=http://127.0.0.1:8890 \
   --entrypoint aria_router=ariacompute/semantic-auto \
   --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
+  --pick-header vllm_sr=x-vsr-selected-model \
   --pool base=http://127.0.0.1:8000 \
   --model-id base=Qwen/Qwen3-0.6B \
   --corpus bench/corpus/mmlu_tiny.jsonl \

@@ -31,7 +31,7 @@ vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
 
 Data plane for clients / bench: `http://127.0.0.1:8890`.
 
-`config-gateway.yaml` routing (parity with `semantic-gateway` recipe `mom`): keyword explain → large; long prompt → latency-aware {small,mid,large}; multi-turn / multi-question → mid; else static → small. `default_model` = mid.
+`config-gateway.yaml` routing (parity with `semantic-gateway` recipe `mom`): keyword explain → large; long prompt → latency-aware {small,mid,large}; systems/trade-off (`needs_mid` → `systems_mid`) → mid; multi-turn / multi-question → mid; else static → small. `default_model` = mid. Bench Track A/B routing corpus: [`../corpus/routing_gateway.json`](../corpus/routing_gateway.json).
 
 Gateway `backend_refs` must set `provider`/`type: openai` (+ Bearer `api_key_env`); missing `type` → auth 500 after route. Use `base_url: https://gateway.ariacompute.com/v1` (without `/v1`, Envoy posts `/chat/completions` → Gateway 405). Keep `global.stores.semantic_cache.enabled: false` unless mmbert embeddings are ready.
 

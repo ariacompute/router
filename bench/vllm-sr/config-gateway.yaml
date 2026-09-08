@@ -77,6 +77,10 @@ routing:
       - name: needs_explain
         operator: OR
         keywords: ["explain", "walk me through"]
+      # Systems / design questions (bench tech-q1 / tech-q3) → mid tier.
+      - name: needs_mid
+        operator: OR
+        keywords: ["reverse proxy", "trade-off", "tradeoff", "architecture"]
     language:
       - name: en
         description: English-language requests.
@@ -170,6 +174,24 @@ routing:
           tpot_percentile: 90
           ttft_percentile: 95
           description: Rank candidates by observed latency for long prompts.
+    - name: systems_mid
+      description: Systems / trade-off prompts → static mid tier
+      priority: 70
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: needs_mid
+      modelRefs:
+        - model: ariacompute/ariamodel-mid
+      algorithm:
+        type: static
+      plugins:
+        - type: header_mutation
+          configuration:
+            add:
+              - name: x-aria-route
+                value: systems_mid
     - name: multi_turn
       description: Multi-turn chat → static mid tier
       priority: 60

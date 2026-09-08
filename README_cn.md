@@ -365,8 +365,9 @@ python -m unittest discover -s bench/tests -t .
 
 # --- Track A：Aria Gateway 仅 pool（可不启本地 router）---
 export GATEWAY_BASE=https://gateway.ariacompute.com
-export GATEWAY_API_KEY=…   # 勿提交
-# expected_model 改为 ariacompute/ariamodel-{small,large}（见 out/routing_gateway.json）
+export GATEWAY_API_KEY=your-api-key
+# expected_model 改为 ariacompute/ariamodel-{small,mid,large}
+#（见 bench/corpus/routing_gateway.json — systems/trade-off → mid）。
 
 # ADR-040 ladder：直接 chat Gateway pool（always_* / oracle / domain / knn；无 --router）。
 # --quality label 按 corpus expected_model 打分；写出 out/gateway_routing.{json,md}。
@@ -377,7 +378,7 @@ python -m bench routing \
   --model-id large=ariacompute/ariamodel-large \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
   --quality label \
-  --corpus ./out/routing_gateway.json \
+  --corpus bench/corpus/routing_gateway.json \
   --report ./out/gateway_routing.json
 
 # MCQ accuracy + E2E latency + tokens：同一 Gateway pool 上跑 mmlu_tiny（仅 always_*）。
@@ -401,9 +402,11 @@ python -m bench compare \
 # 需本地 aria-router（:8899）、vLLM SR（:8890）以及 pool 后端（:9001+ / :8000）。
 # 自行启动 router（见 bench/vllm-sr/README.md）。下方 aria-router 配置二选一
 #（semantic XOR agent，同一 --bind）。--router = live 选路质量；--pool = always/oracle 基线。
+export GATEWAY_BASE=https://gateway.ariacompute.com
+export GATEWAY_API_KEY=your-api-key
 
 # aria-router 数据面 :8899 — semantic keyword 路由 → Gateway ariamodel-{small,mid,large}。
-# 需 GATEWAY_API_KEY。bench 使用 --entrypoint ariacompute/semantic-auto。
+# Bench 使用 --entrypoint ariacompute/semantic-auto。
 aria-router serve \
   --config config/examples/semantic-gateway.yaml \
   --bind 127.0.0.1:8899 \
@@ -418,24 +421,30 @@ aria-router serve \
 
 # vLLM Semantic Router 数据面 :8890 — 同一 Gateway 模型（对齐 semantic-gateway）。
 # 建议先 validate：vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
-# 需 GATEWAY_API_KEY。bench 使用 --entrypoint vllm_sr=auto。
+# Bench 使用 --entrypoint vllm_sr=auto。
 vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
 vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
 # vllm-sr status
 # vllm-sr stop
 
 # Live-router ADR-040 ladder：经 aria_router + vllm_sr chat；--pool 仍建 always/oracle 矩阵。
-# --pool/--model-id 与后端对齐（下方本地 :9001+，或像 Track A 用 Gateway）。
+# --pool/--model-id 与后端对齐（本地 :9001+，或像 Track A 用 Gateway）。
 python -m bench routing \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
   --entrypoint aria_router=ariacompute/semantic-auto \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
-  --pool small=http://127.0.0.1:9001 --pool large=http://127.0.0.1:9002 \
-  --model-id small=local/small --model-id large=local/large \
+  --pick-header vllm_sr=x-vsr-selected-model \
+  --pool small=https://gateway.ariacompute.com \
+  --pool mid=https://gateway.ariacompute.com \
+  --pool large=https://gateway.ariacompute.com \
+  --model-id small=ariacompute/ariamodel-small \
+  --model-id mid=ariacompute/ariamodel-mid \
+  --model-id large=ariacompute/ariamodel-large \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
   --quality label \
-  --corpus bench/corpus/routing_tiny.json \
+  --corpus bench/corpus/routing_gateway.json \
   --report ./out/vs_vsr_routing.json
 
 # MCQ compare：经各 live router（accuracy / latency / tokens）对比 --pool 上的 always_*。
@@ -444,6 +453,8 @@ python -m bench compare \
   --router vllm_sr=http://127.0.0.1:8890 \
   --entrypoint aria_router=ariacompute/semantic-auto \
   --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
+  --pick-header vllm_sr=x-vsr-selected-model \
   --pool base=http://127.0.0.1:8000 \
   --model-id base=Qwen/Qwen3-0.6B \
   --corpus bench/corpus/mmlu_tiny.jsonl \
