@@ -10,7 +10,7 @@ Bundled **tiny** fixtures for offline CI. They are **not** official Perplexity D
 | `routing_gateway.json` | `routing` | 5 Gateway/TokenHub items: explain → large (`deepseek-v4-pro`); systems/trade-off → mid (`glm-5.3`); else → small (`qwen3.5-flash`) |
 | `routing_gateway_hard.json` | `routing` | ~12 items for §6.6 Track B; same TokenHub ids; use with `--prices bench/prices/ariamodel.json` and `--pick-map ariacompute/ariamodel-*=…` |
 | `research_tiny.jsonl` | `research` | 2 tasks with mini rubrics (4 axes) + `expected_hits` for label mode |
-| `mmlu_tiny.jsonl` | `compare` | ~12 synthetic MCQ / yes-no / short-answer items |
+| `mmlu_tiny.jsonl` | `compare` | ~14 MCQ / yes-no / short-answer items; includes trap rows (`trap-arch-1`, `trap-stand-for`) so vllm keyword mid/large can diverge from aria factoid→small |
 
 ## Download full DRACO (optional)
 

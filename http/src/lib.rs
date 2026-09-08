@@ -1074,14 +1074,19 @@ async fn route_semantic(
         plugins: plugins.clone(),
         locality: loc,
     };
-    let mut cost_map = HashMap::new();
-    for m in &doc.providers.models {
-        cost_map.insert(m.name.clone(), m.ranking_cost());
-    }
-    let stats = RuntimeStats {
-        latency_ms: st.pool.latency_map(),
-        cost: cost_map,
-        ..Default::default()
+    let algo_name = algo.as_deref().unwrap_or("static");
+    let stats = if algo_name == "static" {
+        RuntimeStats::default()
+    } else {
+        let mut cost_map = HashMap::new();
+        for m in &doc.providers.models {
+            cost_map.insert(m.name.clone(), m.ranking_cost());
+        }
+        RuntimeStats {
+            latency_ms: st.pool.latency_map(),
+            cost: cost_map,
+            ..Default::default()
+        }
     };
     let model = select(doc, &dummy, &eligible, &stats)?;
     let hdrs = extra_headers(&plugins);

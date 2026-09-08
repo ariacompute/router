@@ -460,6 +460,7 @@ python -m bench routing \
 
 # MCQ compare through each live router (accuracy / latency / tokens / cost) vs always_* on Gateway pool.
 # Fair latency: restart aria first to clear in-memory response-cache (p50≈ms otherwise = cache hits).
+# After rebuild/restart, shared reqwest Client (§6.7) reuses TLS to TokenHub across compare tasks.
 # (In the aria serve terminal) Ctrl-C, then re-run the same `aria-router serve …` with GATEWAY_API_KEY set.
 python -m bench compare \
   --router aria_router=http://127.0.0.1:8899 \

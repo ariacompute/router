@@ -130,6 +130,7 @@ python3 -m bench routing \   # 或 compare
 - [ ] routing：`--corpus …/routing_gateway_hard.json --quality label`
 - [ ] compare：`--corpus …/mmlu_tiny.jsonl`（无需 label）
 - [ ] **公平 latency compare**：跑前重启 aria-router，清空进程内 `response-cache`（`PUT /config` 不清理 cache；未重启时 p50 可到数 ms）
+- [ ] aria 热路径：进程内共享 `reqwest::Client`（TLS/连接复用）；`algorithm: static` 不建全量 ranking maps（§6.7）
 
 ```bash
 # terminal1 — clear cache = restart (keep GATEWAY_API_KEY in env)

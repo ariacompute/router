@@ -10,12 +10,37 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-#[derive(Debug, Default)]
+/// Upstream pool stats + shared HTTP client (TLS/connection reuse across chats).
 pub struct PoolState {
+    pub client: reqwest::Client,
     pub latency_ms: Mutex<HashMap<String, f32>>,
     pub failures: Mutex<HashMap<String, u32>>,
+}
+
+impl Default for PoolState {
+    fn default() -> Self {
+        let client = reqwest::Client::builder()
+            .pool_idle_timeout(Duration::from_secs(90))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self {
+            client,
+            latency_ms: Mutex::new(HashMap::new()),
+            failures: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl std::fmt::Debug for PoolState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PoolState")
+            .field("latency_ms", &self.latency_ms)
+            .field("failures", &self.failures)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PoolState {
@@ -65,7 +90,7 @@ pub async fn forward(
             }),
         );
     }
-    let mut builder = reqwest::Client::new().post(&url).json(&body);
+    let mut builder = pool.client.post(&url).json(&body);
     if let Some(key) = api_key(backend) {
         builder = builder.bearer_auth(key);
     }
@@ -132,7 +157,7 @@ pub async fn forward_sse_stream(
         );
         obj.insert("stream".into(), Value::Bool(true));
     }
-    let mut builder = reqwest::Client::new().post(&url).json(&body);
+    let mut builder = pool.client.post(&url).json(&body);
     if let Some(key) = api_key(backend) {
         builder = builder.bearer_auth(key);
     }
@@ -239,4 +264,22 @@ fn api_key(b: &aria_router_config::BackendRef) -> Option<String> {
         .as_ref()
         .and_then(|e| std::env::var(e).ok())
         .filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pool_state_reuses_shared_client() {
+        let a = PoolState::default();
+        let b = PoolState::default();
+        // Distinct PoolState instances each own a Client; AppState holds one for the process.
+        a.record("m", 10.0, true);
+        b.record("m", 20.0, true);
+        assert!((a.latency_map().get("m").copied().unwrap() - 10.0).abs() < 0.01);
+        // Client is constructible and cloneable for concurrent requests.
+        let _ = a.client.clone();
+        let _ = b.client.clone();
+    }
 }

@@ -338,24 +338,15 @@ python -m bench download-mmlu --out ./out/mmlu_pro.jsonl
 3. 决策条件 `type: projection`（`name` + 可选 `equals`）参与 `select_decision`；单测覆盖 band/factoid。
 4. `response-cache` 仅在决策插件启用时写入；cache key 使用选中模型 + 最近 user 文本。
 
-**CLI 示例（摘要）**
-```bash
-python -m bench routing \
-  --router aria_router=http://127.0.0.1:8899 \
-  --router vllm_sr=http://127.0.0.1:8890 \
-  --entrypoint aria_router=ariacompute/semantic-auto \
-  --entrypoint vllm_sr=auto \
-  --pick-header aria_router=x-aria-router-model \
-  --pick-header vllm_sr=x-vsr-selected-model \
-  --pool small=https://gateway.ariacompute.com \
-  --pool mid=https://gateway.ariacompute.com \
-  --pool large=https://gateway.ariacompute.com \
-  --model-id small=ariacompute/ariamodel-small \
-  --model-id mid=ariacompute/ariamodel-mid \
-  --model-id large=ariacompute/ariamodel-large \
-  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
-  --prices bench/prices/ariamodel.json \
-  --quality label \
-  --corpus bench/corpus/routing_gateway_hard.json \
-  --report ./out/vs_vsr_routing.json
-```
+### 6.7 Compare 热路径 vs vLLM SR（连接复用）
+
+**目标**：在冷启动（无 response-cache）compare 上拉开 E2E p50/mean，超越 Envoy 数据面的连接优势差距。
+
+**实现**
+1. `PoolState` 持有共享 `reqwest::Client`（连接池 / keep-alive）；`forward` / `forward_sse_stream` 不得每次 `Client::new()`。
+2. `algorithm: static` 决策跳过全量 `cost_map` / `latency_map` 构建（MCQ/factoid 默认路径）。
+3. 公平测法：compare 前重启 aria 清 cache（见 `bench/MODEL_CHECKLIST.md`）。
+
+**成功标准（报告-only）**
+1. 冷启动 `compare`：`aria` accuracy ≥ `vllm_sr`，且 `aria` p50 **与 mean** 均 ≤ `vllm_sr`（目标 mean 差距显著大于仅 p50 的 ~70ms 噪声）。
+2. `cargo test` 全绿；既有 gateway / provider 单测不回归。

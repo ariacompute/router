@@ -252,3 +252,19 @@
 - [x] `cargo test`；routing hard / compare 报告达标（见 §6.6）
   - routing hard：aria quality `1.0` ≥ vllm `0.833`；cost `0.000444` < `0.000498`；q/$ `2254` > `1672`
   - compare：aria acc `0.0` ≥ vllm `0.0`；p50 `1536ms` ≤ `2787ms`
+
+## 阶段 P — Compare 热路径（共享 HTTP 客户端）
+
+### T39 — Spec §6.7
+- [x] `requirements.md` §6.7；本清单
+
+### T40 — 共享 reqwest::Client
+- [x] `PoolState` 内置 `Client`；`forward` / `forward_sse_stream` 复用
+- [x] 单测 / `cargo test` 绿
+
+### T41 — static 跳过 ranking maps
+- [x] `route_semantic`：`algorithm: static` 不建全量 cost/latency map
+
+### T42 — 文档与验收
+- [x] MODEL_CHECKLIST / README 注明连接复用 + 冷 compare
+- [ ] 冷启动 compare：acc ≥ 且 p50/mean ≤ vllm（需本机重建 serve 后重跑）

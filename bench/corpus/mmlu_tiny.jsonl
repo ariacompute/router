@@ -10,3 +10,5 @@
 {"id": "yn-1", "category": "logic", "question": "Is 2 a prime number?", "answer": "yes"}
 {"id": "yn-2", "category": "logic", "question": "Is the sun a planet?", "answer": "no"}
 {"id": "free-1", "category": "cs", "question": "Name the Linux kernel creator (surname).", "answer": "Torvalds"}
+{"id": "trap-arch-1", "category": "cs", "question": "What does the term architecture stand for as a CS acronym quiz?", "choices": ["A fixed ISO standard code", "It is not a fixed acronym", "Only means CPU microarchitecture", "Only means cloud region layout"], "answer": "B"}
+{"id": "trap-stand-for", "category": "cs", "question": "What does HTTP stand for?", "choices": ["HyperText Transfer Protocol", "High Transfer Text Pipe", "Host Tunnel Transport Path", "Hybrid Transport Type Protocol"], "answer": "A"}

@@ -4,6 +4,7 @@ use aria_router_config::AgentRecipe;
 use aria_router_core::{ChatRequest, ModelCard, RouteDecision, RouterError};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 const DEFAULT_TIMEOUT_MS: u64 = 5000;
 const DEFAULT_MAX_TURNS: u32 = 3;
@@ -64,7 +65,8 @@ impl BuiltinAgent {
 
         let deadline = std::time::Instant::now()
             + std::time::Duration::from_millis(task.timeout_ms.max(1));
-        let client = reqwest::Client::new();
+        static AGENT_HTTP: OnceLock<reqwest::Client> = OnceLock::new();
+        let client = AGENT_HTTP.get_or_init(reqwest::Client::new);
         let url = format!(
             "{}/v1/chat/completions",
             endpoint.trim_end_matches('/')
