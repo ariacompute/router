@@ -300,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
                 model_ids=model_ids,
                 routers=routers,
                 prices=prices,
+                pick_map=pick_map,
                 max_tokens=args.max_tokens,
                 skip_probe=args.skip_probe,
             )

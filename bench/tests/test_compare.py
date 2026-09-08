@@ -134,6 +134,66 @@ class TestCompareE2E(unittest.TestCase):
         # silence unused
         self.assertTrue(answers)
 
+    def test_pick_map_resolves_routed_model_and_cost(self) -> None:
+        corpus = [
+            {
+                "id": "t1",
+                "category": "cs",
+                "question": "Is 2 prime?",
+                "answer": "yes",
+            }
+        ]
+        prices = {
+            "qwen3.5-flash": 1.0,
+            "ariacompute/ariamodel-small": 9.0,
+            "default": 0.5,
+        }
+
+        def chat_fn(cfg: EndpointConfig, *, model: str, prompt: str, **kwargs):
+            if "8899" in cfg.base_url:
+                return ChatResult(
+                    status="ok",
+                    content="yes",
+                    completion_tokens=1000,  # 1000 tok → cost = price * 0.001
+                    prompt_tokens=10,
+                    latency_ms=5.0,
+                    headers={"x-aria-router-model": "ariacompute/ariamodel-small"},
+                )
+            return ChatResult(
+                status="ok",
+                content="yes",
+                completion_tokens=1000,
+                prompt_tokens=10,
+                model=model,
+                latency_ms=5.0,
+            )
+
+        report = run_compare(
+            corpus=corpus,
+            pool={"small": EndpointConfig("http://127.0.0.1:8000")},
+            model_ids={"small": "qwen3.5-flash"},
+            routers=[
+                RouterSpec(
+                    "aria_router",
+                    EndpointConfig("http://127.0.0.1:8899"),
+                    entrypoint="ariacompute/semantic-auto",
+                    pick_headers=["x-aria-router-model"],
+                ),
+            ],
+            prices=prices,
+            pick_map={"ariacompute/ariamodel-small": "qwen3.5-flash"},
+            skip_probe=True,
+            chat_fn=chat_fn,
+        )
+        aria_rows = [r for r in report["results"] if r["system"] == "aria_router"]
+        self.assertEqual(len(aria_rows), 1)
+        row = aria_rows[0]
+        self.assertEqual(row["routed_model_raw"], "ariacompute/ariamodel-small")
+        self.assertEqual(row["routed_model"], "qwen3.5-flash")
+        self.assertNotIn("pick_error", row)
+        # 1000 completion tokens @ $1/MTok → $0.001
+        self.assertAlmostEqual(row["cost_usd"], 0.001)
+
 
 if __name__ == "__main__":
     unittest.main()

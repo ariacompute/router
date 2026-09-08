@@ -16,7 +16,7 @@ from ..http_client import (
     probe_models,
 )
 from ..prices import cost_of, load_prices
-from ..router_targets import RouterSpec
+from ..router_targets import RouterSpec, resolve_pick
 from .grade import format_mcq_prompt, grade_answer
 
 
@@ -73,6 +73,7 @@ def run_compare(
     model_ids: Mapping[str, str],
     routers: Sequence[RouterSpec] | None = None,
     prices: Mapping[str, float] | None = None,
+    pick_map: Mapping[str, str] | None = None,
     max_tokens: int = 64,
     skip_probe: bool = False,
     chat_fn: ChatFn | None = None,
@@ -83,9 +84,16 @@ def run_compare(
 
     fn = chat_fn or chat_completion
     price_table = dict(prices) if prices is not None else load_prices(None)
+    pmap = dict(pick_map) if pick_map else {}
     notes: list[str] = []
     probes: dict[str, Any] = {}
     alias_to_model = {a: model_ids.get(a, a) for a in pool.keys()}
+    models: list[str] = []
+    seen: set[str] = set()
+    for mid in alias_to_model.values():
+        if mid not in seen:
+            seen.add(mid)
+            models.append(mid)
 
     if not skip_probe:
         for alias, cfg in pool.items():
@@ -144,7 +152,18 @@ def run_compare(
                 continue
 
             if pick_headers is not None:
-                row["routed_model"] = chat.picked_model(pick_headers)
+                raw_pick = chat.picked_model(pick_headers)
+                resolved, pick_err = resolve_pick(
+                    raw_pick,
+                    models=models,
+                    alias_to_model=alias_to_model,
+                    pick_map=pmap,
+                )
+                row["routed_model_raw"] = raw_pick
+                row["routed_model"] = resolved or raw_pick
+                if pick_err:
+                    row["pick_error"] = pick_err
+                    notes.append(f"{sys_name}/{tid}: {pick_err}")
             graded = grade_answer(
                 completion=chat.content,
                 gold=gold,
@@ -240,6 +259,8 @@ def run_compare(
             ],
             "systems": [n for n, _, _, _ in systems],
             "max_tokens": max_tokens,
+            "pick_map": pmap,
+            "pool_aliases": alias_to_model,
         },
         "summary": {
             "tasks": len(corpus),
