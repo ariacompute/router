@@ -3,30 +3,30 @@
     "id": "sci-q1",
     "domain": "sci",
     "prompt": "Explain photosynthesis in one sentence.",
-    "expected_model": "ariacompute/ariamodel-large"
+    "expected_model": "deepseek-v4-pro"
   },
   {
     "id": "sci-q2",
     "domain": "sci",
     "prompt": "What is the boiling point of water at sea level in Celsius?",
-    "expected_model": "ariacompute/ariamodel-small"
+    "expected_model": "qwen3.5-flash"
   },
   {
     "id": "tech-q1",
     "domain": "tech",
     "prompt": "Name one benefit of using an HTTP reverse proxy.",
-    "expected_model": "ariacompute/ariamodel-mid"
+    "expected_model": "glm-5.3"
   },
   {
     "id": "tech-q2",
     "domain": "tech",
     "prompt": "What does CPU stand for?",
-    "expected_model": "ariacompute/ariamodel-small"
+    "expected_model": "qwen3.5-flash"
   },
   {
     "id": "tech-q3",
     "domain": "tech",
     "prompt": "What is a common design trade-off when choosing a cache eviction policy?",
-    "expected_model": "ariacompute/ariamodel-mid"
+    "expected_model": "glm-5.3"
   }
 ]

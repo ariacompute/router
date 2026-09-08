@@ -30,7 +30,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 |------|------|
 | [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | 日常 semantic 黄金路径 — `ariacompute/semantic-auto`；keyword 启发式 → `local/general`；无 ML 权重即可 `validate` + `serve` |
 | [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — 黄金 `ariacompute/semantic-auto` + `ariacompute/semantic-catalog`（learned signal + 未实现 algorithm → chat `Unsupported`）；演示优先 tiny |
-| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — 三档 `ariamodel-{small,mid,large}` 经 `cloud/gateway`（`https://gateway.ariacompute.com`）；keyword → large，否则 small；需 `GATEWAY_API_KEY` |
+| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — 三档 `ariamodel-{small,mid,large}` 经 `cloud/gateway`；keyword → large，否则 small；需 `GATEWAY_API_KEY` |
 | [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | 日常 agent 黄金路径 — `ariacompute/agent-auto`；进程内 builtin tool-loop（无 `endpoint` → first-eligible）；演示 / CI |
 | [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — 对称 `semantic.yaml`：黄金 `ariacompute/agent-auto` + `ariacompute/agent-catalog`（故意 `Unsupported`）；演示优先 tiny / gateway |
 | [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — 同上三档云模型；builtin agent LLM 与后端经 `cloud/gateway`；需 `GATEWAY_API_KEY` |
@@ -402,7 +402,7 @@ python -m bench compare \
 # 需本地 aria-router（:8899）、vLLM SR（:8890）以及 pool 后端（:9001+ / :8000）。
 # 自行启动 router（见 bench/vllm-sr/README.md）。下方 aria-router 配置二选一
 #（semantic XOR agent，同一 --bind）。--router = live 选路质量；--pool = always/oracle 基线。
-export GATEWAY_BASE=https://gateway.ariacompute.com
+export GATEWAY_BASE=https://tokenhub.tencentmaas.com
 export GATEWAY_API_KEY=your-api-key
 
 # aria-router 数据面 :8899 — semantic keyword 路由 → Gateway ariamodel-{small,mid,large}。
@@ -436,12 +436,15 @@ python -m bench routing \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pool small=https://gateway.ariacompute.com \
-  --pool mid=https://gateway.ariacompute.com \
-  --pool large=https://gateway.ariacompute.com \
-  --model-id small=ariacompute/ariamodel-small \
-  --model-id mid=ariacompute/ariamodel-mid \
-  --model-id large=ariacompute/ariamodel-large \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --pool small=https://tokenhub.tencentmaas.com \
+  --pool mid=https://tokenhub.tencentmaas.com \
+  --pool large=https://tokenhub.tencentmaas.com \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
   --prices bench/prices/ariamodel.json \
   --quality label \
@@ -457,12 +460,15 @@ python -m bench compare \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pool small=https://gateway.ariacompute.com \
-  --pool mid=https://gateway.ariacompute.com \
-  --pool large=https://gateway.ariacompute.com \
-  --model-id small=ariacompute/ariamodel-small \
-  --model-id mid=ariacompute/ariamodel-mid \
-  --model-id large=ariacompute/ariamodel-large \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --pool small=https://tokenhub.tencentmaas.com \
+  --pool mid=https://tokenhub.tencentmaas.com \
+  --pool large=https://tokenhub.tencentmaas.com \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
   --prices bench/prices/ariamodel.json \
   --corpus bench/corpus/mmlu_tiny.jsonl \

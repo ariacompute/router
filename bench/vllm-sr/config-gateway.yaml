@@ -23,10 +23,10 @@ providers:
     default_model: ariacompute/ariamodel-mid
   models:
     - name: ariacompute/ariamodel-small
-      provider_model_id: ariacompute/ariamodel-small
+      provider_model_id: qwen3.5-flash
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com/v1
+          base_url: https://tokenhub.tencentmaas.com/v1
           protocol: https
           weight: 100
           provider: openai
@@ -35,10 +35,10 @@ providers:
           auth_prefix: Bearer
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-mid
-      provider_model_id: ariacompute/ariamodel-mid
+      provider_model_id: glm-5.3
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com/v1
+          base_url: https://tokenhub.tencentmaas.com/v1
           protocol: https
           weight: 100
           provider: openai
@@ -47,10 +47,10 @@ providers:
           auth_prefix: Bearer
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-large
-      provider_model_id: ariacompute/ariamodel-large
+      provider_model_id: deepseek-v4-pro
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com/v1
+          base_url: https://tokenhub.tencentmaas.com/v1
           protocol: https
           weight: 100
           provider: openai

@@ -30,7 +30,7 @@ Examples (English comments in every file):
 |------|------|
 | [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | Daily semantic gold path — `ariacompute/semantic-auto`; keyword heuristics → `local/general`; `validate` + `serve` with no ML weights |
 | [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — gold `ariacompute/semantic-auto` plus `ariacompute/semantic-catalog` (learned signal + unimplemented algorithm → chat `Unsupported`); prefer tiny for demos |
-| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — pool `ariamodel-{small,mid,large}` via `cloud/gateway` (`https://gateway.ariacompute.com`); keyword → large, else small; needs `GATEWAY_API_KEY` |
+| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — pool `ariamodel-{small,mid,large}` via `cloud/gateway`; keyword → large, else small; needs `GATEWAY_API_KEY` |
 | [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | Daily agent gold path — `ariacompute/agent-auto`; in-process builtin tool-loop (no `endpoint` → first-eligible); demos / CI |
 | [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — symmetric to `semantic.yaml`: gold `ariacompute/agent-auto` plus `ariacompute/agent-catalog` (intentional `Unsupported`); prefer tiny / gateway for demos |
 | [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — same three cloud models; builtin agent LLM + backends through `cloud/gateway`; needs `GATEWAY_API_KEY` |
@@ -408,7 +408,7 @@ python -m bench compare \
 # Requires local aria-router (:8899), vLLM SR (:8890), and pool backends (:9001+ / :8000).
 # Start routers yourself (see bench/vllm-sr/README.md). Pick ONE aria-router config below
 # (semantic XOR agent — same --bind). --router = live pick quality; --pool = always/oracle baselines.
-export GATEWAY_BASE=https://gateway.ariacompute.com
+export GATEWAY_BASE=https://tokenhub.tencentmaas.com
 export GATEWAY_API_KEY=your-api-key
 
 # aria-router data plane :8899 — semantic keyword route → Gateway ariamodel-{small,mid,large}.
@@ -442,12 +442,15 @@ python -m bench routing \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pool small=https://gateway.ariacompute.com \
-  --pool mid=https://gateway.ariacompute.com \
-  --pool large=https://gateway.ariacompute.com \
-  --model-id small=ariacompute/ariamodel-small \
-  --model-id mid=ariacompute/ariamodel-mid \
-  --model-id large=ariacompute/ariamodel-large \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --pool small=https://tokenhub.tencentmaas.com \
+  --pool mid=https://tokenhub.tencentmaas.com \
+  --pool large=https://tokenhub.tencentmaas.com \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
   --prices bench/prices/ariamodel.json \
   --quality label \
@@ -463,12 +466,15 @@ python -m bench compare \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pool small=https://gateway.ariacompute.com \
-  --pool mid=https://gateway.ariacompute.com \
-  --pool large=https://gateway.ariacompute.com \
-  --model-id small=ariacompute/ariamodel-small \
-  --model-id mid=ariacompute/ariamodel-mid \
-  --model-id large=ariacompute/ariamodel-large \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --pool small=https://tokenhub.tencentmaas.com \
+  --pool mid=https://tokenhub.tencentmaas.com \
+  --pool large=https://tokenhub.tencentmaas.com \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
   --prices bench/prices/ariamodel.json \
   --corpus bench/corpus/mmlu_tiny.jsonl \

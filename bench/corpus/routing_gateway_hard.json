@@ -3,72 +3,72 @@
     "id": "sci-q1",
     "domain": "sci",
     "prompt": "Explain photosynthesis in one sentence.",
-    "expected_model": "ariacompute/ariamodel-large"
+    "expected_model": "deepseek-v4-pro"
   },
   {
     "id": "sci-q2",
     "domain": "sci",
     "prompt": "What is the boiling point of water at sea level in Celsius?",
-    "expected_model": "ariacompute/ariamodel-small"
+    "expected_model": "qwen3.5-flash"
   },
   {
     "id": "tech-q1",
     "domain": "tech",
     "prompt": "Name one benefit of using an HTTP reverse proxy.",
-    "expected_model": "ariacompute/ariamodel-mid"
+    "expected_model": "glm-5.3"
   },
   {
     "id": "tech-q2",
     "domain": "tech",
     "prompt": "What does CPU stand for?",
-    "expected_model": "ariacompute/ariamodel-small"
+    "expected_model": "qwen3.5-flash"
   },
   {
     "id": "tech-q3",
     "domain": "tech",
     "prompt": "What is a common design trade-off when choosing a cache eviction policy?",
-    "expected_model": "ariacompute/ariamodel-mid"
+    "expected_model": "glm-5.3"
   },
   {
     "id": "trap-arch-factoid",
     "domain": "tech",
     "prompt": "What does the term architecture stand for as a CS acronym quiz?",
-    "expected_model": "ariacompute/ariamodel-small"
+    "expected_model": "qwen3.5-flash"
   },
   {
     "id": "multi-q",
     "domain": "tech",
     "prompt": "What is REST? What is GraphQL?",
-    "expected_model": "ariacompute/ariamodel-mid"
+    "expected_model": "glm-5.3"
   },
   {
     "id": "fact-celsius",
     "domain": "sci",
     "prompt": "Convert 100C to Fahrenheit in celsius reference terms briefly.",
-    "expected_model": "ariacompute/ariamodel-small"
+    "expected_model": "qwen3.5-flash"
   },
   {
     "id": "explain-os",
     "domain": "tech",
     "prompt": "Please explain what an operating system scheduler does.",
-    "expected_model": "ariacompute/ariamodel-large"
+    "expected_model": "deepseek-v4-pro"
   },
   {
     "id": "proxy-mid",
     "domain": "tech",
     "prompt": "When would you place a reverse proxy in front of app servers?",
-    "expected_model": "ariacompute/ariamodel-mid"
+    "expected_model": "glm-5.3"
   },
   {
     "id": "short-hi",
     "domain": "chat",
     "prompt": "hi",
-    "expected_model": "ariacompute/ariamodel-small"
+    "expected_model": "qwen3.5-flash"
   },
   {
     "id": "stand-for-http",
     "domain": "tech",
     "prompt": "What does HTTP stand for?",
-    "expected_model": "ariacompute/ariamodel-small"
+    "expected_model": "qwen3.5-flash"
   }
 ]

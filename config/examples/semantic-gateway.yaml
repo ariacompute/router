@@ -17,7 +17,7 @@ providers:
     default_model: ariacompute/ariamodel-mid
   models:
     - name: ariacompute/ariamodel-small
-      provider_model_id: ariacompute/ariamodel-small
+      provider_model_id: qwen3.5-flash
       locality: cloud
       modality: text
       capabilities: [chat]
@@ -26,12 +26,12 @@ providers:
         output_per_mtok: 0.20
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com
+          base_url: https://tokenhub.tencentmaas.com
           protocol: http
           weight: 100
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-mid
-      provider_model_id: ariacompute/ariamodel-mid
+      provider_model_id: glm-5.3
       locality: cloud
       modality: text
       capabilities: [chat]
@@ -40,12 +40,12 @@ providers:
         output_per_mtok: 0.80
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com
+          base_url: https://tokenhub.tencentmaas.com
           protocol: http
           weight: 100
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-large
-      provider_model_id: ariacompute/ariamodel-large
+      provider_model_id: deepseek-v4-pro
       locality: cloud
       modality: text
       capabilities: [chat]
@@ -54,7 +54,7 @@ providers:
         output_per_mtok: 2.40
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com
+          base_url: https://tokenhub.tencentmaas.com
           protocol: http
           weight: 100
           api_key_env: GATEWAY_API_KEY
