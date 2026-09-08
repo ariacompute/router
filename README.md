@@ -459,6 +459,8 @@ python -m bench routing \
   --report ./out/vs_vsr_routing.json
 
 # MCQ compare through each live router (accuracy / latency / tokens / cost) vs always_* on Gateway pool.
+# Fair latency: restart aria first to clear in-memory response-cache (p50≈ms otherwise = cache hits).
+# (In the aria serve terminal) Ctrl-C, then re-run the same `aria-router serve …` with GATEWAY_API_KEY set.
 python -m bench compare \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \

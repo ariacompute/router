@@ -129,6 +129,18 @@ python3 -m bench routing \   # 或 compare
 - [ ] `--api-key alias=$GATEWAY_API_KEY` 用双引号或裸变量，**不要**单引号包住 `$VAR`
 - [ ] routing：`--corpus …/routing_gateway_hard.json --quality label`
 - [ ] compare：`--corpus …/mmlu_tiny.jsonl`（无需 label）
+- [ ] **公平 latency compare**：跑前重启 aria-router，清空进程内 `response-cache`（`PUT /config` 不清理 cache；未重启时 p50 可到数 ms）
+
+```bash
+# terminal1 — clear cache = restart (keep GATEWAY_API_KEY in env)
+# Ctrl-C the running serve, then:
+./target/release/aria-router serve \
+  --config config/examples/semantic-gateway.yaml \
+  --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090
+
+# terminal4 — only after :8899 is up again
+python3 -m bench compare …   # same flags as §4
+```
 
 bench 自检：
 

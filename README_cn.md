@@ -453,6 +453,8 @@ python -m bench routing \
   --report ./out/vs_vsr_routing.json
 
 # MCQ compare：经各 live router（accuracy / latency / tokens / cost）对比 Gateway 三档 always_*。
+# 公平延迟：先重启 aria 以清空进程内 response-cache（否则 p50≈ms 多为缓存命中）。
+# （在 aria serve 终端）Ctrl-C，再带 GATEWAY_API_KEY 重新执行同一条 `aria-router serve …`。
 python -m bench compare \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
