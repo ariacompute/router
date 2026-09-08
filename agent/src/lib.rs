@@ -57,6 +57,8 @@ impl BuiltinAgent {
                 layer: "agent".into(),
                 decision: "builtin".into(),
                 bypass: false,
+                routing_latency_ms: None,
+                cache_response: false,
             });
         };
 
@@ -316,6 +318,8 @@ fn decision_from_submit(args: &Value, eligible: &[ModelCard]) -> Result<RouteDec
         layer: "agent".into(),
         decision: "builtin".into(),
         bypass: false,
+        routing_latency_ms: None,
+        cache_response: false,
     })
 }
 
@@ -460,6 +464,8 @@ mod tests {
                 layer: "agent".into(),
                 decision: "builtin".into(),
                 bypass: false,
+                routing_latency_ms: None,
+                cache_response: false,
             }),
         };
         let task = RouteTask {

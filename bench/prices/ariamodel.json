@@ -1,0 +1,12 @@
+{
+  "ariacompute/ariamodel-small": 0.20,
+  "ariacompute/ariamodel-mid": 0.80,
+  "ariacompute/ariamodel-large": 2.40,
+  "ariamodel-small": 0.20,
+  "ariamodel-mid": 0.80,
+  "ariamodel-large": 2.40,
+  "small": 0.20,
+  "mid": 0.80,
+  "large": 2.40,
+  "default": 0.50
+}

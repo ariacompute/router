@@ -419,7 +419,7 @@ aria-router serve \
 #   --bind 127.0.0.1:8899 \
 #   --mgmt-bind 127.0.0.1:8090
 
-# vLLM Semantic Router 数据面 :8890 — 同一 Gateway 模型（对齐 semantic-gateway）。
+# vLLM Semantic Router 数据面 :8890 — **keyword 基线**（冻结；不对齐 aria advanced）。
 # 建议先 validate：vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
 # Bench 使用 --entrypoint vllm_sr=auto。
 vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
@@ -427,8 +427,8 @@ vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
 # vllm-sr status
 # vllm-sr stop
 
-# Live-router ADR-040 ladder：经 aria_router + vllm_sr chat；--pool 仍建 always/oracle 矩阵。
-# --pool/--model-id 与后端对齐（本地 :9001+，或像 Track A 用 Gateway）。
+# Live-router ADR-040 ladder（非对称 §6.6）：aria = advanced mom；vllm_sr = keyword baseline。
+# 优先 hard corpus + --prices，用成本与陷阱事实题拉开差距。
 python -m bench routing \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
@@ -443,11 +443,13 @@ python -m bench routing \
   --model-id mid=ariacompute/ariamodel-mid \
   --model-id large=ariacompute/ariamodel-large \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
   --quality label \
-  --corpus bench/corpus/routing_gateway.json \
+  --corpus bench/corpus/routing_gateway_hard.json \
+  --timeout 180 \
   --report ./out/vs_vsr_routing.json
 
-# MCQ compare：经各 live router（accuracy / latency / tokens）对比 --pool 上的 always_*。
+# MCQ compare：经各 live router（accuracy / latency / tokens / cost）对比 Gateway 三档 always_*。
 python -m bench compare \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
@@ -455,11 +457,20 @@ python -m bench compare \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pool base=http://127.0.0.1:8000 \
-  --model-id base=Qwen/Qwen3-0.6B \
+  --pool small=https://gateway.ariacompute.com \
+  --pool mid=https://gateway.ariacompute.com \
+  --pool large=https://gateway.ariacompute.com \
+  --model-id small=ariacompute/ariamodel-small \
+  --model-id mid=ariacompute/ariamodel-mid \
+  --model-id large=ariacompute/ariamodel-large \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
   --corpus bench/corpus/mmlu_tiny.jsonl \
+  --timeout 180 \
   --report ./out/vs_vsr_compare.json
 ```
+
+**能力面（aria vs vLLM SR 基线）：** 无 Envoy ExtProc；builtin agent 入口；Cost/Replay；投影条件决策；模型 `pricing:` + `x-aria-router-latency-ms`。详见 Topology / Cost / agent-gateway。规格：[`requirements.md`](requirements.md) §6.6。
 
 详见 [`bench/corpus/README.md`](bench/corpus/README.md) 与 [`bench/vllm-sr/`](bench/vllm-sr/)（外部 `vllm-sr` 配置与 validate/serve）。规格：[`requirements.md`](requirements.md) §6。
 

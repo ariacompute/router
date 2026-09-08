@@ -25,7 +25,7 @@ providers:
           base_url: https://gateway.ariacompute.com
           protocol: http
           weight: 100
-          api_key_env: ${GATEWAY_API_KEY:-}
+          api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-mid
       provider_model_id: ariacompute/ariamodel-mid
       locality: cloud
@@ -36,7 +36,7 @@ providers:
           base_url: https://gateway.ariacompute.com
           protocol: http
           weight: 100
-          api_key_env: ${GATEWAY_API_KEY:-}
+          api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-large
       provider_model_id: ariacompute/ariamodel-large
       locality: cloud
@@ -47,7 +47,7 @@ providers:
           base_url: https://gateway.ariacompute.com
           protocol: http
           weight: 100
-          api_key_env: ${GATEWAY_API_KEY:-}
+          api_key_env: GATEWAY_API_KEY
 
 entrypoints:
   - model_names: [ariacompute/agent-auto]

@@ -37,6 +37,12 @@ const IMPLEMENTED: &[&str] = &[
     "response_cache",
 ];
 
+pub fn has_response_cache(plugins: &[PluginRef]) -> bool {
+    plugins
+        .iter()
+        .any(|p| p.name == "response-cache" || p.name == "response_cache")
+}
+
 pub fn apply_request(
     host: &PluginHost,
     plugins: &[PluginRef],
@@ -94,14 +100,19 @@ pub fn apply_request(
     Ok(PluginOutcome::Continue(req))
 }
 
-pub fn remember_response(host: &PluginHost, req: &ChatRequest, body: &Value) {
+/// Persist a response only when the decision enables response-cache.
+pub fn remember_response(host: &PluginHost, plugins: &[PluginRef], req: &ChatRequest, body: &Value) {
+    if !has_response_cache(plugins) {
+        return;
+    }
     if let Ok(mut map) = host.cache.lock() {
         map.insert(cache_key(req), body.clone());
     }
 }
 
 fn cache_key(req: &ChatRequest) -> String {
-    format!("{}:{}", req.model, req.prompt_text())
+    // Selected (or request) model + latest user turn — stable across entrypoint rewrite.
+    format!("{}:{}", req.model, req.last_user_text())
 }
 
 pub fn extra_headers(plugins: &[PluginRef]) -> Vec<(String, String)> {
@@ -180,11 +191,11 @@ mod tests {
     fn response_cache_hits() {
         let host = PluginHost::default();
         let r = req("hi");
-        remember_response(&host, &r, &serde_json::json!({"cached": true}));
         let plugins = vec![PluginRef {
             name: "response-cache".into(),
             extra: Default::default(),
         }];
+        remember_response(&host, &plugins, &r, &serde_json::json!({"cached": true}));
         match apply_request(&host, &plugins, r).unwrap() {
             PluginOutcome::FastResponse(v) => assert_eq!(v["cached"], true),
             _ => panic!("expected cache hit"),
@@ -192,14 +203,18 @@ mod tests {
     }
 
     #[test]
+    fn remember_skipped_without_plugin() {
+        let host = PluginHost::default();
+        let r = req("hi");
+        remember_response(&host, &[], &r, &serde_json::json!({"cached": true}));
+        assert!(host.cache.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn header_mutation_collects() {
         let plugins = vec![PluginRef {
             name: "header-mutation".into(),
-            extra: [(
-                "set".into(),
-                serde_json::json!({"x-test": "1"}),
-            )]
-            .into(),
+            extra: [("set".into(), serde_json::json!({"x-test": "1"}))].into(),
         }];
         let h = extra_headers(&plugins);
         assert_eq!(h, vec![("x-test".into(), "1".into())]);

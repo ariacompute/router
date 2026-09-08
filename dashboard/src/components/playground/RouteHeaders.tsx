@@ -4,6 +4,8 @@ const PRIMARY: { key: string; label: string }[] = [
   { key: 'x-aria-router-decision', label: 'Decision' },
   { key: 'x-aria-router-algorithm', label: 'Algorithm' },
   { key: 'x-aria-router-model', label: 'Model' },
+  { key: 'x-aria-router-latency-ms', label: 'Route ms' },
+  { key: 'x-aria-usage-tokens', label: 'Tokens' },
 ];
 
 const DETAILS: { key: string; label: string }[] = [

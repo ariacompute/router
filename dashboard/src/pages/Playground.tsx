@@ -115,7 +115,7 @@ export default function Playground() {
             updateActive((c) => ({
               ...c,
               messages: c.messages.map((m) =>
-                m.id === assistantId ? { ...m, headers } : m,
+                m.id === assistantId ? { ...m, headers: { ...m.headers, ...headers } } : m,
               ),
             }));
           },
@@ -124,6 +124,27 @@ export default function Playground() {
               ...c,
               messages: c.messages.map((m) =>
                 m.id === assistantId ? { ...m, content: m.content + delta } : m,
+              ),
+            }));
+          },
+          onUsage: (usage) => {
+            const total =
+              usage.total_tokens ??
+              (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0);
+            if (!total) return;
+            const label =
+              usage.prompt_tokens != null || usage.completion_tokens != null
+                ? `${usage.prompt_tokens ?? 0}+${usage.completion_tokens ?? 0}`
+                : String(total);
+            updateActive((c) => ({
+              ...c,
+              messages: c.messages.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      headers: { ...m.headers, 'x-aria-usage-tokens': label },
+                    }
+                  : m,
               ),
             }));
           },

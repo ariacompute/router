@@ -75,6 +75,7 @@ pub fn project(cfgs: &[ProjectionCfg], signals: &SignalSet) -> Result<Projection
 pub fn select_decision<'a>(
     recipe: &'a Recipe,
     signals: &SignalSet,
+    projections: &ProjectionMap,
     strategy: &str,
 ) -> Result<Option<&'a DecisionCfg>, RouterError> {
     let Some(routing) = &recipe.routing else {
@@ -83,7 +84,7 @@ pub fn select_decision<'a>(
     let mut matched: Vec<&DecisionCfg> = routing
         .decisions
         .iter()
-        .filter(|d| eval_rule(&d.rules, signals).unwrap_or(false))
+        .filter(|d| eval_rule(&d.rules, signals, projections).unwrap_or(false))
         .collect();
     if matched.is_empty() {
         return Ok(None);
@@ -93,7 +94,8 @@ pub fn select_decision<'a>(
             matched.sort_by(|a, b| {
                 let ca = confidence_of(a, signals);
                 let cb = confidence_of(b, signals);
-                cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
+                cb.partial_cmp(&ca)
+                    .unwrap_or(std::cmp::Ordering::Equal)
                     .then_with(|| b.priority.cmp(&a.priority))
             });
         }
@@ -106,13 +108,23 @@ fn confidence_of(d: &DecisionCfg, signals: &SignalSet) -> f32 {
     d.rules
         .conditions
         .iter()
-        .filter_map(|c| signals.get(&c.kind, &c.name).map(|h| h.confidence))
+        .filter_map(|c| {
+            if c.kind == "projection" || c.kind == "projection_value" {
+                Some(1.0)
+            } else {
+                signals.get(&c.kind, &c.name).map(|h| h.confidence)
+            }
+        })
         .fold(1.0_f32, |a, b| a.min(b))
 }
 
-pub fn eval_rule(node: &RuleNode, signals: &SignalSet) -> Result<bool, RouterError> {
+pub fn eval_rule(
+    node: &RuleNode,
+    signals: &SignalSet,
+    projections: &ProjectionMap,
+) -> Result<bool, RouterError> {
     if let Some(inner) = &node.not {
-        return Ok(!eval_rule(inner, signals)?);
+        return Ok(!eval_rule(inner, signals, projections)?);
     }
     if node.conditions.is_empty() {
         return Ok(true);
@@ -125,7 +137,7 @@ pub fn eval_rule(node: &RuleNode, signals: &SignalSet) -> Result<bool, RouterErr
     let vals: Vec<bool> = node
         .conditions
         .iter()
-        .map(|c| signals.matched(&c.kind, &c.name))
+        .map(|c| eval_condition(c, signals, projections))
         .collect();
     Ok(match op.as_str() {
         "OR" => vals.iter().any(|v| *v),
@@ -134,9 +146,34 @@ pub fn eval_rule(node: &RuleNode, signals: &SignalSet) -> Result<bool, RouterErr
     })
 }
 
+fn eval_condition(
+    c: &aria_router_config::Condition,
+    signals: &SignalSet,
+    projections: &ProjectionMap,
+) -> bool {
+    if c.kind == "projection" || c.kind == "projection_value" {
+        let Some(v) = projections.values.get(&c.name) else {
+            return false;
+        };
+        match &c.equals {
+            Some(want) => match v {
+                Value::String(s) => s == want,
+                Value::Number(n) => n.to_string() == *want,
+                Value::Bool(b) => (if *b { "true" } else { "false" }) == want.as_str(),
+                Value::Null => want == "null",
+                _ => false,
+            },
+            None => !v.is_null(),
+        }
+    } else {
+        signals.matched(&c.kind, &c.name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aria_router_config::{Condition, DecisionCfg, ModelRef, ProjectionCfg, Routing};
     use aria_router_signal::SignalHit;
 
     #[test]
@@ -150,12 +187,104 @@ mod tests {
         });
         let node = RuleNode {
             operator: Some("AND".into()),
-            conditions: vec![aria_router_config::Condition {
+            conditions: vec![Condition {
                 kind: "keyword".into(),
                 name: "a".into(),
+                equals: None,
             }],
             not: None,
         };
-        assert!(eval_rule(&node, &set).unwrap());
+        assert!(eval_rule(&node, &set, &ProjectionMap::default()).unwrap());
+    }
+
+    #[test]
+    fn projection_equals_selects_decision() {
+        let recipe = Recipe {
+            name: "mom".into(),
+            router: aria_router_core::RouterKind::Semantic,
+            routing: Some(Routing {
+                strategy: "priority".into(),
+                model_cards: None,
+                signals: Default::default(),
+                projections: vec![ProjectionCfg {
+                    name: "explain_band".into(),
+                    kind: "mapping".into(),
+                    extra: [
+                        ("from".into(), serde_json::json!("explain_score")),
+                        (
+                            "bands".into(),
+                            serde_json::json!([
+                                {"name": "high", "min": 0.8, "max": 1.0},
+                                {"name": "default", "min": 0.0, "max": 0.8}
+                            ]),
+                        ),
+                    ]
+                    .into(),
+                }],
+                decisions: vec![
+                    DecisionCfg {
+                        name: "band_high".into(),
+                        description: None,
+                        priority: 100,
+                        rules: RuleNode {
+                            operator: Some("AND".into()),
+                            conditions: vec![Condition {
+                                kind: "projection".into(),
+                                name: "explain_band".into(),
+                                equals: Some("high".into()),
+                            }],
+                            not: None,
+                        },
+                        model_refs: vec![ModelRef {
+                            model: "large".into(),
+                        }],
+                        algorithm: Some("static".into()),
+                        plugins: vec![],
+                        locality: None,
+                    },
+                    DecisionCfg {
+                        name: "fallback".into(),
+                        description: None,
+                        priority: 1,
+                        rules: RuleNode {
+                            operator: Some("AND".into()),
+                            conditions: vec![],
+                            not: None,
+                        },
+                        model_refs: vec![ModelRef {
+                            model: "small".into(),
+                        }],
+                        algorithm: Some("static".into()),
+                        plugins: vec![],
+                        locality: None,
+                    },
+                ],
+                algorithms: serde_json::Value::Null,
+                plugins: serde_json::Value::Null,
+            }),
+            agent: None,
+        };
+        let mut signals = SignalSet::default();
+        signals.hits.push(SignalHit {
+            kind: "keyword".into(),
+            name: "needs_explain".into(),
+            matched: true,
+            confidence: 1.0,
+        });
+        // Manually build projection map as if score mapping ran.
+        let mut proj = ProjectionMap::default();
+        proj.values
+            .insert("explain_band".into(), Value::String("high".into()));
+        let d = select_decision(&recipe, &signals, &proj, "priority")
+            .unwrap()
+            .unwrap();
+        assert_eq!(d.name, "band_high");
+
+        proj.values
+            .insert("explain_band".into(), Value::String("default".into()));
+        let d = select_decision(&recipe, &signals, &proj, "priority")
+            .unwrap()
+            .unwrap();
+        assert_eq!(d.name, "fallback");
     }
 }

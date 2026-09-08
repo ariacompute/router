@@ -79,6 +79,12 @@ pub struct RouteDecision {
     pub decision: String,
     #[serde(default)]
     pub bypass: bool,
+    /// Router-side decision latency in milliseconds (excludes upstream).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_latency_ms: Option<f64>,
+    /// When true, non-stream responses may be stored in response-cache.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cache_response: bool,
 }
 
 fn default_confidence() -> f32 {
@@ -95,6 +101,8 @@ impl RouteDecision {
             layer: "bypass".into(),
             decision: "passthrough".into(),
             bypass: true,
+            routing_latency_ms: None,
+            cache_response: false,
         }
     }
 }

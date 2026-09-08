@@ -425,7 +425,7 @@ aria-router serve \
 #   --bind 127.0.0.1:8899 \
 #   --mgmt-bind 127.0.0.1:8090
 
-# vLLM Semantic Router data plane :8890 — same Gateway models (parity with semantic-gateway).
+# vLLM Semantic Router data plane :8890 — **keyword baseline** (frozen; not synced to aria advanced).
 # validate first: vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
 # Bench uses --entrypoint vllm_sr=auto.
 vllm-sr validate --config bench/vllm-sr/config-gateway.yaml
@@ -433,8 +433,8 @@ vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
 # vllm-sr status
 # vllm-sr stop
 
-# Live-router ADR-040 ladder: chat via aria_router + vllm_sr; --pool still builds always/oracle matrix.
-# Align --pool/--model-id with your backends (local :9001+ below, or Gateway like Track A).
+# Live-router ADR-040 ladder (asymmetric §6.6): aria = advanced mom; vllm_sr = keyword baseline.
+# Prefer hard corpus + --prices so cost / trap factoids show the gap.
 python -m bench routing \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
@@ -449,11 +449,13 @@ python -m bench routing \
   --model-id mid=ariacompute/ariamodel-mid \
   --model-id large=ariacompute/ariamodel-large \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
   --quality label \
-  --corpus bench/corpus/routing_gateway.json \
+  --corpus bench/corpus/routing_gateway_hard.json \
+  --timeout 180 \
   --report ./out/vs_vsr_routing.json
 
-# MCQ compare through each live router (accuracy / latency / tokens) vs always_* on --pool.
+# MCQ compare through each live router (accuracy / latency / tokens / cost) vs always_* on Gateway pool.
 python -m bench compare \
   --router aria_router=http://127.0.0.1:8899 \
   --router vllm_sr=http://127.0.0.1:8890 \
@@ -461,11 +463,20 @@ python -m bench compare \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pool base=http://127.0.0.1:8000 \
-  --model-id base=Qwen/Qwen3-0.6B \
+  --pool small=https://gateway.ariacompute.com \
+  --pool mid=https://gateway.ariacompute.com \
+  --pool large=https://gateway.ariacompute.com \
+  --model-id small=ariacompute/ariamodel-small \
+  --model-id mid=ariacompute/ariamodel-mid \
+  --model-id large=ariacompute/ariamodel-large \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
   --corpus bench/corpus/mmlu_tiny.jsonl \
+  --timeout 180 \
   --report ./out/vs_vsr_compare.json
 ```
+
+**Capability surface (aria vs vLLM SR baseline):** no Envoy ExtProc; builtin agent entrypoint; Cost/Replay dashboard; projection-conditioned decisions; model `pricing:` + `x-aria-router-latency-ms`. See Topology / Cost / agent-gateway for the ops narrative. Spec: [`requirements.md`](requirements.md) §6.6.
 
 See [`bench/corpus/README.md`](bench/corpus/README.md) and [`bench/vllm-sr/`](bench/vllm-sr/) (external `vllm-sr` config + validate/serve). Spec: [`requirements.md`](requirements.md) §6.
 

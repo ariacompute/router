@@ -15,7 +15,9 @@ use aria_router_core::{
     ChatRequest, RouteDecision, RouterError, RouterKind,
 };
 use aria_router_decision::select_decision;
-use aria_router_plugin::{apply_request, extra_headers, remember_response, PluginHost, PluginOutcome};
+use aria_router_plugin::{
+    apply_request, extra_headers, has_response_cache, remember_response, PluginHost, PluginOutcome,
+};
 use aria_router_provider::{forward, forward_sse_stream, PoolState, SseByteStream};
 use aria_router_signal::extract;
 use axum::body::Body;
@@ -711,7 +713,11 @@ async fn route_and_forward(
         .filter(|m| m.role == "user")
         .count() as u32;
     let prompt_est = estimate_tokens(&req.prompt_text());
-    let (decision, mut fwd, extra, hdrs) = route_request(&st, req, &metadata).await?;
+    let route_t0 = std::time::Instant::now();
+    let (mut decision, mut fwd, extra, hdrs) = route_request(&st, req, &metadata).await?;
+    if decision.routing_latency_ms.is_none() {
+        decision.routing_latency_ms = Some(route_t0.elapsed().as_secs_f64() * 1000.0);
+    }
     record(&st, decision.clone());
     match extra {
         Some(fast) => {
@@ -748,7 +754,13 @@ async fn route_and_forward(
                 Ok(res)
             } else {
                 let body = forward(&doc, &decision.model, &fwd, &hdrs, &st.pool).await?;
-                remember_response(&st.plugins, &fwd, &body);
+                if decision.cache_response {
+                    let cache_plugins = [aria_router_config::PluginRef {
+                        name: "response-cache".into(),
+                        extra: Default::default(),
+                    }];
+                    remember_response(&st.plugins, &cache_plugins, &fwd, &body);
+                }
                 let (pt, ct, src) = parse_json_usage(&body, prompt_est);
                 record_cost(
                     &st,
@@ -958,6 +970,12 @@ fn attach_route_headers(h: &mut HeaderMap, d: &RouteDecision) {
     if let Ok(v) = bypass.parse() {
         h.insert("x-aria-router-bypass", v);
     }
+    if let Some(ms) = d.routing_latency_ms {
+        let s = format!("{ms:.3}");
+        if let Ok(v) = s.parse() {
+            h.insert("x-aria-router-latency-ms", v);
+        }
+    }
 }
 
 fn record(st: &AppState, d: RouteDecision) {
@@ -1022,8 +1040,8 @@ async fn route_semantic(
         .as_ref()
         .ok_or_else(|| RouterError::Config("missing routing".into()))?;
     let signals = extract(doc, recipe, &req, metadata)?;
-    let _proj = aria_router_decision::project(&routing.projections, &signals)?;
-    let decision_cfg = select_decision(recipe, &signals, &routing.strategy)?;
+    let proj = aria_router_decision::project(&routing.projections, &signals)?;
+    let decision_cfg = select_decision(recipe, &signals, &proj, &routing.strategy)?;
     let (model_names, algo, plugins, dname, loc) = if let Some(d) = decision_cfg {
         (
             d.model_refs.iter().map(|m| m.model.clone()).collect::<Vec<_>>(),
@@ -1067,7 +1085,11 @@ async fn route_semantic(
     };
     let model = select(doc, &dummy, &eligible, &stats)?;
     let hdrs = extra_headers(&plugins);
-    match apply_request(&st.plugins, &plugins, req)? {
+    let cache_response = has_response_cache(&plugins);
+    // Apply plugins against the *selected* model so response-cache keys match remember.
+    let mut req_for_plugins = req;
+    req_for_plugins.model = model.clone();
+    match apply_request(&st.plugins, &plugins, req_for_plugins)? {
         PluginOutcome::FastResponse(v) => Ok((
             RouteDecision {
                 model: model.clone(),
@@ -1077,6 +1099,8 @@ async fn route_semantic(
                 layer: "semantic".into(),
                 decision: dname,
                 bypass: false,
+                routing_latency_ms: None,
+                cache_response,
             },
             ChatRequest {
                 model: model.clone(),
@@ -1098,6 +1122,8 @@ async fn route_semantic(
                 layer: "semantic".into(),
                 decision: dname,
                 bypass: false,
+                routing_latency_ms: None,
+                cache_response,
             },
             {
                 let mut f = fwd;
@@ -1671,6 +1697,8 @@ global:
                 layer: "agent".into(),
                 decision: "agent".into(),
                 bypass: false,
+                routing_latency_ms: None,
+                cache_response: false,
             },
         );
         let app = data_router(st.clone());
@@ -1722,6 +1750,8 @@ global:
                 layer: "agent".into(),
                 decision: "agent".into(),
                 bypass: false,
+                routing_latency_ms: None,
+                cache_response: false,
             },
         );
         let app = data_router(st);
@@ -1980,6 +2010,8 @@ global:
                 layer: "agent".into(),
                 decision: "agent".into(),
                 bypass: false,
+                routing_latency_ms: None,
+                cache_response: false,
             },
         );
         let admin = mgmt_router(st.clone());

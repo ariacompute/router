@@ -1,10 +1,9 @@
-# Gateway semantic config (YAML v0.3).
-# Entrypoint: ariacompute/semantic-auto → recipe mom (stage-B signals / decisions),
-# Aria Gateway backends. Gold path: keyword explain → large; systems/trade-off → mid;
-# multi-turn/question → mid; long prompt → latency-aware pool; else → small.
-# modelRefs: fast→small, mid→mid, general→large.
-# Requires: export GATEWAY_API_KEY=…  (expanded via api_key_env; never commit secrets).
-# entrypoint.router must equal recipe.router.
+# Gateway semantic config (YAML v0.3) — **advanced** aria recipe.
+# Intentionally ahead of bench/vllm-sr/config-gateway.yaml (keyword baseline).
+# Entrypoint: ariacompute/semantic-auto → recipe mom.
+# Gold path: explain+high band → large; factoid → small; systems/trade-off → mid;
+# multi-turn/question → mid; long prompt → latency-aware / multi-factor; else → small.
+# Requires: export GATEWAY_API_KEY=…  (never commit secrets).
 
 version: v0.3
 
@@ -22,44 +21,50 @@ providers:
       locality: cloud
       modality: text
       capabilities: [chat]
+      pricing:
+        input_per_mtok: 0.10
+        output_per_mtok: 0.20
       backend_refs:
         - name: cloud/gateway
           base_url: https://gateway.ariacompute.com
           protocol: http
           weight: 100
-          api_key_env: ${GATEWAY_API_KEY:-}
+          api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-mid
       provider_model_id: ariacompute/ariamodel-mid
       locality: cloud
       modality: text
       capabilities: [chat]
+      pricing:
+        input_per_mtok: 0.40
+        output_per_mtok: 0.80
       backend_refs:
         - name: cloud/gateway
           base_url: https://gateway.ariacompute.com
           protocol: http
           weight: 100
-          api_key_env: ${GATEWAY_API_KEY:-}
+          api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-large
       provider_model_id: ariacompute/ariamodel-large
       locality: cloud
       modality: text
       capabilities: [chat]
+      pricing:
+        input_per_mtok: 1.20
+        output_per_mtok: 2.40
       backend_refs:
         - name: cloud/gateway
           base_url: https://gateway.ariacompute.com
           protocol: http
           weight: 100
-          api_key_env: ${GATEWAY_API_KEY:-}
+          api_key_env: GATEWAY_API_KEY
 
-# Virtual model names → recipe. Concrete provider names bypass recipes.
 entrypoints:
   - model_names: [ariacompute/semantic-auto]
     router: semantic
     recipe: mom
 
 recipes:
-  # Stage B: heuristics + projections + implemented algorithms/plugins
-  # (parity with semantic.yaml recipe mom; Gateway model names).
   - name: mom
     router: semantic
     routing:
@@ -69,17 +74,23 @@ recipes:
           - name: needs_explain
             operator: OR
             keywords: ["explain", "walk me through"]
-          # Systems / design questions (bench tech-q1 / tech-q3) → mid tier.
+          - name: factoid_small
+            operator: OR
+            keywords:
+              - "boiling point"
+              - "stand for"
+              - "what does"
+              - "CPU"
+              - "acronym"
+              - "in celsius"
           - name: needs_mid
             operator: OR
-            keywords: ["reverse proxy", "trade-off", "tradeoff", "architecture"]
+            keywords: ["reverse proxy", "trade-off", "tradeoff"]
         language:
           - name: english
             code: en
         context:
           - name: long_prompt
-            # Keep well above short Playground turns ("hi") so latency-aware
-            # does not steal the default gold path.
             min_tokens: 256
             max_tokens: 8192
         authz:
@@ -98,11 +109,10 @@ recipes:
         structure:
           - name: multi_question
             min_questions: 2
-      # partition / score / mapping (computed; not eligibility).
       projections:
         - name: topic
           type: partition
-          signals: [needs_explain, needs_mid, ticket]
+          signals: [needs_explain, needs_mid, factoid_small, ticket]
         - name: explain_score
           type: score
           weights:
@@ -121,13 +131,16 @@ recipes:
               max: 0.8
       decisions:
         - name: explanatory
-          description: Keyword hit → static pick + request plugins
+          description: Strong explain signal (projection band high) → large
           priority: 100
           rules:
             operator: AND
             conditions:
               - type: keyword
                 name: needs_explain
+              - type: projection
+                name: explain_band
+                equals: high
           modelRefs:
             - model: ariacompute/ariamodel-large
           algorithm: static
@@ -137,10 +150,23 @@ recipes:
             - name: header-mutation
               set:
                 x-aria-route: explanatory
-            # Do not cap max_tokens here: Gateway large models spend budget on
-            # reasoning first; a low cap (e.g. 64) yields empty assistant content.
+        - name: factoid
+          description: Short factual prompts → small (beats systems_mid traps)
+          priority: 90
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: factoid_small
+          modelRefs:
+            - model: ariacompute/ariamodel-small
+          algorithm: static
+          plugins:
+            - name: header-mutation
+              set:
+                x-aria-route: factoid
         - name: long_context
-          description: Long prompt → latency-aware ranking
+          description: Long prompt → multi-factor (cost+latency) over pool
           priority: 80
           rules:
             operator: AND
@@ -151,7 +177,7 @@ recipes:
             - model: ariacompute/ariamodel-small
             - model: ariacompute/ariamodel-mid
             - model: ariacompute/ariamodel-large
-          algorithm: latency-aware
+          algorithm: multi-factor
         - name: systems_mid
           description: Systems / trade-off prompts → static mid tier
           priority: 70
@@ -190,7 +216,7 @@ recipes:
             - model: ariacompute/ariamodel-mid
           algorithm: static
         - name: fallback_pool
-          description: Default gold path → ariamodel-small (not multi-factor; avoids latency bias to large)
+          description: Default → small + response-cache
           priority: 1
           rules:
             operator: AND
@@ -198,8 +224,8 @@ recipes:
           modelRefs:
             - model: ariacompute/ariamodel-small
           algorithm: static
-          # response-cache omitted: in-process exact cache keys on entrypoint model
-          # vs selected model and is unrelated to hi→large; skip for Gateway gold path.
+          plugins:
+            - name: response-cache
 
 global:
   require_api_key: false

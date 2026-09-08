@@ -73,6 +73,7 @@ const ROUTE_HEADER_KEYS = [
   'x-aria-router-reason',
   'x-aria-router-confidence',
   'x-aria-router-bypass',
+  'x-aria-router-latency-ms',
 ] as const;
 
 export function pickRouteHeaders(headers: Headers): RouteHeaders {
@@ -84,9 +85,16 @@ export function pickRouteHeaders(headers: Headers): RouteHeaders {
   return out;
 }
 
+export type StreamUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+};
+
 export type StreamChatHandlers = {
   onHeaders?: (headers: RouteHeaders) => void;
   onDelta?: (text: string) => void;
+  onUsage?: (usage: StreamUsage) => void;
   signal?: AbortSignal;
 };
 
@@ -125,12 +133,16 @@ export async function streamChat(
     try {
       const chunk = JSON.parse(data) as {
         choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>;
+        usage?: StreamUsage;
       };
       const delta =
         chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.message?.content ?? '';
       if (delta) {
         full += delta;
         handlers.onDelta?.(delta);
+      }
+      if (chunk.usage) {
+        handlers.onUsage?.(chunk.usage);
       }
     } catch {
       /* ignore malformed SSE lines */

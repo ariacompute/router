@@ -222,3 +222,33 @@
 - [x] Dashboard：多轮气泡、Composer、RouteHeaders、markdown、SSE client、localStorage 会话侧栏
 - [x] 不做 MCP / Claw / Web Search / 附件 / 语音
 - [x] `cargo test` + `npm --prefix dashboard run build`
+
+## 阶段 O — Gateway bench win vs vLLM SR（非对称）
+
+### T32 — Spec §6.6
+- [x] `requirements.md` §6.6；本清单阶段 O
+
+### T33 — 投影入决策 + 热路径
+- [x] `Condition.equals`；`select_decision` 吃 `ProjectionMap`；`type: projection`
+- [x] cache key = 选中模型 + `last_user_text`；仅插件启用时 `remember_response`
+- [x] `x-aria-router-latency-ms`；单测
+
+### T34 — aria advanced mom + 冻结 vllm baseline
+- [x] `semantic-gateway.yaml`：factoid_small、投影条件、pricing、fallback response-cache
+- [x] `config-gateway.yaml`：注释 baseline frozen，不同步增量
+
+### T35 — hard corpus + prices
+- [x] `bench/corpus/routing_gateway_hard.json`
+- [x] `bench/prices/ariamodel.json`
+
+### T36 — compare / docs
+- [x] README / README_cn Track B Gateway compare + prices + hard corpus
+- [x] vllm-sr README 标明 baseline
+
+### T37 — Dashboard
+- [x] Playground 展示 latency（+ tokens 若可得）
+
+### T38 — 验收
+- [x] `cargo test`；routing hard / compare 报告达标（见 §6.6）
+  - routing hard：aria quality `1.0` ≥ vllm `0.833`；cost `0.000444` < `0.000498`；q/$ `2254` > `1672`
+  - compare：aria acc `0.0` ≥ vllm `0.0`；p50 `1536ms` ≤ `2787ms`

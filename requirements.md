@@ -322,3 +322,40 @@ python -m bench download-mmlu --out ./out/mmlu_pro.jsonl
 3. `compare` + `mmlu_tiny` → JSON+MD 含 accuracy / latency / tokens；缺 router 时该 system skip。
 4. 缺 `--judge-url` 时 `judge` → 清晰 skip/error。
 5. `cargo test` 不受影响（纯 Python 包）。
+
+### 6.6 Gateway bench win vs vLLM SR（非对称）
+
+**目标**：在 Track B 上让 **aria-router advanced Gateway recipe** 相对 **vLLM SR keyword baseline** 在成本、更难 corpus、compare MCQ、E2E 延迟与能力面上可证明领先。
+
+**约定**
+- aria：`config/examples/semantic-gateway.yaml` 可含投影入决策、`factoid_small`、pricing、修好的 `response-cache`、路由 `x-aria-router-latency-ms`。
+- vllm-sr：`bench/vllm-sr/config-gateway.yaml` **冻结为 keyword 基线**（explain→large / systems_mid→mid / else→small），故意不对齐 aria 增量。
+- Hard corpus：`bench/corpus/routing_gateway_hard.json`；价格表：`bench/prices/ariamodel.json`（`--prices`）。
+
+**成功标准（报告-only，不令 CI 红）**
+1. `routing` + hard corpus：`aria_router.mean_quality ≥ vllm_sr.mean_quality`，且 `aria_router.mean_cost_usd < vllm_sr.mean_cost_usd`（或同等 quality 下更高 `q_per_dollar`）。
+2. `compare` Gateway 三档 + 双 router：`aria` accuracy ≥ `vllm_sr`，且 aria latency p50 ≤ vllm_sr。
+3. 决策条件 `type: projection`（`name` + 可选 `equals`）参与 `select_decision`；单测覆盖 band/factoid。
+4. `response-cache` 仅在决策插件启用时写入；cache key 使用选中模型 + 最近 user 文本。
+
+**CLI 示例（摘要）**
+```bash
+python -m bench routing \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=ariacompute/semantic-auto \
+  --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
+  --pick-header vllm_sr=x-vsr-selected-model \
+  --pool small=https://gateway.ariacompute.com \
+  --pool mid=https://gateway.ariacompute.com \
+  --pool large=https://gateway.ariacompute.com \
+  --model-id small=ariacompute/ariamodel-small \
+  --model-id mid=ariacompute/ariamodel-mid \
+  --model-id large=ariacompute/ariamodel-large \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
+  --quality label \
+  --corpus bench/corpus/routing_gateway_hard.json \
+  --report ./out/vs_vsr_routing.json
+```

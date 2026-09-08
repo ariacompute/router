@@ -6,6 +6,7 @@ Bundled **tiny** fixtures for offline CI. They are **not** official Perplexity D
 |------|------|-------|
 | `routing_tiny.json` | `routing` | ~4 questions with `expected_model` (`local/small` / `local/large`) and `sci-` / `tech-` domains |
 | `routing_gateway.json` | `routing` | 5 Gateway items: explain → large; systems/trade-off → mid; else → small (`ariacompute/ariamodel-{small,mid,large}`) |
+| `routing_gateway_hard.json` | `routing` | ~12–16 items for §6.6 Track B win: traps (architecture factoid → small), multi-`?`/multi-turn → mid, explain → large; use with `--prices bench/prices/ariamodel.json` |
 | `research_tiny.jsonl` | `research` | 2 tasks with mini rubrics (4 axes) + `expected_hits` for label mode |
 | `mmlu_tiny.jsonl` | `compare` | ~12 synthetic MCQ / yes-no / short-answer items |
 

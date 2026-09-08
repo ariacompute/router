@@ -353,6 +353,9 @@ pub struct Condition {
     #[serde(rename = "type")]
     pub kind: String,
     pub name: String,
+    /// For `type: projection`, optional expected string value (e.g. band label).
+    #[serde(default)]
+    pub equals: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
