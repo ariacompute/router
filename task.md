@@ -286,4 +286,9 @@
 
 ### T47 — 验收
 - [x] `cargo test` + bench unittest（含 `agent-auto` entrypoint）；`validate` agent-gateway；route_agent 修复后 smoke 可达 TokenHub（非 eligible-empty）
-- [ ] 本机 live `out/agent_vs_vsr_{routing,compare}.*`：需 Docker（vllm-sr）+ 真实 `GATEWAY_API_KEY`（当前环境不可用）
+- [ ] 本机 live `out/agent_vs_vsr_{routing,compare}.*`：需 Docker（vllm-sr）+ 真实 `GATEWAY_API_KEY`
+
+### T48 — Builtin agent 三档选档
+- [x] `agent-gateway.yaml`：三档意图 prompt + `timeout_ms`/`max_turns`
+- [x] BuiltinAgent：eligible / `list_eligible_models` / `submit_route` / DEFAULT_SYSTEM 暴露 tier
+- [x] 四题 curl：sci-q1/explain-os→large；tech-q1/tech-q3→mid（layer=agent，4/4）

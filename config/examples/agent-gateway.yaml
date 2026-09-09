@@ -1,8 +1,8 @@
-# Gateway agent gold path (YAML v0.3) — Track B **agent** ladder (§6.8).
+# Gateway agent gold path (YAML v0.3) — Track C **agent** ladder (§6.8).
 # Entrypoint: ariacompute/agent-auto. Builtin agent decides among ariamodel-{small,mid,large}.
 # Backends: TokenHub (aligned with semantic-gateway); peer = vllm keyword baseline (frozen).
 # XOR with semantic-gateway on :8899. Requires: export GATEWAY_API_KEY=…  (never commit secrets).
-# entrypoint.router must equal recipe.router.
+# entrypoint.router must equal recipe.router. No keyword short-path — intent via agent.prompt.
 
 version: v0.3
 
@@ -69,12 +69,27 @@ recipes:
     agent:
       endpoint: https://tokenhub.tencentmaas.com
       model: ariacompute/ariamodel-mid
-      timeout_ms: 30000
-      max_turns: 3
+      timeout_ms: 45000
+      max_turns: 4
       fallback: ariacompute/ariamodel-mid
       prompt: |
-        Use tools if needed, then submit_route with one eligible model
-        (prefer ariamodel-large for explanations; ariamodel-small for short factual asks).
+        You are the aria-router builtin agent. Use tools if helpful, then call
+        submit_route with exactly one eligible model. JSON tools only.
+        Include a short reason that names the chosen tier (large / mid / small).
+
+        Tier policy (intent → model; do not default to mid without reason):
+        - large (…/ariamodel-large): teaching or explaining a mechanism/process
+          (how something works), even if the user asks for one sentence or brief
+          form. Prefer large whenever the ask is explanatory rather than a pure fact.
+        - mid (…/ariamodel-mid): systems and engineering judgment — trade-offs,
+          when to use an architecture, naming benefits of infra patterns (e.g. reverse
+          proxy), multi-concept compare ("what is A? what is B?"), design choices.
+        - small (…/ariamodel-small): pure factoids, acronyms/"stand for", unit
+          conversions, greetings. Never route an explain/how-it-works ask to small
+          just because the prompt is short.
+
+        Priority when intents overlap: explanatory (large) > systems/trade-off (mid)
+        > pure factoid (small).
 
 global:
   require_api_key: false

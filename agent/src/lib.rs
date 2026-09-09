@@ -11,7 +11,10 @@ const DEFAULT_MAX_TURNS: u32 = 3;
 const MAX_TURNS_CLAMP: u32 = 8;
 
 const DEFAULT_SYSTEM: &str = "You are the aria-router builtin agent. \
-Use tools if needed, then call submit_route with one eligible model. JSON tools only.";
+Use tools if needed, then call submit_route with one eligible model. JSON tools only. \
+Pick among pool tiers when present: large = explain/how-it-works; \
+mid = systems/trade-offs/multi-concept; small = pure factoids/acronyms/greetings. \
+Prefer large over mid over small when intents overlap. Include a short reason.";
 
 #[derive(Debug, Clone)]
 pub struct RouteTask {
@@ -73,13 +76,19 @@ impl BuiltinAgent {
             "{}/v1/chat/completions",
             endpoint.trim_end_matches('/')
         );
+        let eligible_line = task
+            .eligible
+            .iter()
+            .map(|m| format!("{} [tier={}]", m.name, tier_hint(&m.name)))
+            .collect::<Vec<_>>()
+            .join(", ");
         let mut messages = vec![
             json!({"role": "system", "content": task.system}),
             json!({
                 "role": "user",
                 "content": format!(
                     "Route this request.\nEligible (also via list_eligible_models): {}\nRequest:\n{}",
-                    task.eligible.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join(", "),
+                    eligible_line,
                     task.prompt
                 )
             }),
@@ -189,7 +198,7 @@ fn tool_definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "list_eligible_models",
-                "description": "List models that passed hard constraints",
+                "description": "List models that passed hard constraints, with tier hints (small/mid/large/unknown) from logical name suffixes",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -231,12 +240,12 @@ fn tool_definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "submit_route",
-                "description": "Finalize routing with one eligible model",
+                "description": "Finalize routing with one eligible model. Choose tier by intent: large=explain/how-it-works; mid=systems/trade-offs/multi-concept; small=factoids/acronyms/greetings. Include reason naming the tier.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "model": { "type": "string" },
-                        "reason": { "type": "string" },
+                        "reason": { "type": "string", "description": "short rationale naming large/mid/small" },
                         "confidence": { "type": "number" },
                         "algorithm": { "type": "string" }
                     },
@@ -245,6 +254,27 @@ fn tool_definitions() -> Value {
             }
         }
     ])
+}
+
+/// Pool-role hint from logical name suffix (not user-prompt keyword routing).
+fn tier_hint(name: &str) -> &'static str {
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with("-large") || lower.contains("/ariamodel-large") || lower.ends_with("/large")
+    {
+        "large"
+    } else if lower.ends_with("-mid")
+        || lower.contains("/ariamodel-mid")
+        || lower.ends_with("/mid")
+    {
+        "mid"
+    } else if lower.ends_with("-small")
+        || lower.contains("/ariamodel-small")
+        || lower.ends_with("/small")
+    {
+        "small"
+    } else {
+        "unknown"
+    }
 }
 
 fn run_tool(
@@ -258,6 +288,7 @@ fn run_tool(
             .iter()
             .map(|m| json!({
                 "name": m.name,
+                "tier": tier_hint(&m.name),
                 "locality": m.locality,
                 "modality": m.modality,
                 "capabilities": m.capabilities,
@@ -427,11 +458,35 @@ mod tests {
         tools.latency_ms.insert("local/general".into(), 12.5);
         let listed = run_tool("list_eligible_models", &json!({}), &eligible, &tools).unwrap();
         assert_eq!(listed[0]["name"], "local/general");
+        assert_eq!(listed[0]["tier"], "unknown");
         let health = run_tool("get_backend_health", &json!({}), &eligible, &tools).unwrap();
         assert_eq!(health["local/general"]["failures"], 2);
         assert_eq!(health["local/general"]["healthy"], false);
         let lat = run_tool("get_recent_latency", &json!({}), &eligible, &tools).unwrap();
         assert_eq!(lat["local/general"], 12.5);
+    }
+
+    #[test]
+    fn tier_hint_from_logical_suffix() {
+        assert_eq!(tier_hint("ariacompute/ariamodel-small"), "small");
+        assert_eq!(tier_hint("ariacompute/ariamodel-mid"), "mid");
+        assert_eq!(tier_hint("ariacompute/ariamodel-large"), "large");
+        assert_eq!(tier_hint("local/general"), "unknown");
+        let eligible = vec![
+            card("ariacompute/ariamodel-small"),
+            card("ariacompute/ariamodel-mid"),
+            card("ariacompute/ariamodel-large"),
+        ];
+        let listed = run_tool(
+            "list_eligible_models",
+            &json!({}),
+            &eligible,
+            &ToolRuntime::default(),
+        )
+        .unwrap();
+        assert_eq!(listed[0]["tier"], "small");
+        assert_eq!(listed[1]["tier"], "mid");
+        assert_eq!(listed[2]["tier"], "large");
     }
 
     #[test]
