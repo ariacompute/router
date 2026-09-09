@@ -34,6 +34,8 @@ pub struct ToolRuntime {
 pub struct BuiltinAgent {
     pub endpoint: Option<String>,
     pub model: String,
+    /// Bearer token for `endpoint` (e.g. from provider `api_key_env`).
+    pub api_key: Option<String>,
     pub canned: Option<RouteDecision>,
 }
 
@@ -98,7 +100,13 @@ impl BuiltinAgent {
             });
             let resp = tokio::time::timeout(
                 remaining,
-                client.post(&url).json(&body).send(),
+                {
+                    let mut req = client.post(&url).json(&body);
+                    if let Some(key) = &self.api_key {
+                        req = req.bearer_auth(key);
+                    }
+                    req.send()
+                },
             )
             .await
             .map_err(|_| RouterError::Timeout("builtin agent".into()))?
@@ -458,6 +466,7 @@ mod tests {
         let canned = BuiltinAgent {
             endpoint: None,
             model: "router-llm".into(),
+            api_key: None,
             canned: Some(RouteDecision {
                 model: "local/general".into(),
                 algorithm: None,
@@ -481,6 +490,7 @@ mod tests {
         let first = BuiltinAgent {
             endpoint: None,
             model: "router-llm".into(),
+            api_key: None,
             canned: None,
         };
         assert_eq!(

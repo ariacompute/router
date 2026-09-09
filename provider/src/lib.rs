@@ -254,7 +254,7 @@ fn pick_backend(p: &ProviderModel) -> Result<&aria_router_config::BackendRef, Ro
         .ok_or_else(|| RouterError::Config(format!("model {} has no backend_refs", p.name)))
 }
 
-fn api_key(b: &aria_router_config::BackendRef) -> Option<String> {
+pub fn backend_api_key(b: &aria_router_config::BackendRef) -> Option<String> {
     if let Some(k) = &b.api_key {
         if !k.is_empty() {
             return Some(k.clone());
@@ -264,6 +264,10 @@ fn api_key(b: &aria_router_config::BackendRef) -> Option<String> {
         .as_ref()
         .and_then(|e| std::env::var(e).ok())
         .filter(|s| !s.is_empty())
+}
+
+fn api_key(b: &aria_router_config::BackendRef) -> Option<String> {
+    backend_api_key(b)
 }
 
 #[cfg(test)]

@@ -1166,8 +1166,8 @@ async fn route_agent(
     };
     let canned = st.fake_agents.lock().unwrap().get("builtin").cloned();
     let logical_llm = agent.model.clone().unwrap_or_else(|| "router-llm".into());
-    let upstream_llm = doc
-        .provider(&logical_llm)
+    let llm_provider = doc.provider(&logical_llm);
+    let upstream_llm = llm_provider
         .map(|p| {
             if p.provider_model_id.is_empty() {
                 p.name.clone()
@@ -1176,9 +1176,16 @@ async fn route_agent(
             }
         })
         .unwrap_or_else(|| logical_llm.clone());
+    let api_key = llm_provider.and_then(|p| {
+        p.backend_refs
+            .iter()
+            .max_by_key(|b| b.weight)
+            .and_then(aria_router_provider::backend_api_key)
+    });
     let builtin = BuiltinAgent {
         endpoint: agent.endpoint.clone(),
         model: upstream_llm,
+        api_key,
         canned,
     };
     let mut decision = builtin.route(task, &tools).await?;
