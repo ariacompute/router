@@ -87,22 +87,13 @@ fn default_catalog_kind() -> String {
     "hash".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StoresCfg {
     #[serde(default)]
     pub memory: MemoryStoreCfg,
     #[serde(default)]
     pub semantic_cache: SemanticCacheCfg,
-}
-
-impl Default for StoresCfg {
-    fn default() -> Self {
-        Self {
-            memory: MemoryStoreCfg::default(),
-            semantic_cache: SemanticCacheCfg::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,22 +158,13 @@ fn default_cache_ttl() -> u32 {
     4
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServicesCfg {
     #[serde(default)]
     pub ratelimit: RateLimitCfg,
     #[serde(default)]
     pub router_replay: RouterReplayCfg,
-}
-
-impl Default for ServicesCfg {
-    fn default() -> Self {
-        Self {
-            ratelimit: RateLimitCfg::default(),
-            router_replay: RouterReplayCfg::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
