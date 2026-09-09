@@ -350,3 +350,44 @@ python -m bench download-mmlu --out ./out/mmlu_pro.jsonl
 **成功标准（报告-only）**
 1. 冷启动 `compare`：`aria` accuracy ≥ `vllm_sr`，且 `aria` p50 **与 mean** 均 ≤ `vllm_sr`（目标 mean 差距显著大于仅 p50 的 ~70ms 噪声）。
 2. `cargo test` 全绿；既有 gateway / provider 单测不回归。
+
+### 6.8 Agent strategy Track B（非对称）
+
+**目标**：评测 **aria builtin agent**（`ariacompute/agent-auto`）相对 **vLLM SR keyword baseline** 在 routing + compare 上的选档质量；与 §6.6 semantic 梯子正交（同端口 XOR serve）。
+
+**约定**
+- aria：`config/examples/agent-gateway.yaml`（TokenHub 三档 + agent LLM=mid）；entrypoint `ariacompute/agent-auto`。
+- vllm-sr：`bench/vllm-sr/config-gateway.yaml` **同一冻结 keyword 基线**（`auto`）；不实现 vLLM agent 对等面。
+- 语料复用：`routing_gateway_hard.json` / `mmlu_tiny.jsonl`；价格：`bench/prices/ariamodel.json` + `--pick-map`。
+- 报告：`out/agent_vs_vsr_routing.{json,md}`、`out/agent_vs_vsr_compare.{json,md}`。
+
+**成功标准（报告-only，不令 CI 红）**
+1. `routing` + hard：`aria_router.mean_quality ≥ vllm_sr.mean_quality`；cost/q$ 必出报告，**不**强制 cost 胜（agent 多一轮 mid LLM）。
+2. `compare` + `mmlu_tiny`：`aria` accuracy ≥ `vllm_sr`；p50/mean **报告**，**不**要求 ≤ vllm（tool-loop 结构性更慢）；aria `results_error` 不劣于 vllm。
+3. Bench CLI 以 `--entrypoint aria_router=ariacompute/agent-auto` 指向 agent；单测覆盖 entrypoint 解析。
+
+**CLI 摘要**
+```bash
+aria-router serve --config config/examples/agent-gateway.yaml \
+  --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090
+# vllm-sr keyword baseline :8890（同 §6.6）
+
+python -m bench routing \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=ariacompute/agent-auto \
+  --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
+  --pick-header vllm_sr=x-vsr-selected-model \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --pool small=https://tokenhub.tencentmaas.com \
+  --pool mid=https://tokenhub.tencentmaas.com \
+  --pool large=https://tokenhub.tencentmaas.com \
+  --model-id small=qwen3.5-flash --model-id mid=glm-5.3 --model-id large=deepseek-v4-pro \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json --quality label \
+  --corpus bench/corpus/routing_gateway_hard.json \
+  --timeout 300 --report ./out/agent_vs_vsr_routing.json
+```

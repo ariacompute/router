@@ -268,3 +268,22 @@
 ### T42 — 文档与验收
 - [x] MODEL_CHECKLIST / README 注明连接复用 + 冷 compare
 - [ ] 冷启动 compare：acc ≥ 且 p50/mean ≤ vllm（需本机重建 serve 后重跑）
+
+## 阶段 Q — Agent strategy Track B（非对称）
+
+### T43 — Spec §6.8
+- [x] `requirements.md` §6.8；本清单阶段 Q
+
+### T44 — agent-gateway TokenHub 对齐
+- [x] `agent-gateway.yaml`：provider_model_id / base_url / pricing / agent.endpoint
+
+### T45 — 文档
+- [x] README / README_cn Agent ladder 命令块
+- [x] MODEL_CHECKLIST + corpus / vllm-sr README
+
+### T46 — bench 单测
+- [x] `agent-auto` entrypoint 解析进 `RouterSpec`
+
+### T47 — 验收
+- [x] `cargo test` + bench unittest（含 `agent-auto` entrypoint）；`validate` agent-gateway；route_agent 修复后 smoke 可达 TokenHub（非 eligible-empty）
+- [ ] 本机 live `out/agent_vs_vsr_{routing,compare}.*`：需 Docker（vllm-sr）+ 真实 `GATEWAY_API_KEY`（当前环境不可用）

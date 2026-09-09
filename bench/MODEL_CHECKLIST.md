@@ -38,6 +38,7 @@ usd_mtok:  <USD / 1M tok>    # 成本表
   - **禁止** `api_key_env: ${GATEWAY_API_KEY:-}`（会展开成密钥明文再当变量名查，导致 401）
 - [ ] recipe / decisions 里 `model:` 仍用 **逻辑名**
 - [ ] `providers.defaults.default_model` 用逻辑名
+- [ ] **Agent Track B（§6.8）**：`agent-gateway.yaml` 与 semantic 同 TokenHub/`provider_model_id`/`pricing`；`agent.model` 用逻辑 mid；**XOR** serve（semantic XOR agent，同 `:8899`）；bench 用 `--entrypoint aria_router=ariacompute/agent-auto`，报告 `out/agent_vs_vsr_{routing,compare}.*`
 
 ### vllm-sr — `bench/vllm-sr/config-gateway.yaml`
 
@@ -126,6 +127,7 @@ python3 -m bench routing \   # 或 compare
 - [ ] `--pool` 的 base_url：**无**尾 `/v1`（bench 自己拼 `/v1/chat/completions`）
 - [ ] `--model-id` = 上游名（与 corpus `expected_model` 一致）
 - [ ] `--pick-map` 逻辑名 → 上游名（routing **必须**；compare 用于 `routed_model` / cost）
+- [ ] Agent Track B：`--entrypoint aria_router=ariacompute/agent-auto`；serve `agent-gateway.yaml`；报告 `./out/agent_vs_vsr_{routing,compare}.json`
 - [ ] `--api-key alias=$GATEWAY_API_KEY` 用双引号或裸变量，**不要**单引号包住 `$VAR`
 - [ ] routing：`--corpus …/routing_gateway_hard.json --quality label`
 - [ ] compare：`--corpus …/mmlu_tiny.jsonl`（无需 label）

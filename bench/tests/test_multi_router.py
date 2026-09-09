@@ -34,6 +34,18 @@ class TestRouterTargets(unittest.TestCase):
         self.assertEqual(by["vllm_sr"].entrypoint, "auto")
         self.assertEqual(by["vllm_sr"].pick_headers, [])
 
+    def test_agent_auto_entrypoint(self) -> None:
+        specs = parse_router_args(
+            ["aria_router=http://127.0.0.1:8899", "vllm_sr=http://127.0.0.1:8890"],
+            entrypoint_args=[
+                "aria_router=ariacompute/agent-auto",
+                "vllm_sr=auto",
+            ],
+        )
+        by = {s.name: s for s in specs}
+        self.assertEqual(by["aria_router"].entrypoint, "ariacompute/agent-auto")
+        self.assertEqual(by["vllm_sr"].entrypoint, "auto")
+
     def test_resolve_pick_map(self) -> None:
         mid, err = resolve_pick(
             "Qwen/Qwen3-0.6B",

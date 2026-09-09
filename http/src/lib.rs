@@ -1153,7 +1153,8 @@ async fn route_agent(
         .as_ref()
         .ok_or_else(|| RouterError::Config("missing agent".into()))?;
     let all_names: Vec<String> = doc.providers.models.iter().map(|m| m.name.clone()).collect();
-    let eligible = hard_filter(doc, &all_names, Some("local"), Some("text"));
+    // Agent may route to cloud or local backends; do not hard-require locality=local.
+    let eligible = hard_filter(doc, &all_names, None, Some("text"));
     if eligible.is_empty() {
         return Err(RouterError::FailClosed("no eligible models after hard constraints".into()));
     }
@@ -1164,9 +1165,20 @@ async fn route_agent(
         request_view: request_view(&req),
     };
     let canned = st.fake_agents.lock().unwrap().get("builtin").cloned();
+    let logical_llm = agent.model.clone().unwrap_or_else(|| "router-llm".into());
+    let upstream_llm = doc
+        .provider(&logical_llm)
+        .map(|p| {
+            if p.provider_model_id.is_empty() {
+                p.name.clone()
+            } else {
+                p.provider_model_id.clone()
+            }
+        })
+        .unwrap_or_else(|| logical_llm.clone());
     let builtin = BuiltinAgent {
         endpoint: agent.endpoint.clone(),
-        model: agent.model.clone().unwrap_or_else(|| "router-llm".into()),
+        model: upstream_llm,
         canned,
     };
     let mut decision = builtin.route(task, &tools).await?;

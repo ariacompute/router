@@ -50,3 +50,5 @@ python -m bench compare \
 ```
 
 See root [`README.md`](../../README.md) Track B for the full aria-router vs vLLM SR ladder.
+
+For the **Agent ladder** (§6.8), peer remains this same keyword baseline on `:8890` (no vLLM agent config); aria serves `agent-gateway.yaml` with `--entrypoint ariacompute/agent-auto`.

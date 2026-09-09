@@ -1,7 +1,7 @@
-# Gateway agent gold path (YAML v0.3).
+# Gateway agent gold path (YAML v0.3) — Track B **agent** ladder (§6.8).
 # Entrypoint: ariacompute/agent-auto. Builtin agent decides among ariamodel-{small,mid,large}.
-# Agent LLM + backends: Aria Gateway (cloud/gateway).
-# Requires: export GATEWAY_API_KEY=…  (never commit secrets).
+# Backends: TokenHub (aligned with semantic-gateway); peer = vllm keyword baseline (frozen).
+# XOR with semantic-gateway on :8899. Requires: export GATEWAY_API_KEY=…  (never commit secrets).
 # entrypoint.router must equal recipe.router.
 
 version: v0.3
@@ -16,35 +16,44 @@ providers:
     default_model: ariacompute/ariamodel-mid
   models:
     - name: ariacompute/ariamodel-small
-      provider_model_id: ariacompute/ariamodel-small
+      provider_model_id: qwen3.5-flash
       locality: cloud
       modality: text
       capabilities: [chat]
+      pricing:
+        input_per_mtok: 0.10
+        output_per_mtok: 0.20
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com
+          base_url: https://tokenhub.tencentmaas.com
           protocol: http
           weight: 100
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-mid
-      provider_model_id: ariacompute/ariamodel-mid
+      provider_model_id: glm-5.3
       locality: cloud
       modality: text
       capabilities: [chat]
+      pricing:
+        input_per_mtok: 0.40
+        output_per_mtok: 0.80
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com
+          base_url: https://tokenhub.tencentmaas.com
           protocol: http
           weight: 100
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-large
-      provider_model_id: ariacompute/ariamodel-large
+      provider_model_id: deepseek-v4-pro
       locality: cloud
       modality: text
       capabilities: [chat]
+      pricing:
+        input_per_mtok: 1.20
+        output_per_mtok: 2.40
       backend_refs:
         - name: cloud/gateway
-          base_url: https://gateway.ariacompute.com
+          base_url: https://tokenhub.tencentmaas.com
           protocol: http
           weight: 100
           api_key_env: GATEWAY_API_KEY
@@ -58,7 +67,7 @@ recipes:
   - name: agent-default
     router: agent
     agent:
-      endpoint: https://gateway.ariacompute.com
+      endpoint: https://tokenhub.tencentmaas.com
       model: ariacompute/ariamodel-mid
       timeout_ms: 30000
       max_turns: 3

@@ -455,7 +455,7 @@ python -m bench routing \
   --prices bench/prices/ariamodel.json \
   --quality label \
   --corpus bench/corpus/routing_gateway_hard.json \
-  --timeout 180 \
+  --timeout 300 \
   --report ./out/vs_vsr_routing.json
 
 # MCQ compare through each live router (accuracy / latency / tokens / cost) vs always_* on Gateway pool.
@@ -481,13 +481,65 @@ python -m bench compare \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
   --prices bench/prices/ariamodel.json \
   --corpus bench/corpus/mmlu_tiny.jsonl \
-  --timeout 180 \
+  --timeout 300 \
   --report ./out/vs_vsr_compare.json
 ```
 
-**Capability surface (aria vs vLLM SR baseline):** no Envoy ExtProc; builtin agent entrypoint; Cost/Replay dashboard; projection-conditioned decisions; model `pricing:` + `x-aria-router-latency-ms`. See Topology / Cost / agent-gateway for the ops narrative. Spec: [`requirements.md`](requirements.md) §6.6.
+```bash
+# --- Track C: agent ladder (aria-router vs vLLM Semantic Router) ---
+# Stop semantic-gateway if running, then:
+aria-router serve \
+  --config config/examples/agent-gateway.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+# vllm-sr keyword baseline remains on :8890 (config-gateway.yaml).
 
-See [`bench/corpus/README.md`](bench/corpus/README.md) and [`bench/vllm-sr/`](bench/vllm-sr/) (external `vllm-sr` config + validate/serve). Spec: [`requirements.md`](requirements.md) §6.
+python -m bench routing \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=ariacompute/agent-auto \
+  --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
+  --pick-header vllm_sr=x-vsr-selected-model \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --pool small=https://tokenhub.tencentmaas.com \
+  --pool mid=https://tokenhub.tencentmaas.com \
+  --pool large=https://tokenhub.tencentmaas.com \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
+  --quality label \
+  --corpus bench/corpus/routing_gateway_hard.json \
+  --timeout 300 \
+  --report ./out/agent_vs_vsr_routing.json
+
+python -m bench compare \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=ariacompute/agent-auto \
+  --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
+  --pick-header vllm_sr=x-vsr-selected-model \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --pool small=https://tokenhub.tencentmaas.com \
+  --pool mid=https://tokenhub.tencentmaas.com \
+  --pool large=https://tokenhub.tencentmaas.com \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
+  --corpus bench/corpus/mmlu_tiny.jsonl \
+  --timeout 300 \
+  --report ./out/agent_vs_vsr_compare.json
+```
+See [`bench/corpus/README.md`](bench/corpus/README.md) and [`bench/vllm-sr/`](bench/vllm-sr/) (external `vllm-sr` config + validate/serve). 
 
 ## Engineering Conventions
 
