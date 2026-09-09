@@ -80,6 +80,25 @@ def _normalize_headers(raw: Mapping[str, str] | None) -> dict[str, str]:
 ChatFn = Callable[..., ChatResult]
 
 
+_TRANSIENT_MARKERS = (
+    "UNEXPECTED_EOF",
+    "SSL",
+    "sslv3",
+    "timed out",
+    "Temporary failure",
+    "Connection reset",
+    "Connection refused",
+    "Remote end closed",
+    "Broken pipe",
+    "EOF occurred",
+)
+
+
+def _is_transient_error(msg: str) -> bool:
+    lower = msg.lower()
+    return any(m.lower() in lower for m in _TRANSIENT_MARKERS)
+
+
 def chat_completion(
     cfg: EndpointConfig,
     *,
@@ -88,8 +107,9 @@ def chat_completion(
     max_tokens: int = 256,
     temperature: float = 0.0,
     system: str | None = None,
+    retries: int = 5,
 ) -> ChatResult:
-    """POST /v1/chat/completions (non-streaming)."""
+    """POST /v1/chat/completions (non-streaming). Retries transient SSL/network errors."""
     messages: list[dict[str, str]] = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -103,68 +123,85 @@ def chat_completion(
     }
     url = f"{cfg.base_url}/v1/chat/completions"
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=_headers(cfg), method="POST")
+    attempts = max(1, int(retries) + 1)
+    last: ChatResult | None = None
     t0 = time.perf_counter()
-    try:
-        with urllib.request.urlopen(req, timeout=cfg.timeout_s) as resp:
-            raw = resp.read()
-            code = resp.getcode()
-            hdrs = _normalize_headers(dict(resp.headers.items()))
-    except urllib.error.HTTPError as e:
-        raw = e.read() if e.fp else b""
-        code = e.code
-        hdrs = _normalize_headers(dict(e.headers.items()) if e.headers else {})
+    for attempt in range(attempts):
+        req = urllib.request.Request(url, data=data, headers=_headers(cfg), method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=cfg.timeout_s) as resp:
+                raw = resp.read()
+                code = resp.getcode()
+                hdrs = _normalize_headers(dict(resp.headers.items()))
+        except urllib.error.HTTPError as e:
+            raw = e.read() if e.fp else b""
+            code = e.code
+            hdrs = _normalize_headers(dict(e.headers.items()) if e.headers else {})
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            last = ChatResult(
+                status="error",
+                latency_ms=elapsed_ms,
+                headers=hdrs,
+                error=f"HTTP {code}: {raw[:400]!r}",
+            )
+            # Retry 5xx / 429; do not retry 4xx auth/client errors.
+            if code in (429, 500, 502, 503, 504) and attempt + 1 < attempts:
+                time.sleep(0.4 * (attempt + 1))
+                continue
+            return last
+        except Exception as e:
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            last = ChatResult(status="error", latency_ms=elapsed_ms, error=str(e))
+            if _is_transient_error(str(e)) and attempt + 1 < attempts:
+                time.sleep(0.4 * (attempt + 1))
+                continue
+            return last
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        if code < 200 or code >= 300:
+            last = ChatResult(
+                status="error",
+                latency_ms=elapsed_ms,
+                headers=hdrs,
+                error=f"HTTP {code}: {raw[:400]!r}",
+            )
+            if code in (429, 500, 502, 503, 504) and attempt + 1 < attempts:
+                time.sleep(0.4 * (attempt + 1))
+                continue
+            return last
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError as e:
+            return ChatResult(
+                status="error",
+                latency_ms=elapsed_ms,
+                headers=hdrs,
+                error=f"bad json: {e}",
+            )
+        content = ""
+        choices = payload.get("choices") or []
+        if choices:
+            msg = choices[0].get("message") or {}
+            content = msg.get("content") or choices[0].get("text") or ""
+            if content is None:
+                content = ""
+        usage = payload.get("usage") or {}
+        pt = usage.get("prompt_tokens")
+        ct = usage.get("completion_tokens")
+        tt = usage.get("total_tokens")
+        if tt is None and isinstance(pt, int) and isinstance(ct, int):
+            tt = pt + ct
         return ChatResult(
-            status="error",
+            status="ok",
+            content=str(content),
             latency_ms=elapsed_ms,
+            prompt_tokens=pt if isinstance(pt, int) else None,
+            completion_tokens=ct if isinstance(ct, int) else None,
+            total_tokens=tt if isinstance(tt, int) else None,
+            model=payload.get("model") or model,
             headers=hdrs,
-            error=f"HTTP {code}: {raw[:400]!r}",
+            raw=payload,
         )
-    except Exception as e:
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        return ChatResult(status="error", latency_ms=elapsed_ms, error=str(e))
-    elapsed_ms = (time.perf_counter() - t0) * 1000.0
-    if code < 200 or code >= 300:
-        return ChatResult(
-            status="error",
-            latency_ms=elapsed_ms,
-            headers=hdrs,
-            error=f"HTTP {code}: {raw[:400]!r}",
-        )
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except json.JSONDecodeError as e:
-        return ChatResult(
-            status="error",
-            latency_ms=elapsed_ms,
-            headers=hdrs,
-            error=f"bad json: {e}",
-        )
-    content = ""
-    choices = payload.get("choices") or []
-    if choices:
-        msg = choices[0].get("message") or {}
-        content = msg.get("content") or choices[0].get("text") or ""
-        if content is None:
-            content = ""
-    usage = payload.get("usage") or {}
-    pt = usage.get("prompt_tokens")
-    ct = usage.get("completion_tokens")
-    tt = usage.get("total_tokens")
-    if tt is None and isinstance(pt, int) and isinstance(ct, int):
-        tt = pt + ct
-    return ChatResult(
-        status="ok",
-        content=str(content),
-        latency_ms=elapsed_ms,
-        prompt_tokens=pt if isinstance(pt, int) else None,
-        completion_tokens=ct if isinstance(ct, int) else None,
-        total_tokens=tt if isinstance(tt, int) else None,
-        model=payload.get("model") or model,
-        headers=hdrs,
-        raw=payload,
-    )
+    return last or ChatResult(status="error", error="chat_completion failed")
 
 
 def probe_models(cfg: EndpointConfig) -> tuple[bool, str]:

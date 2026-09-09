@@ -246,13 +246,29 @@ def run_routing(
         for model in models:
             rec = _chat_pool(model, prompt)
             if rec["status"] != "ok":
-                cells[(qid, model)] = Cell(
-                    quality=0.0,
-                    tokens=0,
-                    cost_usd=0.0,
-                    status="error",
-                    detail={"error": rec.get("error")},
-                )
+                # Label mode only needs pick correctness; do not poison the ladder
+                # when TokenHub/pool completion flakes (SSL EOF, timeouts, etc.).
+                if quality == "label":
+                    qscore = label_score(model, expected)
+                    cells[(qid, model)] = Cell(
+                        quality=qscore,
+                        tokens=0,
+                        cost_usd=0.0,
+                        status="ok",
+                        detail={
+                            "quality_mode": "label",
+                            "expected_model": expected,
+                            "completion_error": rec.get("error"),
+                        },
+                    )
+                else:
+                    cells[(qid, model)] = Cell(
+                        quality=0.0,
+                        tokens=0,
+                        cost_usd=0.0,
+                        status="error",
+                        detail={"error": rec.get("error")},
+                    )
                 continue
             if quality == "label":
                 qscore = label_score(model, expected)

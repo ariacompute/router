@@ -173,6 +173,7 @@ PY
 
 - [ ] `cells_ok == questions * 3`，`cells_error == 0`
 - [ ] `live_router_errors == 0`（否则 ladder 会被 timeout / pick 失败偏置）
+- [ ] label 模式：pool completion SSL/EOF 不应把正确选档打成 `status=error`（`completion_error` 可记在 cell detail）
 - [ ] ladder：`aria_router` / `vllm_sr` 的 `mean_quality` / `mean_cost` 可比
 - [ ] 抽查 hard 陷阱题：aria → small 上游名；vllm baseline 仍可能误 mid
 

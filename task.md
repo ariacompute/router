@@ -292,3 +292,7 @@
 - [x] `agent-gateway.yaml`：三档意图 prompt + `timeout_ms`/`max_turns`
 - [x] BuiltinAgent：eligible / `list_eligible_models` / `submit_route` / DEFAULT_SYSTEM 暴露 tier
 - [x] 四题 curl：sci-q1/explain-os→large；tech-q1/tech-q3→mid（layer=agent，4/4）
+
+### T49 — label routing 不被 pool SSL 拖垮
+- [x] `quality=label` 时 pool chat 失败仍按 `label_score` 记 cell（修 multi-q error）
+- [x] `chat_completion` transient SSL/5xx/429 默认重试 5 次；单测覆盖
