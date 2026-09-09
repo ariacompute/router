@@ -1276,7 +1276,7 @@ async fn route_semantic(
     // Sticky model from prior retention (must still pass hard constraints).
     let sticky_override = if doc.global.stores.memory.enabled && !session.is_empty() {
         if let Some(st_mem) = st.memory.get(&session) {
-            let all = hard_filter(doc, &[st_mem.sticky_model.clone()], None, Some("text"));
+            let all = hard_filter(doc, std::slice::from_ref(&st_mem.sticky_model), None, Some("text"));
             all.into_iter().next().map(|c| c.name)
         } else {
             None

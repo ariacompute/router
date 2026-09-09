@@ -47,10 +47,10 @@ impl SemanticCache {
             // Prefer same decision; still allow cross-decision if similar enough.
             let bonus = if e.decision == decision { 0.02 } else { 0.0 };
             let sim = cosine(&q, &e.vec) + bonus;
-            if sim >= cfg.similarity_threshold {
-                if best.as_ref().is_none_or(|(s, _)| sim > *s) {
-                    best = Some((sim, e));
-                }
+            if sim >= cfg.similarity_threshold
+                && best.as_ref().is_none_or(|(s, _)| sim > *s)
+            {
+                best = Some((sim, e));
             }
         }
         best.map(|(_, e)| e.body.clone())
