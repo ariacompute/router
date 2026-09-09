@@ -33,6 +33,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 
 ## 常用命令
 - `cargo test`
+- `cargo test -p aria-router-signal --features ml`
 - `cargo run -p aria-router -- setup`
 - `cargo run -p aria-router -- validate`
 - `cargo run -p aria-router -- serve --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090`
@@ -43,12 +44,11 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `python -m bench compare --corpus bench/corpus/mmlu_tiny.jsonl …`
 
 ## 进行中需求
-Spec 见 `requirements.md`（**§6 bench** 含多 router + compare）。阶段 K/L = bench。
-T29 已落地：去 pi/dsh/`extensions`；轻量 builtin agent（工具 + 限 turns）。
-engine 去 hybrid；`--router` / `--router-api-key`（sk-aria_ 或 sk-bf-）。
+阶段 **R**（T50–T56）已落地：`emits`/retention、`global.stores|services`、feature `ml`
+learned（hash）、Elo、semantic_cache / 软限流 / 加厚 replay。见 `requirements.md` / `task.md`。
 
 ## 注意事项
-- 黄金路径：keyword decision → static 转发；agent → builtin tool-loop → `submit_route`。
-- 四维：Models=候选路径；Compute=pool 排名；Location=硬剪枝；Preference=档位/信号。
-- 一次请求禁止串跑 semantic+agent。无顶层 `extensions`；不做 subprocess harness。
-- Bench report-only；不启进程；对标时 aria `:8899`、vLLM SR `:8890`。
+- 黄金路径：keyword → static；retention sticky；agent → `submit_route`。
+- 四维：Models / Compute / Location / Preference。不做 Envoy / HaluGate / Prometheus。
+- 一次请求禁止串跑 semantic+agent。`cargo test`；learned：`--features ml`。
+- Bench report-only；对标 aria `:8899`、vLLM SR `:8890`。

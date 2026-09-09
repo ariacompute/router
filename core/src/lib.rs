@@ -23,6 +23,8 @@ pub enum RouterError {
     Extension(String),
     #[error("unauthorized: {0}")]
     Unauthorized(String),
+    #[error("rate limited: {0}")]
+    RateLimited(String),
 }
 
 impl From<std::io::Error> for RouterError {
@@ -64,7 +66,7 @@ impl std::str::FromStr for RouterKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RouteDecision {
     pub model: String,
     #[serde(default)]
@@ -85,6 +87,20 @@ pub struct RouteDecision {
     /// When true, non-stream responses may be stored in response-cache.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cache_response: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_drop: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_ttl_turns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_keep_current_model: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_prefer_prefix: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_cache_hit: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 fn default_confidence() -> f32 {
@@ -103,6 +119,13 @@ impl RouteDecision {
             bypass: true,
             routing_latency_ms: None,
             cache_response: false,
+            retention_drop: None,
+            retention_ttl_turns: None,
+            retention_keep_current_model: None,
+            retention_prefer_prefix: None,
+            semantic_cache_hit: None,
+            replay_id: None,
+            session: None,
         }
     }
 }

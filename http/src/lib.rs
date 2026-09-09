@@ -7,9 +7,13 @@ mod users;
 mod serve_account;
 mod auth_api;
 mod embed;
+mod memory;
+mod semantic_cache;
+mod ratelimit;
+mod replay;
 
 use aria_router_agent::{request_view, task_from, BuiltinAgent, ToolRuntime};
-use aria_router_algorithm::{hard_filter, select, RuntimeStats};
+use aria_router_algorithm::{global_elo, hard_filter, select, RuntimeStats};
 use aria_router_config::{resolve_keys_path, resolve_users_path, Recipe, RouterDocument};
 use aria_router_core::{
     ChatRequest, RouteDecision, RouterError, RouterKind,
@@ -28,6 +32,10 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use cost::{cost_usd, estimate_tokens, now_rfc3339, CostEvent, CostLedger};
 pub use keys::{extract_bearer, validate_oauth_key, AuthIdentity, KeyStore};
+use memory::{SessionMemory, SessionState};
+use ratelimit::RateLimiter;
+use replay::{ReplayLog, ReplayRecord};
+use semantic_cache::SemanticCache;
 use users::{UserRole, UserStore};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -45,6 +53,10 @@ pub struct AppState {
     pub plugins: PluginHost,
     pub last_route: Mutex<Option<RouteDecision>>,
     pub replay: Mutex<Vec<RouteDecision>>,
+    pub replay_log: ReplayLog,
+    pub memory: SessionMemory,
+    pub semantic_cache: SemanticCache,
+    pub ratelimit: RateLimiter,
     pub fake_agents: Mutex<HashMap<String, RouteDecision>>,
     pub keys: Mutex<KeyStore>,
     pub cost: Mutex<CostLedger>,
@@ -77,6 +89,8 @@ impl AppState {
             });
         let keys = KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path));
         let users = UserStore::load(&users_path).unwrap_or_else(|_| UserStore::empty(users_path));
+        let replay_log = ReplayLog::default();
+        replay_log.configure(&doc.global.services.router_replay);
         Self {
             doc: Mutex::new(doc),
             config_path,
@@ -84,6 +98,10 @@ impl AppState {
             plugins: PluginHost::default(),
             last_route: Mutex::new(None),
             replay: Mutex::new(Vec::new()),
+            replay_log,
+            memory: SessionMemory::default(),
+            semantic_cache: SemanticCache::default(),
+            ratelimit: RateLimiter::default(),
             fake_agents: Mutex::new(HashMap::new()),
             keys: Mutex::new(keys),
             cost: Mutex::new(CostLedger::default()),
@@ -167,6 +185,7 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
         )
         .route("/v1/router/validate", post(validate_ep))
         .route("/v1/router/replay", get(replay_ep))
+        .route("/v1/router/replay/{id}/reroute", post(replay_reroute_ep))
         .route("/v1/router/providers", put(upsert_provider).get(list_providers))
         .route("/v1/router/config", get(get_config).put(put_config))
         .route("/v1/router/overview", get(overview_ep))
@@ -212,7 +231,9 @@ async fn replay_ep(
     Query(q): Query<ReplayQ>,
 ) -> Json<Value> {
     let n = q.n.unwrap_or(20).min(100);
-    Json(json!({"items": replay_items(&st, n)}))
+    let items = replay_items(&st, n);
+    let records = st.replay_log.recent(n);
+    Json(json!({"items": items, "records": records}))
 }
 
 fn replay_items(st: &AppState, n: usize) -> Vec<RouteDecision> {
@@ -224,6 +245,65 @@ fn replay_items(st: &AppState, n: usize) -> Vec<RouteDecision> {
         .take(n)
         .cloned()
         .collect()
+}
+
+#[derive(Deserialize)]
+struct RerouteQ {
+    #[serde(default)]
+    forward: bool,
+}
+
+async fn replay_reroute_ep(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<RerouteQ>,
+) -> Result<Json<Value>, AppError> {
+    let rec = st
+        .replay_log
+        .get(&id)
+        .ok_or_else(|| AppError(RouterError::InvalidParam(format!("replay {id} not found"))))?;
+    let preview = rec.prompt_preview.clone().unwrap_or_default();
+    let model = rec.decision.model.clone();
+    let entrypoint = {
+        let doc = snapshot_doc(&st);
+        // Prefer original entrypoint from decision layer path: use first semantic entry if any.
+        doc.entrypoints
+            .first()
+            .and_then(|e| e.model_names.first().cloned())
+            .unwrap_or_else(|| "ariacompute/semantic-auto".into())
+    };
+    let req = ChatRequest {
+        model: entrypoint,
+        messages: vec![aria_router_core::ChatMessage {
+            role: "user".into(),
+            content: Value::String(preview),
+        }],
+        stream: false,
+        max_tokens: None,
+        temperature: None,
+        extra: Default::default(),
+    };
+    let mut meta = HashMap::new();
+    if let Some(s) = &rec.session {
+        meta.insert("session".into(), s.clone());
+    }
+    let (decision, fwd, extra, _hdrs) = route_request(&st, req, &meta).await.map_err(AppError)?;
+    if q.forward {
+        let _ = model;
+        let doc = snapshot_doc(&st);
+        if let Some(body) = extra {
+            return Ok(Json(json!({"decision": decision, "body": body, "forwarded": false})));
+        }
+        let body = forward(&doc, &decision.model, &fwd, &[], &st.pool)
+            .await
+            .map_err(AppError)?;
+        return Ok(Json(json!({"decision": decision, "body": body, "forwarded": true})));
+    }
+    Ok(Json(json!({
+        "decision": decision,
+        "forwarded": false,
+        "original_id": id,
+    })))
 }
 
 #[derive(Deserialize)]
@@ -548,7 +628,8 @@ async fn chat_inner(
         }
     };
     let session = session_id(&headers, &req);
-    let metadata = metadata_from_headers(&headers);
+    let mut metadata = metadata_from_headers(&headers);
+    metadata.insert("session".into(), session.clone());
     let want_stream = req.stream;
     let entrypoint = req.model.clone();
     match route_and_forward(
@@ -707,16 +788,60 @@ async fn route_and_forward(
     metadata: HashMap<String, String>,
     ctx: CostCtx,
 ) -> Result<Response, RouterError> {
+    {
+        let doc = snapshot_doc(&st);
+        let bucket = ctx
+            .key_id
+            .clone()
+            .unwrap_or_else(|| format!("anon:{}", ctx.user));
+        st.ratelimit
+            .check(&bucket, &doc.global.services.ratelimit)?;
+    }
     let turns_in_request = req
         .messages
         .iter()
         .filter(|m| m.role == "user")
         .count() as u32;
     let prompt_est = estimate_tokens(&req.prompt_text());
+    let last_user = req.last_user_text();
+    let session = ctx.session.clone();
     let route_t0 = std::time::Instant::now();
     let (mut decision, mut fwd, extra, hdrs) = route_request(&st, req, &metadata).await?;
     if decision.routing_latency_ms.is_none() {
         decision.routing_latency_ms = Some(route_t0.elapsed().as_secs_f64() * 1000.0);
+    }
+    decision.session = Some(session.clone());
+    // Semantic cache lookup (non-stream).
+    if !want_stream && extra.is_none() {
+        let doc = snapshot_doc(&st);
+        if let Some(cached) = st.semantic_cache.lookup(
+            &last_user,
+            &decision.model,
+            &decision.decision,
+            &doc.global.stores.semantic_cache,
+        ) {
+            decision.semantic_cache_hit = Some(true);
+            record(&st, decision.clone());
+            let completion = estimate_tokens(&cached.to_string());
+            record_cost(
+                &st,
+                &ctx,
+                &decision,
+                CostUsage {
+                    turns_in_request,
+                    upstream_requests: 0,
+                    prompt_tokens: prompt_est,
+                    completion_tokens: completion,
+                    tokens_source: "estimate",
+                },
+            );
+            if !session.is_empty() {
+                st.memory.tick(&session);
+            }
+            let mut res = Json(cached).into_response();
+            attach_route_headers(res.headers_mut(), &decision);
+            return Ok(res);
+        }
     }
     record(&st, decision.clone());
     match extra {
@@ -734,6 +859,10 @@ async fn route_and_forward(
                     tokens_source: "estimate",
                 },
             );
+            maybe_store_semantic(&st, &decision, &last_user, &fast);
+            if !session.is_empty() {
+                st.memory.tick(&session);
+            }
             let mut res = Json(fast).into_response();
             attach_route_headers(res.headers_mut(), &decision);
             Ok(res)
@@ -745,6 +874,9 @@ async fn route_and_forward(
                 let sse =
                     forward_sse_stream(&doc, &decision.model, &fwd, &hdrs, &st.pool).await?;
                 let body = sse_response_body(st.clone(), sse, decision.clone(), ctx, turns_in_request, prompt_est);
+                if !session.is_empty() {
+                    st.memory.tick(&session);
+                }
                 let mut res = Response::builder()
                     .status(200)
                     .header(header::CONTENT_TYPE, "text/event-stream")
@@ -761,6 +893,12 @@ async fn route_and_forward(
                     }];
                     remember_response(&st.plugins, &cache_plugins, &fwd, &body);
                 }
+                maybe_store_semantic(&st, &decision, &last_user, &body);
+                global_elo().observe_latency(
+                    &decision.model,
+                    decision.routing_latency_ms.unwrap_or(0.0) as f32,
+                    &[],
+                );
                 let (pt, ct, src) = parse_json_usage(&body, prompt_est);
                 record_cost(
                     &st,
@@ -774,12 +912,38 @@ async fn route_and_forward(
                         tokens_source: src,
                     },
                 );
+                if !session.is_empty() {
+                    st.memory.tick(&session);
+                }
                 let mut res = Json(body).into_response();
                 attach_route_headers(res.headers_mut(), &decision);
                 Ok(res)
             }
         }
     }
+}
+
+fn maybe_store_semantic(st: &AppState, decision: &RouteDecision, text: &str, body: &Value) {
+    if decision.retention_drop == Some(true) {
+        return;
+    }
+    let doc = snapshot_doc(st);
+    let cfg = &doc.global.stores.semantic_cache;
+    if !cfg.enabled {
+        return;
+    }
+    let ttl = decision
+        .retention_ttl_turns
+        .unwrap_or(cfg.ttl_turns)
+        .max(1);
+    st.semantic_cache.store(
+        text,
+        &decision.model,
+        &decision.decision,
+        body.clone(),
+        ttl,
+        cfg,
+    );
 }
 
 /// Stream upstream SSE bytes to the client; record pool latency + cost when the body finishes.
@@ -951,7 +1115,6 @@ fn attach_route_headers(h: &mut HeaderMap, d: &RouteDecision) {
         }
     }
     if !d.reason.is_empty() {
-        // Header values must be visible ASCII; sanitize non-ASCII / control chars.
         let reason: String = d
             .reason
             .chars()
@@ -976,15 +1139,55 @@ fn attach_route_headers(h: &mut HeaderMap, d: &RouteDecision) {
             h.insert("x-aria-router-latency-ms", v);
         }
     }
+    if let Some(v) = d.retention_drop {
+        if let Ok(hv) = (if v { "true" } else { "false" }).parse() {
+            h.insert("x-aria-router-retention-drop", hv);
+        }
+    }
+    if let Some(t) = d.retention_ttl_turns {
+        if let Ok(hv) = t.to_string().parse() {
+            h.insert("x-aria-router-retention-ttl-turns", hv);
+        }
+    }
+    if let Some(v) = d.retention_keep_current_model {
+        if let Ok(hv) = (if v { "true" } else { "false" }).parse() {
+            h.insert("x-aria-router-retention-keep-current-model", hv);
+        }
+    }
+    if let Some(v) = d.retention_prefer_prefix {
+        if let Ok(hv) = (if v { "true" } else { "false" }).parse() {
+            h.insert("x-aria-router-retention-prefer-prefix", hv);
+        }
+    }
+    if d.semantic_cache_hit == Some(true) {
+        if let Ok(hv) = "hit".parse() {
+            h.insert("x-aria-router-semantic-cache", hv);
+        }
+    }
 }
 
 fn record(st: &AppState, d: RouteDecision) {
     *st.last_route.lock().unwrap() = Some(d.clone());
     let mut r = st.replay.lock().unwrap();
-    r.push(d);
+    r.push(d.clone());
     if r.len() > 256 {
         r.remove(0);
     }
+    let doc = snapshot_doc(st);
+    let cfg = doc.global.services.router_replay.clone();
+    st.replay_log.push(
+        ReplayRecord {
+            id: d.replay_id.clone().unwrap_or_default(),
+            decision: d,
+            signals_summary: None,
+            projections: None,
+            emits: None,
+            retention: None,
+            session: None,
+            prompt_preview: None,
+        },
+        &cfg,
+    );
 }
 
 fn snapshot_doc(st: &AppState) -> RouterDocument {
@@ -1028,12 +1231,15 @@ async fn route_semantic(
     req: ChatRequest,
     metadata: &HashMap<String, String>,
 ) -> Result<(RouteDecision, ChatRequest, Option<Value>, Vec<(String, String)>), RouterError> {
-    let learned = doc.learned_signal_referenced(recipe);
-    if !learned.is_empty() {
-        return Err(RouterError::Unsupported(format!(
-            "learned signal {} requires feature ml / weights",
-            learned[0]
-        )));
+    #[cfg(not(feature = "ml"))]
+    {
+        let learned = doc.learned_signal_referenced(recipe);
+        if !learned.is_empty() {
+            return Err(RouterError::Unsupported(format!(
+                "learned signal {} requires feature ml / weights",
+                learned[0]
+            )));
+        }
     }
     let routing = recipe
         .routing
@@ -1042,25 +1248,42 @@ async fn route_semantic(
     let signals = extract(doc, recipe, &req, metadata)?;
     let proj = aria_router_decision::project(&routing.projections, &signals)?;
     let decision_cfg = select_decision(recipe, &signals, &proj, &routing.strategy)?;
-    let (model_names, algo, plugins, dname, loc) = if let Some(d) = decision_cfg {
+    let retention = decision_cfg.as_ref().and_then(|d| d.retention().cloned());
+    let (model_names, algo, plugins, dname, loc, emits) = if let Some(d) = &decision_cfg {
         (
             d.model_refs.iter().map(|m| m.model.clone()).collect::<Vec<_>>(),
             d.algorithm.clone(),
             d.plugins.clone(),
             d.name.clone(),
             d.locality.clone(),
+            d.emits.clone(),
         )
     } else {
         let def = doc.providers.defaults.default_model.clone();
         if def.is_empty() {
             return Err(RouterError::FailClosed("no matching decision and no default_model".into()));
         }
-        (vec![def], Some("static".into()), vec![], "default".into(), None)
+        (vec![def], Some("static".into()), vec![], "default".into(), None, vec![])
     };
     let eligible = hard_filter(doc, &model_names, loc.as_deref(), Some("text"));
     if eligible.is_empty() {
         return Err(RouterError::FailClosed("no eligible models after hard constraints".into()));
     }
+    let session = metadata
+        .get("session")
+        .cloned()
+        .unwrap_or_default();
+    // Sticky model from prior retention (must still pass hard constraints).
+    let sticky_override = if doc.global.stores.memory.enabled && !session.is_empty() {
+        if let Some(st_mem) = st.memory.get(&session) {
+            let all = hard_filter(doc, &[st_mem.sticky_model.clone()], None, Some("text"));
+            all.into_iter().next().map(|c| c.name)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let dummy = aria_router_config::DecisionCfg {
         name: dname.clone(),
         description: None,
@@ -1073,72 +1296,148 @@ async fn route_semantic(
         algorithm: algo.clone(),
         plugins: plugins.clone(),
         locality: loc,
+        emits: emits.clone(),
     };
     let algo_name = algo.as_deref().unwrap_or("static");
-    let stats = if algo_name == "static" {
+    let stats = if algo_name == "static" && sticky_override.is_none() {
         RuntimeStats::default()
     } else {
         let mut cost_map = HashMap::new();
         for m in &doc.providers.models {
             cost_map.insert(m.name.clone(), m.ranking_cost());
         }
+        let mut elo_map = HashMap::new();
+        for e in &eligible {
+            elo_map.insert(e.name.clone(), global_elo().rating(&e.name));
+        }
         RuntimeStats {
             latency_ms: st.pool.latency_map(),
             cost: cost_map,
+            elo: elo_map,
             ..Default::default()
         }
     };
-    let model = select(doc, &dummy, &eligible, &stats)?;
+    let mut model = select(doc, &dummy, &eligible, &stats)?;
+    if let Some(sticky) = sticky_override {
+        model = sticky;
+    }
     let hdrs = extra_headers(&plugins);
     let cache_response = has_response_cache(&plugins);
-    // Apply plugins against the *selected* model so response-cache keys match remember.
-    let mut req_for_plugins = req;
+    let mut req_for_plugins = req.clone();
     req_for_plugins.model = model.clone();
-    match apply_request(&st.plugins, &plugins, req_for_plugins)? {
-        PluginOutcome::FastResponse(v) => Ok((
-            RouteDecision {
-                model: model.clone(),
-                algorithm: algo,
-                reason: format!("semantic:{dname}"),
-                confidence: 1.0,
-                layer: "semantic".into(),
-                decision: dname,
-                bypass: false,
-                routing_latency_ms: None,
-                cache_response,
+    let keep = retention
+        .as_ref()
+        .and_then(|r| r.keep_current_model)
+        .unwrap_or(false);
+    let ttl = retention
+        .as_ref()
+        .and_then(|r| r.ttl_turns)
+        .unwrap_or(doc.global.stores.memory.default_ttl_turns);
+    if keep && doc.global.stores.memory.enabled && !session.is_empty() {
+        st.memory.put(
+            &session,
+            SessionState {
+                sticky_model: model.clone(),
+                ttl_turns_left: ttl.max(1),
+                decision: dname.clone(),
             },
-            ChatRequest {
-                model: model.clone(),
-                messages: vec![],
-                stream: false,
-                max_tokens: None,
-                temperature: None,
-                extra: Default::default(),
-            },
-            Some(v),
-            hdrs,
-        )),
-        PluginOutcome::Continue(fwd) => Ok((
-            RouteDecision {
-                model: model.clone(),
-                algorithm: algo,
-                reason: format!("semantic:{dname}"),
-                confidence: 1.0,
-                layer: "semantic".into(),
-                decision: dname,
-                bypass: false,
-                routing_latency_ms: None,
-                cache_response,
-            },
-            {
-                let mut f = fwd;
-                f.model = model;
-                f
-            },
-            None,
-            hdrs,
-        )),
+            &doc.global.stores.memory,
+        );
     }
+    let signals_summary = json!(signals
+        .hits
+        .iter()
+        .map(|h| json!({"kind": h.kind, "name": h.name, "matched": h.matched, "confidence": h.confidence}))
+        .collect::<Vec<_>>());
+    let decision = |model: String, algo: Option<String>, dname: String, cache_response: bool| {
+        RouteDecision {
+            model,
+            algorithm: algo,
+            reason: format!("semantic:{dname}"),
+            confidence: 1.0,
+            layer: "semantic".into(),
+            decision: dname,
+            bypass: false,
+            routing_latency_ms: None,
+            cache_response,
+            retention_drop: retention.as_ref().and_then(|r| r.drop),
+            retention_ttl_turns: retention.as_ref().and_then(|r| r.ttl_turns),
+            retention_keep_current_model: retention.as_ref().and_then(|r| r.keep_current_model),
+            retention_prefer_prefix: retention
+                .as_ref()
+                .and_then(|r| r.prefer_prefix_retention),
+            semantic_cache_hit: None,
+            replay_id: None,
+            session: if session.is_empty() {
+                None
+            } else {
+                Some(session.clone())
+            },
+        }
+    };
+    // Enrich replay with signal/projection context on next record() via last fields —
+    // stash on decision.session already; push detailed record here.
+    let cfg = doc.global.services.router_replay.clone();
+    let _ = (&signals_summary, &proj, &emits, &cfg);
+    match apply_request(&st.plugins, &plugins, req_for_plugins)? {
+        PluginOutcome::FastResponse(v) => {
+            let d = decision(model.clone(), algo, dname, cache_response);
+            push_rich_replay(st, &d, &signals_summary, &proj, &emits, &retention, &req);
+            Ok((
+                d,
+                ChatRequest {
+                    model: model.clone(),
+                    messages: vec![],
+                    stream: false,
+                    max_tokens: None,
+                    temperature: None,
+                    extra: Default::default(),
+                },
+                Some(v),
+                hdrs,
+            ))
+        }
+        PluginOutcome::Continue(fwd) => {
+            let d = decision(model.clone(), algo, dname, cache_response);
+            push_rich_replay(st, &d, &signals_summary, &proj, &emits, &retention, &req);
+            Ok((
+                d,
+                {
+                    let mut f = fwd;
+                    f.model = model;
+                    f
+                },
+                None,
+                hdrs,
+            ))
+        }
+    }
+}
+
+fn push_rich_replay(
+    st: &AppState,
+    d: &RouteDecision,
+    signals: &Value,
+    proj: &aria_router_decision::ProjectionMap,
+    emits: &[aria_router_config::EmitDirective],
+    retention: &Option<aria_router_config::RetentionDirective>,
+    req: &ChatRequest,
+) {
+    let doc = snapshot_doc(st);
+    let cfg = &doc.global.services.router_replay;
+    st.replay_log.push(
+        ReplayRecord {
+            id: String::new(),
+            decision: d.clone(),
+            signals_summary: Some(signals.clone()),
+            projections: serde_json::to_value(&proj.values).ok(),
+            emits: serde_json::to_value(emits).ok(),
+            retention: retention.clone(),
+            session: d.session.clone(),
+            prompt_preview: Some(req.last_user_text().chars().take(200).collect()),
+        },
+        cfg,
+    );
 }
 
 async fn route_agent(
@@ -1233,6 +1532,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = match &self.0 {
             RouterError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            RouterError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             RouterError::FailClosed(_) => StatusCode::FORBIDDEN,
             RouterError::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
             RouterError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
@@ -1723,6 +2023,7 @@ global:
                 bypass: false,
                 routing_latency_ms: None,
                 cache_response: false,
+                ..Default::default()
             },
         );
         let app = data_router(st.clone());
@@ -1776,6 +2077,7 @@ global:
                 bypass: false,
                 routing_latency_ms: None,
                 cache_response: false,
+                ..Default::default()
             },
         );
         let app = data_router(st);
@@ -2036,6 +2338,7 @@ global:
                 bypass: false,
                 routing_latency_ms: None,
                 cache_response: false,
+                ..Default::default()
             },
         );
         let admin = mgmt_router(st.clone());
@@ -2572,5 +2875,80 @@ global:
         assert_eq!(body["api_key_name"], "fresh");
         // The router adopted the newer key's secret.
         assert_eq!(st.keys.lock().unwrap().oauth_api_key().as_deref(), Some(new_key));
+    }
+
+    #[tokio::test]
+    async fn retention_sticky_same_session() {
+        let backend = mock_upstream().await;
+        let host = backend.trim_start_matches("http://");
+        let yaml = include_str!("../../config/examples/semantic-stateful.yaml")
+            .replace("127.0.0.1:8000", host)
+            .replace("127.0.0.1:8001", host);
+        let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-sticky-1".into());
+        let req1 = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("please explain rust"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d1, _, _, _) = route_request(&st, req1, &meta).await.unwrap();
+        assert_eq!(d1.model, "local/general");
+        assert_eq!(d1.retention_keep_current_model, Some(true));
+        // Second turn without keyword would normally hit default_fast; sticky keeps general.
+        let req2 = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("hi"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d2, _, _, _) = route_request(&st, req2, &meta).await.unwrap();
+        assert_eq!(d2.model, "local/general");
+    }
+
+    #[tokio::test]
+    async fn soft_ratelimit_429() {
+        let backend = mock_upstream().await;
+        let mut doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        doc.global.services.ratelimit.enabled = true;
+        doc.global.services.ratelimit.requests_per_minute = 1;
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st);
+        let mk = || {
+            Request::post("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "ariacompute/semantic-auto",
+                        "messages": [{"role":"user","content":"explain x"}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap()
+        };
+        let res1 = app.clone().oneshot(mk()).await.unwrap();
+        assert_eq!(res1.status(), StatusCode::OK);
+        let res2 = app.oneshot(mk()).await.unwrap();
+        assert_eq!(res2.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn semantic_stateful_yaml_validates() {
+        let raw = include_str!("../../config/examples/semantic-stateful.yaml");
+        let doc = RouterDocument::from_yaml_str(raw).unwrap();
+        assert!(doc.global.stores.memory.enabled);
+        assert!(doc.global.stores.semantic_cache.enabled);
     }
 }

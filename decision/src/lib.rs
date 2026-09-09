@@ -241,6 +241,7 @@ mod tests {
                         algorithm: Some("static".into()),
                         plugins: vec![],
                         locality: None,
+                        emits: vec![],
                     },
                     DecisionCfg {
                         name: "fallback".into(),
@@ -257,6 +258,7 @@ mod tests {
                         algorithm: Some("static".into()),
                         plugins: vec![],
                         locality: None,
+                        emits: vec![],
                     },
                 ],
                 algorithms: serde_json::Value::Null,

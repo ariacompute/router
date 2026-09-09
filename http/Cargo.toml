@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "OpenAI data plane and management API for aria-router"
 
+[features]
+default = []
+ml = ["aria-router-signal/ml"]
+
 [dependencies]
 aria-router-core.workspace = true
 aria-router-config.workspace = true

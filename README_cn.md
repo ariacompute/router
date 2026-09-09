@@ -28,9 +28,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 | 文件 | 用途 |
 |------|------|
-| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | 日常 semantic 黄金路径 — `ariacompute/semantic-auto`；keyword 启发式 → `local/general`；无 ML 权重即可 `validate` + `serve` |
-| [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — 黄金 `ariacompute/semantic-auto` + `ariacompute/semantic-catalog`（learned signal + 未实现 algorithm → chat `Unsupported`）；演示优先 tiny |
+| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | 日常 semantic 黄金路径 — `ariacompute/semantic-auto`；keyword 启发式 → `local/general`；可选 retention；无 ML 权重即可 `validate` + `serve` |
+| [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — 黄金 `ariacompute/semantic-auto` + `ariacompute/semantic-catalog`（learned signal + 未实现 algorithm → chat `Unsupported`，除非 `--features ml`）；演示优先 tiny |
 | [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — 三档 `ariamodel-{small,mid,large}` 经 `cloud/gateway`；keyword → large，否则 small；需 `GATEWAY_API_KEY` |
+| [`semantic-stateful.yaml`](config/examples/semantic-stateful.yaml) | Retention sticky + `stores.memory` / `semantic_cache` / replay |
 | [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | 日常 agent 黄金路径 — `ariacompute/agent-auto`；进程内 builtin tool-loop（无 `endpoint` → first-eligible）；演示 / CI |
 | [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — 对称 `semantic.yaml`：黄金 `ariacompute/agent-auto` + `ariacompute/agent-catalog`（故意 `Unsupported`）；演示优先 tiny / gateway |
 | [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — 同上三档云模型；builtin agent LLM 与后端经 `cloud/gateway`；需 `GATEWAY_API_KEY` |

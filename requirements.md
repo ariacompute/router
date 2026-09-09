@@ -25,6 +25,7 @@
 | **F-dashboard** | 运维面 | 管理面 SPA：Overview / Config（可写热重载）/ Topology / Providers / Replay / Playground（多轮聊天气泡 + SSE + 路由 Header 面板；对齐 vLLM SR 核心体验，不做 MCP/Claw/联网/附件） |
 | **G-cost** | 成本 + API key | 六因子成本账本；YAML `pricing`；Dashboard「API 密钥」签发；数据面 / provider 注册 Bearer；engine 传 `router_api_key` |
 | **H-accounts** | 本地用户 + OAuth | Dashboard 注册/登录（密码）；本地 `sk-aria_` 归属用户；OAuth（Aria Compute）关联 + `sk-bf-`；cost `by_local_user` / `by_serve_user`；CLI 扁平 setup |
+| **R-stateful-prod** | 状态化 + 生产 A + 决策器 B | `emits`/`retention`；`global.stores`/`services`；feature `ml` learned；Elo/`ratings`；semantic_cache；软限流；加厚 replay |
 
 未达阶段的 YAML 能力须 `Unsupported`，禁止静默空实现。
 
@@ -53,15 +54,17 @@
 | 10 | **api-keys** | Dashboard 签发 `sk-aria_`（`owner_user_id`）；`keys_path` 只存 sha256；数据面与 `PUT /providers` Bearer；`require_api_key` |
 | 11 | **local-users** | `users_path` argon2；Register/Login session；`allow_register`；admin 管用户 |
 | 12 | **oauth-account** | OAuth 为 `router-keys.json` 中 `kind: oauth` 条目；关联 ariacompute.com/cn；`sk-bf-` 存储/展示（Dashboard Account） |
+| 13 | **stateful** | decision `emits`/`retention`；session sticky model（`x-aria-session` / body `session`） |
+| 14 | **stores/services** | 进程内 `memory` / `semantic_cache`；软 `ratelimit`（429）；加厚 `router_replay`（含 reroute） |
 
 ### 2.1 非目标
 
 - Envoy ExtProc、Operator、Helm、fleet-sim、Grafana / Prometheus、ML Setup、Security Policy、wizmap、独立 dashboard 端口 / 本地 OIDC/SSO（本地仅用户名+密码）
 - Playground 不做 MCP / Claw / Web Search / 附件 / 语音 / Feedback（对齐 vLLM SR **核心**聊天体验即可）
 - Hybrid 本增量用 `bfvk` 转发 gateway（仅存储与鉴权分桶）；邮箱验证码；自助注册升 admin
-- 硬 quota、Slack 告警、把 Dashboard `sk-aria_` 当 HF/ModelScope token
+- **硬** quota（软限流 429 允许）、Slack 告警、把 Dashboard `sk-aria_` 当 HF/ModelScope token
 - Vendoring / 子进程接入 Pi / DeepSeek Harness；YAML 自定义 tools
-- 在 Rust 内重写 Cordis
+- 在 Rust 内重写 Cordis；`vector_store`、HaluGate、完整 SAAR / tool-loop hard lock
 
 ## 3. API 边界
 
@@ -118,26 +121,66 @@ global:
   allow_register: true            # Dashboard 普通用户自助注册
   keys_path: ~/.ariacompute/router-keys.json   # keys[]：kind=local (sk-aria_) | kind=oauth (sk-bf-)
   users_path: ~/.ariacompute/router-users.json
+  model_catalog:                  # 可选；learned / semantic_cache 权重或 hash 后端注册
+    embed_hash: { kind: hash, dim: 64 }
+  stores:
+    memory: { enabled: true, max_sessions: 4096, default_ttl_turns: 2 }
+    semantic_cache: { enabled: false, similarity_threshold: 0.92, max_entries: 1024, ttl_turns: 4 }
+  services:
+    ratelimit: { enabled: false, requests_per_minute: 120 }
+    router_replay: { enabled: true, max_items: 256, persist_path: null }
 ```
 
-密钥：`${VAR}` / `${VAR:-default}`。未知顶层块 → validate 失败。未知 `global` / `pricing` 子键 → validate 失败。`backend_refs.api_key` 仅转发上游，与 Dashboard 签发的客户端 key **不是同一把**。本地 `sk-aria_` 与 OAuth `sk-bf-` 同文件 `keys[]`，以 `kind` 区分（无独立 `router-serve.json`）。
+密钥：`${VAR}` / `${VAR:-default}`。未知顶层块 → validate 失败。未知 `global` / `pricing` / `stores` / `services` 子键 → validate 失败。`backend_refs.api_key` 仅转发上游，与 Dashboard 签发的客户端 key **不是同一把**。本地 `sk-aria_` 与 OAuth `sk-bf-` 同文件 `keys[]`，以 `kind` 区分（无独立 `router-serve.json`）。
+
+Decision 可选 `emits`（对齐 v0.3 Themis）：
+
+```yaml
+emits:
+  - kind: retention
+    retention:
+      drop: false              # true → 跳过 semantic_cache 写入；与正 ttl_turns 互斥
+      ttl_turns: 2
+      keep_current_model: true # 同 session 后续 turn 粘住本决策模型（仍须 eligible）
+      prefer_prefix_retention: false  # 仅透传响应头，本增量不实现 SAAR 计分
+```
 
 ### 3.2 Semantic signals
 
 **启发式（阶段 B，A 至少 `keyword`）**：`keyword`、`language`、`context`、`authz`、`conversation`、`metadata`、`event`、`structure`。
 
-**Learned（阶段 C，feature `ml` / ONNX `ort`）**：`classifier`、`complexity`、`domain`、`embedding`、`fact-check`、`jailbreak`、`kb`、`modality`、`pii`、`preference`、`reask`、`user-feedback`。无权重且被 decision 引用 → `Unsupported`，禁止跳过。
+**Learned（阶段 C/R，Cargo feature `ml`）**：`classifier`、`complexity`、`domain`、`embedding`、`fact-check`、`jailbreak`、`kb`、`modality`、`pii`、`preference`、`reask`、`user-feedback`。
+
+- 无 `ml` feature 且被 decision 引用 → `Unsupported`，禁止跳过。
+- 有 `ml`：默认 **hash** 嵌入/打分后端（确定性，CI 友好）；YAML `weight_path` 指向 ONNX 时走 `ort`（可选）；也可 `model: <catalog_key>` 引用 `global.model_catalog`。
+- Embedding：`threshold`、`candidates[]`、`aggregation_method`（mean/max/any）。
+- 其余 learned：薄封装（description / threshold / patterns → hash 或分类器置信度）。
 
 规则：`(type, name) → {match: bool, confidence: 0..1}`。仅计算被引用类型。
 
 ### 3.3 Projections / decisions / algorithms / plugins
 
 - Projections：`partition` / `score` / `mapping`。
-- Decision：Boolean `AND`/`OR`/`NOT` 树 + `priority` + `modelRefs` + 可选 algorithm/plugins。
+- Decision：Boolean `AND`/`OR`/`NOT` 树 + `priority` + `modelRefs` + 可选 algorithm/plugins + **`emits`**；未知 decision 键 → validate 失败（`deny_unknown_fields`）。
 - Strategy：`priority`（默认）或 `confidence`。
-- Selection：阶段 A `static`；B 增 `latency-aware`、`multi-factor`；C 其余（`automix`、`hybrid`、`kmeans`、`knn`、`mlp`、`prompt`、`router-dc`、`svm`）未实现则 Unsupported。
-- Looper（C）：`confidence`、`fusion`、`ratings`、`remom`、`workflows`。
+- Selection：阶段 A `static`；B 增 `latency-aware`、`multi-factor`；**R 增 `elo`**（内存 Elo ratings 表，按成功/延迟反馈更新）；其余（`automix`、`hybrid`、`kmeans`、`knn`、`mlp`、`prompt`、`router-dc`、`svm`）未实现则 Unsupported。
+- Looper：**R 实现 `ratings`**（读/写同一 Elo 表）；其余（`confidence`、`fusion`、`remom`、`workflows`）仍 Unsupported。
 - Plugins：B 至少 `header-mutation`、`request-params`、`system-prompt`、`fast-response`、`response-cache`（exact）；C 其余引用即须实现或 Unsupported。
+
+### 3.3.1 状态化路由（阶段 R）
+
+- Session 键：`x-aria-session` 或 body `session`（与 cost 共用）。
+- 命中 decision 且 `retention.keep_current_model`：写入 `stores.memory` sticky model + `ttl_turns`；后续 turn 在 algorithm 前若 sticky 仍 eligible 则覆盖选型；每成功转发 `ttl_turns_left -= 1`，到 0 清除。
+- `retention.drop`：禁止本响应写入 `semantic_cache`。
+- 响应头：`x-aria-router-retention-drop` / `ttl-turns` / `keep-current-model` / `prefer-prefix`（显式设置才发）。
+- Bypass 不写 retention；agent 路径不强制 sticky（仅 `get_request_view` 可读 session 摘要）。
+
+### 3.3.2 生产 stores / services（阶段 R）
+
+- `stores.memory`：进程内 session → sticky；`max_sessions` LRU。
+- `stores.semantic_cache`：决策/模型感知；相似度 = embedding 余弦（无向量则 hash 文本）；lookup 在转发前；命中响应头 `x-aria-router-semantic-cache: hit`；与 plugin `response-cache`（exact）并存。
+- `services.ratelimit`：按 API key id 或 `anonymous` 令牌桶；超限 **429**（软限流 ≠ 硬 quota）。
+- `services.router_replay`：`ReplayRecord`（signals 摘要、projection、decision、emits、model、latency）；`GET /v1/router/replay`；`POST /v1/router/replay/{id}/reroute?forward=false` 默认仅重跑决策；可选 `persist_path` JSONL。
 
 ### 3.4 Agent（轻量 builtin）
 
@@ -161,7 +204,7 @@ global:
 
 - `POST /v1/chat/completions` JSON + SSE
 - `GET /v1/models`：entrypoint 虚拟名 + 实名 provider 名
-- 响应头 `x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`；另可选 `x-aria-router-algorithm` / `x-aria-router-reason` / `x-aria-router-confidence` / `x-aria-router-bypass`
+- 响应头 `x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`；另可选 `x-aria-router-algorithm` / `x-aria-router-reason` / `x-aria-router-confidence` / `x-aria-router-bypass` / retention·semantic-cache 头
 - SSE（`stream: true`）：上游 `bytes_stream` **透传**至客户端（`text/event-stream`）；流结束后再记 cost
 - `global.require_api_key: true` 时须 `Authorization: Bearer` 或 `x-api-key` 命中未吊销 **本地** `sk-aria_` **或** 已配置的 OAuth `sk-bf-`，否则 **401**
 - Cost 事件：`identity` = `local_user` | `local` | `serve` | `anonymous` | `playground`；报告含 `by_local_user` / `by_serve_user`
@@ -184,7 +227,7 @@ CLI：`aria-router setup` 仅 template + admin（默认 `allow_register=true`、
 
 ### 3.6 错误
 
-`RouterError::{Io, Config, Unsupported, InvalidParam, FailClosed, Upstream, Timeout, Extension, Unauthorized}`（`Extension` 用于 builtin LLM/tool 路径故障）。禁止 panic 当控制流。
+`RouterError::{Io, Config, Unsupported, InvalidParam, FailClosed, Upstream, Timeout, Extension, Unauthorized, RateLimited}`（`Extension` 用于 builtin LLM/tool 路径故障；`RateLimited` → HTTP 429）。禁止 panic 当控制流。
 
 ### 3.7 FFI / SDK
 
@@ -213,7 +256,8 @@ C API（`include/aria_router.h`）：
 - A-semantic：keyword 命中转发；实名 bypass；无路径 fail closed；SSE 至少 1 chunk。
 - A-agent：`submit_route` / 合法终态采纳；工具结果正确；非法/越权/超时/超 `max_turns` fail closed；与 semantic 入口不串扰。
 - B：启发式 + 三算法 + 五插件单测。
-- C：learned 无权重且被引用 → Unsupported；未知 algorithm 同。
+- C：无 `ml` 时 learned 被引用 → Unsupported；未知 algorithm 同。
+- R：retention sticky 同 session 第二轮粘住模型；`semantic_cache` hit 头；ratelimit 超限 429；`elo` 选高分 modelRef；`cargo test` 默认绿；`cargo test -p aria-router-signal --features ml`（及 http `-F ml`）绿。
 - E：八语言跑通 `cases.json` 黄金项。
 - F：`PUT /v1/router/config` 非法 YAML 不改文档；合法 tiny YAML 热重载；topology 对 semantic-tiny / agent-tiny 有预期节点；`POST /v1/router/chat` 走 keyword / canned-agent 黄金路径；`GET /v1/router/models` 含 entrypoint；`stream:true` 返回 `text/event-stream` 且透传至少 1 chunk；响应含扩展 `x-aria-router-*`；Dashboard Playground：多轮气泡 + 模型下拉 + Header 面板 + markdown + 本地会话侧栏；`--no-dashboard` 时 `/` 不提供 SPA。
 - G：带 `usage` 的 mock chat 计入账本；无 usage → estimate；无 pricing → `cost=0` 且 `priced=false`；`require_api_key: true` 无 Bearer 聊天与 PUT providers → 401；合法 key → 200 且 `by_key` 有 id；吊销后 401；Cost JSON 含六因子键。

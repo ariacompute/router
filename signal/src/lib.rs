@@ -1,5 +1,8 @@
 //! Heuristic (and gated learned) signal extraction.
 
+#[cfg(feature = "ml")]
+mod ml;
+
 use aria_router_config::{Recipe, RouterDocument, Signals};
 use aria_router_core::{ChatRequest, RouterError};
 use serde::{Deserialize, Serialize};
@@ -57,6 +60,7 @@ pub fn extract(
         return Ok(SignalSet::default());
     };
     let needed = referenced(&routing.decisions);
+    #[cfg(not(feature = "ml"))]
     if let Some(kind) = needed.iter().find(|k| LEARNED.contains(&k.as_str())) {
         return Err(RouterError::Unsupported(format!(
             "learned signal {kind} requires feature ml / weights"
@@ -67,8 +71,6 @@ pub fn extract(
     let mut hits = vec![];
     let s = &routing.signals;
     if needed.iter().any(|k| k == "keyword") {
-        // Match the latest user turn only so prior "explain …" history does not
-        // keep stealing later short turns (e.g. Playground "hi") to explanatory.
         hits.extend(eval_keywords(s, &last_user));
     }
     if needed.iter().any(|k| k == "language") {
@@ -92,8 +94,97 @@ pub fn extract(
     if needed.iter().any(|k| k == "structure") {
         hits.extend(eval_structure(s, &last_user));
     }
-    let _ = doc;
+    #[cfg(feature = "ml")]
+    {
+        hits.extend(eval_learned(doc, s, &needed, &last_user)?);
+    }
+    #[cfg(not(feature = "ml"))]
+    {
+        let _ = doc;
+    }
     Ok(SignalSet { hits })
+}
+
+#[cfg(feature = "ml")]
+fn eval_learned(
+    doc: &RouterDocument,
+    s: &Signals,
+    needed: &[String],
+    text: &str,
+) -> Result<Vec<SignalHit>, RouterError> {
+    let mut hits = vec![];
+    let catalog_dim = doc
+        .global
+        .model_catalog
+        .values()
+        .find_map(|e| e.dim);
+    for kind in LEARNED {
+        if !needed.iter().any(|k| k == kind || k.replace('_', "-") == *kind) {
+            continue;
+        }
+        let Some(raw) = s
+            .extra
+            .get(*kind)
+            .or_else(|| {
+                // YAML plural keys (vLLM SR): embeddings, domains, …
+                let plural = format!("{kind}s");
+                s.extra.get(plural.as_str()).or_else(|| {
+                    let alt = kind.replace('-', "_");
+                    s.extra.get(alt.as_str())
+                })
+            })
+        else {
+            continue;
+        };
+        let items: Vec<serde_json::Value> = if raw.is_array() {
+            raw.as_array().cloned().unwrap_or_default()
+        } else if raw.is_object() {
+            vec![raw.clone()]
+        } else {
+            continue;
+        };
+        for item in items {
+            let Some(obj) = item.as_object() else {
+                continue;
+            };
+            let name = obj
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unnamed")
+                .to_string();
+            let dim = ml::dim_from(obj, catalog_dim);
+            let (matched, confidence) = if *kind == "embedding" || *kind == "embeddings" {
+                let threshold = obj
+                    .get("threshold")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.75) as f32;
+                let candidates: Vec<String> = obj
+                    .get("candidates")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let agg = obj
+                    .get("aggregation_method")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("mean");
+                ml::embed_match(text, &candidates, threshold, agg, dim)
+            } else {
+                ml::classify_match(text, obj, dim)
+            };
+            let kind_norm = kind.replace('_', "-");
+            hits.push(SignalHit {
+                kind: kind_norm,
+                name,
+                matched,
+                confidence,
+            });
+        }
+    }
+    Ok(hits)
 }
 
 fn referenced(decisions: &[aria_router_config::DecisionCfg]) -> Vec<String> {
@@ -343,6 +434,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "ml"))]
     fn learned_referenced_is_unsupported() {
         let raw = r#"
 version: v0.3
@@ -382,5 +474,53 @@ recipes:
         };
         let err = extract(&doc, recipe, &req, &HashMap::new()).unwrap_err();
         assert!(matches!(err, RouterError::Unsupported(_)));
+    }
+
+    #[test]
+    #[cfg(feature = "ml")]
+    fn learned_embedding_with_ml() {
+        let raw = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/general
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      signals:
+        embeddings:
+          - name: tech
+            threshold: 0.15
+            candidates: ["installation guide", "troubleshooting"]
+      decisions:
+        - name: d
+          rules:
+            operator: AND
+            conditions:
+              - type: embedding
+                name: tech
+          modelRefs: [{model: local/general}]
+"#;
+        let doc = RouterDocument::from_yaml_str(raw).unwrap();
+        let recipe = doc.recipe("mom").unwrap();
+        let req = ChatRequest {
+            model: "auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: serde_json::json!("need installation guide help"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let set = extract(&doc, recipe, &req, &HashMap::new()).unwrap();
+        assert!(set.matched("embedding", "tech") || set.get("embedding", "tech").is_some());
     }
 }

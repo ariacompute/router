@@ -1,4 +1,8 @@
-//! Selection algorithms (static / latency-aware / multi-factor).
+//! Selection algorithms (static / latency-aware / multi-factor / elo).
+
+mod elo;
+
+pub use elo::{global_elo, EloTable};
 
 use aria_router_config::{DecisionCfg, RouterDocument};
 use aria_router_core::{RouterError, ModelCard};
@@ -8,6 +12,8 @@ pub struct RuntimeStats {
     pub latency_ms: std::collections::HashMap<String, f32>,
     pub load: std::collections::HashMap<String, f32>,
     pub cost: std::collections::HashMap<String, f32>,
+    /// Optional Elo ratings snapshot (model → rating).
+    pub elo: std::collections::HashMap<String, f32>,
 }
 
 pub fn select(
@@ -59,6 +65,26 @@ pub fn select(
                     let sa = score(a, stats);
                     let sb = score(b, stats);
                     sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .cloned()
+                .unwrap();
+            Ok(best)
+        }
+        "elo" | "ratings" => {
+            let best = names
+                .iter()
+                .max_by(|a, b| {
+                    let ra = stats
+                        .elo
+                        .get(*a)
+                        .copied()
+                        .unwrap_or_else(|| global_elo().rating(a));
+                    let rb = stats
+                        .elo
+                        .get(*b)
+                        .copied()
+                        .unwrap_or_else(|| global_elo().rating(b));
+                    ra.partial_cmp(&rb).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .cloned()
                 .unwrap();
@@ -143,6 +169,7 @@ mod tests {
             algorithm: Some(algo.into()),
             plugins: vec![],
             locality: None,
+            emits: vec![],
         }
     }
 
@@ -199,6 +226,16 @@ recipes:
         stats.cost.insert("a".into(), 9.0);
         stats.cost.insert("b".into(), 1.0);
         let got = select(&d, &decision("multi-factor"), &cards(), &stats).unwrap();
+        assert_eq!(got, "b");
+    }
+
+    #[test]
+    fn elo_picks_higher_rating() {
+        let d = doc();
+        let mut stats = RuntimeStats::default();
+        stats.elo.insert("a".into(), 900.0);
+        stats.elo.insert("b".into(), 1200.0);
+        let got = select(&d, &decision("elo"), &cards(), &stats).unwrap();
         assert_eq!(got, "b");
     }
 

@@ -65,6 +65,13 @@ impl BuiltinAgent {
                 bypass: false,
                 routing_latency_ms: None,
                 cache_response: false,
+                retention_drop: None,
+                retention_ttl_turns: None,
+                retention_keep_current_model: None,
+                retention_prefer_prefix: None,
+                semantic_cache_hit: None,
+                replay_id: None,
+                session: None,
             });
         };
 
@@ -361,6 +368,13 @@ fn decision_from_submit(args: &Value, eligible: &[ModelCard]) -> Result<RouteDec
         bypass: false,
         routing_latency_ms: None,
         cache_response: false,
+        retention_drop: None,
+        retention_ttl_turns: None,
+        retention_keep_current_model: None,
+        retention_prefer_prefix: None,
+        semantic_cache_hit: None,
+        replay_id: None,
+        session: None,
     })
 }
 
@@ -532,6 +546,13 @@ mod tests {
                 bypass: false,
                 routing_latency_ms: None,
                 cache_response: false,
+                retention_drop: None,
+                retention_ttl_turns: None,
+                retention_keep_current_model: None,
+                retention_prefer_prefix: None,
+                semantic_cache_hit: None,
+                replay_id: None,
+                session: None,
             }),
         };
         let task = RouteTask {

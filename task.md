@@ -296,3 +296,31 @@
 ### T49 — label routing 不被 pool SSL 拖垮
 - [x] `quality=label` 时 pool chat 失败仍按 `label_score` 记 cell（修 multi-q error）
 - [x] `chat_completion` transient SSL/5xx/429 默认重试 5 次；单测覆盖
+
+## 阶段 R — 决策器 B + 状态化 + 生产 A
+
+### T50 — Spec
+- [x] `requirements.md` 阶段 R / §3.3.1–3.3.2 / stores·services·emits·elo·ml
+- [x] 本清单；`AGENTS.md` 进行中
+
+### T51 — Config 契约
+- [x] `DecisionCfg.emits` / `RetentionDirective`；`deny_unknown_fields`
+- [x] `global.stores` / `services` / `model_catalog`
+- [x] 示例 `semantic-stateful.yaml`；tiny 可选 retention
+
+### T52 — Memory + retention
+- [x] `SessionMemory`；`keep_current_model` / `ttl_turns`；retention 响应头
+- [x] bypass 不写；agent 不强制 sticky
+
+### T53 — Learned `ml`
+- [x] signal feature `ml` + HashMlBackend（+ 可选 ort `weight_path`）
+- [x] embedding + 其余 learned 薄封装；单测
+
+### T54 — Elo / ratings
+- [x] `elo` selection + `ratings` 表；KNOWN/IMPLEMENTED
+
+### T55 — 生产设施
+- [x] `semantic_cache`；软限流 429；加厚 replay + `POST .../reroute`
+
+### T56 — 文档与验收
+- [x] README / Dashboard Replay；`cargo test` + `--features ml`；dashboard build

@@ -372,6 +372,11 @@ export type RouteDecision = {
   layer: string;
   decision: string;
   bypass: boolean;
+  retention_drop?: boolean | null;
+  retention_ttl_turns?: number | null;
+  retention_keep_current_model?: boolean | null;
+  semantic_cache_hit?: boolean | null;
+  session?: string | null;
 };
 
 export type ConfigPayload = {

@@ -46,6 +46,13 @@ pub struct GlobalCfg {
     /// Default Aria Compute (serve) site used by the OAuth login flow: "com" or "cn".
     #[serde(default = "default_serve_site")]
     pub serve_site: String,
+    /// Optional embedding / classifier catalog for learned signals and semantic_cache.
+    #[serde(default)]
+    pub model_catalog: HashMap<String, ModelCatalogEntry>,
+    #[serde(default)]
+    pub stores: StoresCfg,
+    #[serde(default)]
+    pub services: ServicesCfg,
 }
 
 impl Default for GlobalCfg {
@@ -58,8 +65,174 @@ impl Default for GlobalCfg {
             serve_account_path: None,
             admin_emails: Vec::new(),
             serve_site: default_serve_site(),
+            model_catalog: HashMap::new(),
+            stores: StoresCfg::default(),
+            services: ServicesCfg::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelCatalogEntry {
+    #[serde(default = "default_catalog_kind")]
+    pub kind: String,
+    #[serde(default)]
+    pub dim: Option<usize>,
+    #[serde(default)]
+    pub weight_path: Option<String>,
+}
+
+fn default_catalog_kind() -> String {
+    "hash".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoresCfg {
+    #[serde(default)]
+    pub memory: MemoryStoreCfg,
+    #[serde(default)]
+    pub semantic_cache: SemanticCacheCfg,
+}
+
+impl Default for StoresCfg {
+    fn default() -> Self {
+        Self {
+            memory: MemoryStoreCfg::default(),
+            semantic_cache: SemanticCacheCfg::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryStoreCfg {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_max_sessions")]
+    pub max_sessions: usize,
+    #[serde(default = "default_ttl_turns")]
+    pub default_ttl_turns: u32,
+}
+
+impl Default for MemoryStoreCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_sessions: default_max_sessions(),
+            default_ttl_turns: default_ttl_turns(),
+        }
+    }
+}
+
+fn default_max_sessions() -> usize {
+    4096
+}
+fn default_ttl_turns() -> u32 {
+    2
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticCacheCfg {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_sim_threshold")]
+    pub similarity_threshold: f32,
+    #[serde(default = "default_max_cache")]
+    pub max_entries: usize,
+    #[serde(default = "default_cache_ttl")]
+    pub ttl_turns: u32,
+}
+
+impl Default for SemanticCacheCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            similarity_threshold: default_sim_threshold(),
+            max_entries: default_max_cache(),
+            ttl_turns: default_cache_ttl(),
+        }
+    }
+}
+
+fn default_sim_threshold() -> f32 {
+    0.92
+}
+fn default_max_cache() -> usize {
+    1024
+}
+fn default_cache_ttl() -> u32 {
+    4
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServicesCfg {
+    #[serde(default)]
+    pub ratelimit: RateLimitCfg,
+    #[serde(default)]
+    pub router_replay: RouterReplayCfg,
+}
+
+impl Default for ServicesCfg {
+    fn default() -> Self {
+        Self {
+            ratelimit: RateLimitCfg::default(),
+            router_replay: RouterReplayCfg::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RateLimitCfg {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_rpm")]
+    pub requests_per_minute: u32,
+}
+
+impl Default for RateLimitCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            requests_per_minute: default_rpm(),
+        }
+    }
+}
+
+fn default_rpm() -> u32 {
+    120
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouterReplayCfg {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_replay_max")]
+    pub max_items: usize,
+    #[serde(default)]
+    pub persist_path: Option<String>,
+}
+
+impl Default for RouterReplayCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_items: default_replay_max(),
+            persist_path: None,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_replay_max() -> usize {
+    256
 }
 
 fn default_require_api_key() -> bool {
@@ -308,6 +481,7 @@ pub struct ProjectionCfg {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DecisionCfg {
     pub name: String,
     #[serde(default)]
@@ -324,6 +498,54 @@ pub struct DecisionCfg {
     pub plugins: Vec<PluginRef>,
     #[serde(default)]
     pub locality: Option<String>,
+    #[serde(default)]
+    pub emits: Vec<EmitDirective>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmitDirective {
+    pub kind: String,
+    #[serde(default)]
+    pub retention: Option<RetentionDirective>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RetentionDirective {
+    #[serde(default)]
+    pub drop: Option<bool>,
+    #[serde(default)]
+    pub ttl_turns: Option<u32>,
+    #[serde(default)]
+    pub keep_current_model: Option<bool>,
+    #[serde(default)]
+    pub prefer_prefix_retention: Option<bool>,
+}
+
+impl RetentionDirective {
+    pub fn validate(&self, decision_name: &str) -> Result<(), RouterError> {
+        let drop = self.drop.unwrap_or(false);
+        let ttl = self.ttl_turns.unwrap_or(0);
+        if drop && ttl > 0 {
+            return Err(RouterError::Config(format!(
+                "decision {decision_name}: retention drop:true conflicts with positive ttl_turns"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl DecisionCfg {
+    pub fn retention(&self) -> Option<&RetentionDirective> {
+        self.emits.iter().find_map(|e| {
+            if e.kind == "retention" {
+                e.retention.as_ref()
+            } else {
+                None
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -377,28 +599,45 @@ pub struct AgentRecipe {
 
 const LEARNED_SIGNAL_KEYS: &[&str] = &[
     "classifier",
+    "classifiers",
     "complexity",
     "domain",
+    "domains",
     "embedding",
+    "embeddings",
     "fact-check",
     "fact_check",
+    "fact_checks",
     "jailbreak",
+    "jailbreaks",
     "kb",
     "modality",
     "pii",
     "preference",
+    "preferences",
     "reask",
+    "reasks",
     "user-feedback",
     "user_feedback",
+    "user_feedbacks",
 ];
 
-const IMPLEMENTED_ALGOS: &[&str] = &["static", "latency-aware", "latency_aware", "multi-factor", "multi_factor"];
+const IMPLEMENTED_ALGOS: &[&str] = &[
+    "static",
+    "latency-aware",
+    "latency_aware",
+    "multi-factor",
+    "multi_factor",
+    "elo",
+    "ratings",
+];
 const KNOWN_ALGOS: &[&str] = &[
     "static",
     "latency-aware",
     "latency_aware",
     "multi-factor",
     "multi_factor",
+    "elo",
     "automix",
     "hybrid",
     "kmeans",
@@ -539,6 +778,33 @@ impl RouterDocument {
                 if !KNOWN_ALGOS.contains(&algo.as_str()) {
                     return Err(RouterError::Unsupported(format!("unknown algorithm {algo}")));
                 }
+            }
+            let mut retention_count = 0usize;
+            for emit in &d.emits {
+                match emit.kind.as_str() {
+                    "retention" => {
+                        retention_count += 1;
+                        let Some(ret) = &emit.retention else {
+                            return Err(RouterError::Config(format!(
+                                "decision {}: emit retention missing retention block",
+                                d.name
+                            )));
+                        };
+                        ret.validate(&d.name)?;
+                    }
+                    other => {
+                        return Err(RouterError::Unsupported(format!(
+                            "decision {}: unknown emit kind {other}",
+                            d.name
+                        )));
+                    }
+                }
+            }
+            if retention_count > 1 {
+                return Err(RouterError::Config(format!(
+                    "decision {}: duplicate emit retention",
+                    d.name
+                )));
             }
         }
         Ok(())
@@ -918,5 +1184,42 @@ recipes:
             include_str!("../examples/semantic-tiny.yaml")
         );
         assert!(RouterDocument::from_yaml_str(&raw).is_err());
+    }
+
+    #[test]
+    fn retention_drop_and_ttl_conflict() {
+        let raw = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/general
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      decisions:
+        - name: d
+          rules: { operator: AND, conditions: [] }
+          modelRefs: [{model: local/general}]
+          emits:
+            - kind: retention
+              retention: { drop: true, ttl_turns: 2 }
+"#;
+        let err = RouterDocument::from_yaml_str(raw).unwrap_err();
+        assert!(matches!(err, RouterError::Config(_)));
+    }
+
+    #[test]
+    fn semantic_stateful_example_loads() {
+        let doc = RouterDocument::from_yaml_str(include_str!("../examples/semantic-stateful.yaml"))
+            .unwrap();
+        assert!(doc.global.stores.memory.enabled);
+        let d = &doc.recipe("mom").unwrap().routing.as_ref().unwrap().decisions[0];
+        assert!(d.retention().is_some());
     }
 }
