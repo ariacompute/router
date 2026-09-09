@@ -145,3 +145,77 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
         (dot / d).clamp(-1.0, 1.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn cfg(threshold: f32, max_entries: usize) -> SemanticCacheCfg {
+        SemanticCacheCfg {
+            enabled: true,
+            similarity_threshold: threshold,
+            max_entries,
+            ttl_turns: 4,
+        }
+    }
+
+    #[test]
+    fn hit_miss_model_isolation_and_disabled() {
+        let cache = SemanticCache::default();
+        let c = cfg(0.5, 64);
+        cache.store(
+            "explain rust ownership",
+            "m1",
+            "d1",
+            json!({"cached": true}),
+            4,
+            &c,
+        );
+        assert_eq!(
+            cache
+                .lookup("explain rust ownership", "m1", "d1", &c)
+                .unwrap()["cached"],
+            true
+        );
+        assert!(cache.lookup("explain rust ownership", "m2", "d1", &c).is_none());
+        assert!(cache
+            .lookup("totally unrelated zzzyx", "m1", "d1", &cfg(0.99, 64))
+            .is_none());
+
+        let off = SemanticCacheCfg {
+            enabled: false,
+            ..cfg(0.5, 64)
+        };
+        assert!(cache
+            .lookup("explain rust ownership", "m1", "d1", &off)
+            .is_none());
+        cache.store("x", "m1", "d1", json!(1), 1, &off);
+    }
+
+    #[test]
+    fn ttl_expiry_and_max_entries() {
+        let cache = SemanticCache::default();
+        let c = cfg(0.5, 2);
+        cache.store("alpha one", "m", "d", json!(1), 2, &c);
+        cache.tick_all();
+        assert!(cache.lookup("alpha one", "m", "d", &c).is_some());
+        cache.tick_all();
+        assert!(cache.lookup("alpha one", "m", "d", &c).is_none());
+
+        cache.store("zzzz unique alpha", "m", "d", json!("a"), 4, &c);
+        cache.store("yyyy unique beta", "m", "d", json!("b"), 4, &c);
+        cache.store("xxxx unique gamma", "m", "d", json!("c"), 4, &c);
+        // max_entries=2 → oldest trimmed; exact key for oldest misses.
+        assert!(cache.lookup("zzzz unique alpha", "m", "d", &cfg(0.99, 2)).is_none());
+        assert!(cache.lookup("xxxx unique gamma", "m", "d", &cfg(0.99, 2)).is_some());
+    }
+
+    #[test]
+    fn hash_embed_cosine_basics() {
+        let a = hash_embed("hello world", 32);
+        let b = hash_embed("hello world", 32);
+        assert!((cosine(&a, &b) - 1.0).abs() < 1e-5);
+        assert_eq!(cosine(&[], &[]), 0.0);
+    }
+}

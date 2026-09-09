@@ -198,6 +198,73 @@ mod tests {
     }
 
     #[test]
+    fn or_not_and_missing_projection() {
+        let mut set = SignalSet::default();
+        set.hits.push(SignalHit {
+            kind: "keyword".into(),
+            name: "a".into(),
+            matched: true,
+            confidence: 1.0,
+        });
+        let or_node = RuleNode {
+            operator: Some("OR".into()),
+            conditions: vec![
+                Condition {
+                    kind: "keyword".into(),
+                    name: "missing".into(),
+                    equals: None,
+                },
+                Condition {
+                    kind: "keyword".into(),
+                    name: "a".into(),
+                    equals: None,
+                },
+            ],
+            not: None,
+        };
+        assert!(eval_rule(&or_node, &set, &ProjectionMap::default()).unwrap());
+
+        let not_node = RuleNode {
+            operator: Some("AND".into()),
+            conditions: vec![],
+            not: Some(Box::new(RuleNode {
+                operator: Some("AND".into()),
+                conditions: vec![Condition {
+                    kind: "keyword".into(),
+                    name: "a".into(),
+                    equals: None,
+                }],
+                not: None,
+            })),
+        };
+        assert!(!eval_rule(&not_node, &set, &ProjectionMap::default()).unwrap());
+
+        let proj_cond = RuleNode {
+            operator: Some("AND".into()),
+            conditions: vec![Condition {
+                kind: "projection".into(),
+                name: "absent".into(),
+                equals: Some("x".into()),
+            }],
+            not: None,
+        };
+        assert!(!eval_rule(&proj_cond, &set, &ProjectionMap::default()).unwrap());
+
+        let mut proj = ProjectionMap::default();
+        proj.values.insert("n".into(), Value::Null);
+        let null_eq = RuleNode {
+            operator: Some("AND".into()),
+            conditions: vec![Condition {
+                kind: "projection".into(),
+                name: "n".into(),
+                equals: Some("null".into()),
+            }],
+            not: None,
+        };
+        assert!(eval_rule(&null_eq, &set, &proj).unwrap());
+    }
+
+    #[test]
     fn projection_equals_selects_decision() {
         let recipe = Recipe {
             name: "mom".into(),

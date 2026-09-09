@@ -78,3 +78,79 @@ impl ReplayLog {
             .cloned()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aria_router_core::RouteDecision;
+    use std::fs;
+    use std::io::Read;
+
+    fn rec(decision: &str) -> ReplayRecord {
+        ReplayRecord {
+            id: String::new(),
+            decision: RouteDecision {
+                model: "m".into(),
+                decision: decision.into(),
+                ..Default::default()
+            },
+            signals_summary: None,
+            projections: None,
+            emits: None,
+            retention: None,
+            session: Some("s1".into()),
+            prompt_preview: Some("hi".into()),
+        }
+    }
+
+    #[test]
+    fn ring_buffer_ids_and_lookup() {
+        let log = ReplayLog::default();
+        let cfg = RouterReplayCfg {
+            enabled: true,
+            max_items: 2,
+            persist_path: None,
+        };
+        log.push(rec("d1"), &cfg);
+        log.push(rec("d2"), &cfg);
+        log.push(rec("d3"), &cfg);
+        let recent = log.recent(10);
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].decision.decision, "d3");
+        assert_eq!(recent[1].decision.decision, "d2");
+        assert!(!recent[0].id.is_empty());
+        assert_ne!(recent[0].id, recent[1].id);
+        assert!(log.get(&recent[0].id).is_some());
+        assert!(log.get("missing").is_none());
+
+        let off = RouterReplayCfg {
+            enabled: false,
+            max_items: 10,
+            persist_path: None,
+        };
+        let before = log.recent(10).len();
+        log.push(rec("noop"), &off);
+        assert_eq!(log.recent(10).len(), before);
+    }
+
+    #[test]
+    fn persist_jsonl_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("replay.jsonl");
+        let log = ReplayLog::default();
+        let cfg = RouterReplayCfg {
+            enabled: true,
+            max_items: 8,
+            persist_path: Some(path.display().to_string()),
+        };
+        log.configure(&cfg);
+        log.push(rec("persist-me"), &cfg);
+        let mut f = fs::File::open(&path).unwrap();
+        let mut buf = String::new();
+        f.read_to_string(&mut buf).unwrap();
+        let line = buf.lines().next().unwrap();
+        let parsed: ReplayRecord = serde_json::from_str(line).unwrap();
+        assert_eq!(parsed.decision.decision, "persist-me");
+        assert_eq!(parsed.session.as_deref(), Some("s1"));
+    }
+}

@@ -324,3 +324,11 @@
 
 ### T56 — 文档与验收
 - [x] README / Dashboard Replay；`cargo test` + `--features ml`；dashboard build
+
+## 测试覆盖补强
+
+### T57 — Phase R 单测覆盖
+- [x] `memory` / `ratelimit` / `replay` / `semantic_cache` 模块单测（TTL、驱逐、persist、命中/未命中）
+- [x] `cost` helpers + identity buckets；`elo` 表；`core` 请求/决策助手；`auth_api` / `embed` 纯函数
+- [x] 集成：`semantic_cache_hit_skips_upstream`、`replay_log_lists_recent`；decision OR/NOT/投影缺失
+- [x] `cargo test` 全绿；行覆盖约 69% → 74%（`semantic_cache` 9% → 98%）

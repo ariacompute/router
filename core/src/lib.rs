@@ -225,3 +225,68 @@ pub fn prompt_from_messages(messages: &[ChatMessage]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn chat_request_text_helpers() {
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![
+                ChatMessage {
+                    role: "system".into(),
+                    content: json!("sys"),
+                },
+                ChatMessage {
+                    role: "user".into(),
+                    content: json!("first"),
+                },
+                ChatMessage {
+                    role: "assistant".into(),
+                    content: json!("ok"),
+                },
+                ChatMessage {
+                    role: "user".into(),
+                    content: json!({"text": "second"}),
+                },
+            ],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        assert_eq!(req.last_user_text().contains("second"), true);
+        assert!(req.prompt_text().contains("first"));
+        let joined = prompt_from_messages(&req.messages);
+        assert!(joined.contains("system: sys"));
+        assert!(joined.contains("assistant: ok"));
+    }
+
+    #[test]
+    fn router_kind_and_bypass() {
+        assert_eq!("semantic".parse::<RouterKind>().unwrap(), RouterKind::Semantic);
+        assert_eq!("agent".parse::<RouterKind>().unwrap(), RouterKind::Agent);
+        assert_eq!(RouterKind::Semantic.as_str(), "semantic");
+        assert!(matches!(
+            "other".parse::<RouterKind>(),
+            Err(RouterError::Config(_))
+        ));
+        let d = RouteDecision::bypass("local/m");
+        assert!(d.bypass);
+        assert_eq!(d.layer, "bypass");
+        assert_eq!(d.model, "local/m");
+        assert_eq!(ConstraintCtx::open().require_modality.as_deref(), Some("text"));
+    }
+
+    #[test]
+    fn error_from_io_and_json() {
+        let io = RouterError::from(std::io::Error::other("x"));
+        assert!(matches!(io, RouterError::Io(_)));
+        let bad: Result<i32, _> = serde_json::from_str("not-json");
+        let e = RouterError::from(bad.unwrap_err());
+        assert!(matches!(e, RouterError::InvalidParam(_)));
+    }
+}

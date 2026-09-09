@@ -238,3 +238,79 @@ pub fn cost_usd(prompt: u64, completion: u64, in_mtok: f64, out_mtok: f64) -> f6
 pub fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_event() -> CostEvent {
+        CostEvent {
+            ts: "t".into(),
+            user: "u".into(),
+            key_id: Some("k1".into()),
+            key_name: Some("n1".into()),
+            identity: "anonymous".into(),
+            serve_user_id: None,
+            serve_email: None,
+            serve_site: None,
+            session: "s".into(),
+            entrypoint: "ep".into(),
+            layer: "semantic".into(),
+            decision: "d".into(),
+            model: "m".into(),
+            bypass: false,
+            turns_in_request: 1,
+            upstream_requests: 1,
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            input_per_mtok: 1.0,
+            output_per_mtok: 2.0,
+            cost_usd: 0.01,
+            tokens_source: "estimate".into(),
+            priced: true,
+        }
+    }
+
+    #[test]
+    fn estimate_and_cost_helpers() {
+        assert_eq!(estimate_tokens("abcd"), 1);
+        assert_eq!(estimate_tokens("abcde"), 2);
+        assert!((cost_usd(1_000_000, 500_000, 1.0, 2.0) - 2.0).abs() < 1e-9);
+        assert!(!now_rfc3339().is_empty());
+    }
+
+    #[test]
+    fn identity_buckets_and_event_cap() {
+        let mut ledger = CostLedger::default();
+        let mut local = base_event();
+        local.identity = "local_user".into();
+        local.user = "alice".into();
+        ledger.record(local);
+
+        let mut serve = base_event();
+        serve.identity = "serve".into();
+        serve.serve_site = Some("https://example.com".into());
+        serve.serve_email = Some("bob@ex.com".into());
+        serve.session = "s2".into();
+        ledger.record(serve);
+
+        let report = ledger.report(10);
+        assert!(report["by_local_user"].get("alice").is_some());
+        assert!(report["by_serve_user"]
+            .get("https://example.com|bob@ex.com")
+            .is_some());
+        assert_eq!(report["serve_users"], 1);
+        let summary = ledger.summary();
+        assert_eq!(summary["requests"], 2);
+
+        for i in 0..4095 {
+            let mut ev = base_event();
+            ev.session = format!("cap-{i}");
+            ledger.record(ev);
+        }
+        // Cap at MAX_EVENTS; report still returns recent slice.
+        let capped = ledger.report(1);
+        assert_eq!(capped["totals"]["requests"], 4097);
+        assert_eq!(capped["recent"].as_array().unwrap().len(), 1);
+    }
+}

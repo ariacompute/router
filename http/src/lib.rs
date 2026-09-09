@@ -2945,6 +2945,78 @@ global:
     }
 
     #[tokio::test]
+    async fn semantic_cache_hit_skips_upstream() {
+        let backend = mock_upstream().await;
+        let host = backend.trim_start_matches("http://");
+        let yaml = include_str!("../../config/examples/semantic-stateful.yaml")
+            .replace("127.0.0.1:8000", host)
+            .replace("127.0.0.1:8001", host);
+        let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+        let body = json!({
+            "model": "ariacompute/semantic-auto",
+            "messages": [{"role":"user","content":"please explain rust"}]
+        })
+        .to_string();
+        let mk = || {
+            Request::post("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .header("x-aria-session", "cache-sess-1")
+                .body(Body::from(body.clone()))
+                .unwrap()
+        };
+        let res1 = app.clone().oneshot(mk()).await.unwrap();
+        assert_eq!(res1.status(), StatusCode::OK);
+        assert!(
+            res1.headers()
+                .get("x-aria-router-semantic-cache")
+                .is_none()
+        );
+
+        let res2 = app.oneshot(mk()).await.unwrap();
+        assert_eq!(res2.status(), StatusCode::OK);
+        assert_eq!(
+            res2.headers()
+                .get("x-aria-router-semantic-cache")
+                .and_then(|v| v.to_str().ok()),
+            Some("hit")
+        );
+        let last = st.last_route.lock().unwrap().clone().unwrap();
+        assert_eq!(last.semantic_cache_hit, Some(true));
+    }
+
+    #[tokio::test]
+    async fn replay_log_lists_recent() {
+        let backend = mock_upstream().await;
+        let mut doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        doc.global.services.router_replay.enabled = true;
+        doc.global.services.router_replay.max_items = 16;
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+        let res = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "ariacompute/semantic-auto",
+                            "messages": [{"role":"user","content":"explain replay"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let recent = st.replay_log.recent(5);
+        assert!(!recent.is_empty());
+        assert!(!recent[0].id.is_empty());
+        assert_eq!(st.replay_log.get(&recent[0].id).unwrap().id, recent[0].id);
+    }
+
+    #[tokio::test]
     async fn semantic_stateful_yaml_validates() {
         let raw = include_str!("../../config/examples/semantic-stateful.yaml");
         let doc = RouterDocument::from_yaml_str(raw).unwrap();

@@ -488,6 +488,9 @@ python -m bench compare \
 
 ```bash
 # --- Track C: agent ladder (aria-router vs vLLM Semantic Router) ---
+export GATEWAY_BASE=https://tokenhub.tencentmaas.com
+export GATEWAY_API_KEY=your-api-key
+
 # Stop semantic-gateway if running, then:
 aria-router serve \
   --config config/examples/agent-gateway.yaml \

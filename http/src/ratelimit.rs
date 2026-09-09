@@ -42,3 +42,36 @@ impl RateLimiter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bucket_isolation_and_disabled() {
+        let lim = RateLimiter::default();
+        let cfg = RateLimitCfg {
+            enabled: true,
+            requests_per_minute: 2,
+        };
+        assert!(lim.check("a", &cfg).is_ok());
+        assert!(lim.check("a", &cfg).is_ok());
+        assert!(matches!(
+            lim.check("a", &cfg),
+            Err(RouterError::RateLimited(_))
+        ));
+        assert!(lim.check("b", &cfg).is_ok());
+
+        let off = RateLimitCfg {
+            enabled: false,
+            requests_per_minute: 1,
+        };
+        assert!(lim.check("a", &off).is_ok());
+
+        let zero = RateLimitCfg {
+            enabled: true,
+            requests_per_minute: 0,
+        };
+        assert!(lim.check("a", &zero).is_ok());
+    }
+}

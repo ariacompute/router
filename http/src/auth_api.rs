@@ -659,3 +659,55 @@ pub async fn serve_account_sync(
 // `GET /api/api-keys` returns the plaintext secret and `serve_account_sync`
 // stores it automatically, so the old `POST /v1/router/serve/account/key`
 // endpoint has been removed.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn session_cookie_helpers() {
+        let c = session_cookie("tok123");
+        assert!(c.contains("aria_router_session=tok123"));
+        assert!(c.contains("HttpOnly"));
+        let clear = clear_session_cookie();
+        assert!(clear.contains("Max-Age=0"));
+    }
+
+    #[test]
+    fn urlencoding_encode_specials() {
+        assert_eq!(urlencoding_encode("hello world?x=1"), "hello%20world%3Fx%3D1");
+        assert_eq!(urlencoding_encode("AZaz09-._~"), "AZaz09-._~");
+    }
+
+    #[test]
+    fn serve_pick_api_key_newest_wins() {
+        let list = vec![
+            json!({
+                "name": "old",
+                "prefix": "sk-bf-old",
+                "secret": "sk-bf-oldsecret",
+                "created_at": "2024-01-01T00:00:00Z"
+            }),
+            json!({
+                "name": "new",
+                "prefix": "sk-bf-new",
+                "secret": "sk-bf-newsecret",
+                "created_at": "2025-06-01T00:00:00Z"
+            }),
+        ];
+        let (name, prefix, secret) = serve_pick_api_key(&list).unwrap();
+        assert_eq!(name, "new");
+        assert_eq!(prefix, "sk-bf-new");
+        assert_eq!(secret, "sk-bf-newsecret");
+
+        assert!(serve_pick_api_key(&[]).is_none());
+        assert!(serve_pick_api_key(&[json!({
+            "name": "x",
+            "prefix": "p",
+            "secret": "",
+            "created_at": "2025-01-01T00:00:00Z"
+        })])
+        .is_none());
+    }
+}

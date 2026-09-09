@@ -126,3 +126,27 @@ fn content_type(path: &str) -> &'static str {
         _ => "application/octet-stream",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_and_percent_decode() {
+        assert_eq!(normalize(""), "index.html");
+        assert_eq!(normalize("/"), "index.html");
+        assert_eq!(normalize("/assets/app.js"), "assets/app.js");
+        assert_eq!(normalize("/dir/"), "dir/index.html");
+        assert_eq!(percent_decode("a%20b%2Fc"), "a b/c");
+        assert_eq!(percent_decode("plain"), "plain");
+        assert_eq!(percent_decode("%ZZ"), "%ZZ");
+    }
+
+    #[test]
+    fn content_type_map() {
+        assert!(content_type("index.html").contains("text/html"));
+        assert!(content_type("app.js").contains("javascript"));
+        assert_eq!(content_type("x.png"), "image/png");
+        assert_eq!(content_type("x.unknown"), "application/octet-stream");
+    }
+}

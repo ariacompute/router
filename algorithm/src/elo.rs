@@ -62,3 +62,25 @@ pub fn global_elo() -> &'static EloTable {
     static TABLE: OnceLock<EloTable> = OnceLock::new();
     TABLE.get_or_init(EloTable::default)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_pair_and_latency() {
+        let t = EloTable::default();
+        assert!((t.rating("a") - 1000.0).abs() < 1e-3);
+        t.update_pair("a", "b");
+        assert!(t.rating("a") > t.rating("b"));
+        t.set("c", 1000.0);
+        t.observe_latency("c", 50.0, &["peer".into()]);
+        let fast = t.rating("c");
+        assert!(fast > 1000.0);
+        t.observe_latency("c", 600.0, &["peer".into()]);
+        assert!(t.rating("c") < fast);
+        t.observe_latency("d", 10.0, &[]); // no-op without peers
+        assert!((t.rating("d") - 1000.0).abs() < 1e-3);
+        let _ = global_elo().rating("x");
+    }
+}

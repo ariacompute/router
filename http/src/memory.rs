@@ -68,3 +68,68 @@ impl SessionMemory {
         g.by_session.remove(session);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(max_sessions: usize) -> MemoryStoreCfg {
+        MemoryStoreCfg {
+            enabled: true,
+            max_sessions,
+            default_ttl_turns: 2,
+        }
+    }
+
+    fn state(model: &str, ttl: u32) -> SessionState {
+        SessionState {
+            sticky_model: model.into(),
+            ttl_turns_left: ttl,
+            decision: "d".into(),
+        }
+    }
+
+    #[test]
+    fn put_get_and_disabled_noop() {
+        let mem = SessionMemory::default();
+        mem.put("s1", state("m1", 3), &cfg(8));
+        assert_eq!(mem.get("s1").unwrap().sticky_model, "m1");
+
+        let disabled = MemoryStoreCfg {
+            enabled: false,
+            max_sessions: 8,
+            default_ttl_turns: 2,
+        };
+        mem.put("s2", state("m2", 1), &disabled);
+        assert!(mem.get("s2").is_none());
+
+        mem.put("", state("m3", 1), &cfg(8));
+        assert!(mem.get("").is_none());
+    }
+
+    #[test]
+    fn fifo_eviction_and_ttl_tick() {
+        let mem = SessionMemory::default();
+        mem.put("a", state("ma", 2), &cfg(2));
+        mem.put("b", state("mb", 2), &cfg(2));
+        mem.put("c", state("mc", 2), &cfg(2));
+        assert!(mem.get("a").is_none());
+        assert!(mem.get("b").is_some());
+        assert!(mem.get("c").is_some());
+
+        mem.put("ttl", state("mt", 1), &cfg(8));
+        mem.tick("ttl");
+        assert!(mem.get("ttl").is_none());
+
+        mem.put("ttl2", state("mt", 2), &cfg(8));
+        mem.tick("ttl2");
+        assert_eq!(mem.get("ttl2").unwrap().ttl_turns_left, 1);
+        mem.tick("ttl2");
+        assert!(mem.get("ttl2").is_none());
+
+        mem.put("x", state("mx", 5), &cfg(8));
+        mem.clear("x");
+        assert!(mem.get("x").is_none());
+        mem.tick("missing"); // no-op
+    }
+}
