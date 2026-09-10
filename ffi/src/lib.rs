@@ -347,8 +347,12 @@ mod tests {
 
     #[test]
     fn init_expands_tilde() {
-        let home = std::env::var("HOME").expect("HOME");
-        let dir = std::path::PathBuf::from(&home).join(".ariacompute").join("tmp").join(format!(
+        // Windows CI has USERPROFILE, not HOME; match dirs::home_dir() used by resolve_home_path.
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from)
+            .expect("USERPROFILE or HOME");
+        let dir = home.join(".ariacompute").join("tmp").join(format!(
             "ffi-tilde-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -359,8 +363,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = dir.join("tilde.yaml");
         std::fs::write(&cfg, include_str!("../../config/examples/semantic-tiny.yaml")).unwrap();
-        let rel = cfg.strip_prefix(&home).expect("under HOME");
-        let tilde = format!("~/{}", rel.display());
+        let rel = cfg.strip_prefix(&home).expect("under home");
+        // Keep forward slashes so `~/…` parsing is stable on Windows.
+        let rel_fwd = rel.to_string_lossy().replace('\\', "/");
+        let tilde = format!("~/{rel_fwd}");
         let p = CString::new(tilde).unwrap();
         let h = aria_router_init(p.as_ptr());
         let _ = std::fs::remove_dir_all(&dir);
