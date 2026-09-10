@@ -56,14 +56,14 @@ fn cstr<'a>(p: *const c_char) -> Result<&'a str, ()> {
 
 #[no_mangle]
 pub extern "C" fn aria_router_init(config_path: *const c_char) -> *mut AriaRouterHandle {
-    let path = match cstr(config_path) {
-        Ok(s) => s,
-        Err(()) => {
-            set_err("null config_path");
+    let path = match resolve_init_config_path(config_path) {
+        Ok(p) => p,
+        Err(e) => {
+            set_err(&e);
             return std::ptr::null_mut();
         }
     };
-    match RouterDocument::load_path(path) {
+    match RouterDocument::load_path(&path) {
         Ok(doc) => {
             let h = Box::new(AriaRouterHandle {
                 state: Some(Arc::new(AppState::new(doc))),
@@ -77,6 +77,17 @@ pub extern "C" fn aria_router_init(config_path: *const c_char) -> *mut AriaRoute
             std::ptr::null_mut()
         }
     }
+}
+
+fn resolve_init_config_path(config_path: *const c_char) -> Result<std::path::PathBuf, String> {
+    if !config_path.is_null() {
+        match cstr(config_path) {
+            Ok(s) if !s.is_empty() => return Ok(std::path::PathBuf::from(s)),
+            Ok(_) => {}
+            Err(()) => return Err("invalid config_path".into()),
+        }
+    }
+    aria_router_config::default_config_path().map_err(|e| e.to_string())
 }
 
 #[no_mangle]
@@ -293,8 +304,8 @@ mod tests {
     #[test]
     fn complete_fast_response() {
         let dir = tempfile_dir();
-        let cfg = dir.join("ffi.yaml");
-        std::fs::write(&cfg, include_str!("../../config/examples/ffi-tiny.yaml")).unwrap();
+        let cfg = dir.join("fast-response.yaml");
+        std::fs::write(&cfg, include_str!("../../bindings/testdata/fast-response.yaml")).unwrap();
         let p = CString::new(cfg.to_str().unwrap()).unwrap();
         let h = aria_router_init(p.as_ptr());
         assert!(!h.is_null());
@@ -327,8 +338,8 @@ mod tests {
     #[test]
     fn complete_stream_callback() {
         let dir = tempfile_dir();
-        let cfg = dir.join("ffi.yaml");
-        std::fs::write(&cfg, include_str!("../../config/examples/ffi-tiny.yaml")).unwrap();
+        let cfg = dir.join("fast-response.yaml");
+        std::fs::write(&cfg, include_str!("../../bindings/testdata/fast-response.yaml")).unwrap();
         let p = CString::new(cfg.to_str().unwrap()).unwrap();
         let h = aria_router_init(p.as_ptr());
         assert!(!h.is_null());

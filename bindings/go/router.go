@@ -38,9 +38,14 @@ func (r *Router) SetupClear() {
 }
 
 func (r *Router) Init(configPath string) error {
-	cs := C.CString(configPath)
-	defer C.free(unsafe.Pointer(cs))
-	h := C.aria_router_init(cs)
+	var h *C.AriaRouter
+	if configPath == "" {
+		h = C.aria_router_init(nil)
+	} else {
+		cs := C.CString(configPath)
+		defer C.free(unsafe.Pointer(cs))
+		h = C.aria_router_init(cs)
+	}
 	if h == nil {
 		return errors.New(C.GoString(C.aria_router_last_error()))
 	}

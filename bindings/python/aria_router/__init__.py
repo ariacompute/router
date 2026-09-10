@@ -76,11 +76,13 @@ class Router:
         self._lib.aria_router_last_route.argtypes = [c_void_p, c_char_p, c_size_t]
         self._lib.aria_router_last_error.restype = c_char_p
 
-    def init(self, config_path: str) -> "Router":
+    def init(self, config_path: Optional[str] = None) -> "Router":
+        """Load YAML. None/empty → ~/.ariacompute/router.yml (after aria-router setup)."""
         self._ensure()
         if self._handle:
             self.close()
-        self._handle = self._lib.aria_router_init(config_path.encode())
+        path_arg = None if not config_path else config_path.encode()
+        self._handle = self._lib.aria_router_init(path_arg)
         if not self._handle:
             err = self._lib.aria_router_last_error()
             raise RuntimeError(err.decode() if err else "init failed")

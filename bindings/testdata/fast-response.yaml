@@ -1,7 +1,7 @@
-# Gold-path FFI config (YAML v0.3).
+# Offline binding / FFI fixture (YAML v0.3).
 # Entrypoint: ariacompute/semantic-auto. fast-response returns a canned completion so
-# binding tests need no upstream. Backend 127.0.0.1:9 is unused on this path.
-# Prefer this file in cases.json / run-binding-tests.sh. See ffi.yaml for catalog.
+# binding tests need no upstream. Not a user-facing example — product SDKs use
+# ~/.ariacompute/router.yml after `aria-router setup`.
 # entrypoint.router must equal recipe.router.
 
 version: v0.3
@@ -50,6 +50,5 @@ recipes:
             - name: fast-response
               message: hello-from-router
 
-# Gold-path demos: no Bearer required (setup default is require_api_key: true).
 global:
   require_api_key: false

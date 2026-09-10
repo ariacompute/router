@@ -60,8 +60,14 @@ impl Router {
         self
     }
 
+    /// Load YAML. Empty `config_path` → `~/.ariacompute/router.yml` (`default_config_path`).
     pub fn init(&mut self, config_path: &str) -> Result<&mut Self, RouterError> {
-        let doc = RouterDocument::load_path(config_path)?;
+        let path = if config_path.is_empty() {
+            aria_router_config::default_config_path()?
+        } else {
+            std::path::PathBuf::from(config_path)
+        };
+        let doc = RouterDocument::load_path(&path)?;
         self.state = Some(Arc::new(AppState::new(doc)));
         self.base_url = None;
         Ok(self)

@@ -12,6 +12,7 @@ typedef struct AriaRouter AriaRouter;
 const char *aria_router_last_error(void);
 
 AriaRouter *aria_router_init(const char *config_path);
+/* config_path may be NULL or "" → ~/.ariacompute/router.yml (ARIA_COMPUTE_HOME). */
 AriaRouter *aria_router_connect(const char *base_url);
 void aria_router_destroy(AriaRouter *router);
 

@@ -337,3 +337,7 @@
 - [x] setup 嵌入 `semantic-gateway` / `agent-gateway`；interactive / flags 覆盖 `provider_model_id`、`base_url`、`api_key_env`、agent endpoint/model/fallback
 - [x] `providers.models[].tier` + `ModelCard.tier`；agent 优先显式 tier；prompt 按 tier 标签而非上游 ID
 - [x] tiny 保留给 CI / `--config`；docs + config/agent 单测
+
+### T59 — FFI/SDK 默认 config 路径
+- [x] 删除 `config/examples/ffi{,-tiny}.yaml`；离线 CI 用 `bindings/testdata/fast-response.yaml`
+- [x] `aria_router_init(NULL/"")` → `default_config_path()`；Python/Go/Rust SDK 空路径同语义；docs / cases / binding 脚本

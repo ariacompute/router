@@ -230,7 +230,7 @@ fn stdin_is_tty() -> bool {
     }
 }
 
-fn cmd_setup(
+struct SetupCmdArgs {
     status: bool,
     clear: bool,
     template: Option<String>,
@@ -244,20 +244,22 @@ fn cmd_setup(
     agent_endpoint: Option<String>,
     agent_model: Option<String>,
     agent_fallback: Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if status {
+}
+
+fn cmd_setup(args: SetupCmdArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if args.status {
         return setup_status();
     }
-    if clear {
+    if args.clear {
         return setup_clear();
     }
 
-    let template_flag = template.is_some();
-    let admin_flagged = admin_user.is_some() && admin_password.is_some();
+    let template_flag = args.template.is_some();
+    let admin_flagged = args.admin_user.is_some() && args.admin_password.is_some();
     // Fully flagged setup (CI): keep gateway defaults unless model flags passed.
     let prompt_models = stdin_is_tty() && !(template_flag && admin_flagged);
 
-    let raw = template.unwrap_or_else(|| {
+    let raw = args.template.unwrap_or_else(|| {
         prompt("template [semantic|agent] (default: semantic): ").unwrap_or_default()
     });
     let kind = if raw.is_empty() {
@@ -272,29 +274,33 @@ fn cmd_setup(
     let models = aria_router_config::SetupModelOpts {
         base_url: prompt_opt(
             "gateway base_url [https://tokenhub.tencentmaas.com]: ",
-            base_url,
+            args.base_url,
             prompt_models,
         ),
-        api_key_env: prompt_opt("api_key_env [GATEWAY_API_KEY]: ", api_key_env, prompt_models),
+        api_key_env: prompt_opt(
+            "api_key_env [GATEWAY_API_KEY]: ",
+            args.api_key_env,
+            prompt_models,
+        ),
         small_provider_model_id: prompt_opt(
             "ariamodel-small provider_model_id [qwen3.5-flash]: ",
-            model_small,
+            args.model_small,
             prompt_models,
         ),
         mid_provider_model_id: prompt_opt(
             "ariamodel-mid provider_model_id [glm-5.3]: ",
-            model_mid,
+            args.model_mid,
             prompt_models,
         ),
         large_provider_model_id: prompt_opt(
             "ariamodel-large provider_model_id [deepseek-v4-pro]: ",
-            model_large,
+            args.model_large,
             prompt_models,
         ),
         agent_endpoint: if kind == "agent" {
             prompt_opt(
                 "agent.endpoint [same as base_url / tokenhub]: ",
-                agent_endpoint,
+                args.agent_endpoint,
                 prompt_models,
             )
         } else {
@@ -303,7 +309,7 @@ fn cmd_setup(
         agent_model: if kind == "agent" {
             prompt_opt(
                 "agent.model [ariacompute/ariamodel-mid]: ",
-                agent_model,
+                args.agent_model,
                 prompt_models,
             )
         } else {
@@ -312,7 +318,7 @@ fn cmd_setup(
         agent_fallback: if kind == "agent" {
             prompt_opt(
                 "agent.fallback [ariacompute/ariamodel-mid]: ",
-                agent_fallback,
+                args.agent_fallback,
                 prompt_models,
             )
         } else {
@@ -320,7 +326,7 @@ fn cmd_setup(
         },
     };
 
-    let admin_user = admin_user.unwrap_or_else(|| {
+    let admin_user = args.admin_user.unwrap_or_else(|| {
         let u = prompt("admin username [admin]: ").unwrap_or_default();
         if u.is_empty() {
             "admin".into()
@@ -328,7 +334,7 @@ fn cmd_setup(
             u
         }
     });
-    let admin_pass = admin_password.unwrap_or_else(|| {
+    let admin_pass = args.admin_password.unwrap_or_else(|| {
         let p1 = prompt_password("admin password: ").unwrap_or_default();
         let p2 = prompt_password("confirm password: ").unwrap_or_default();
         if p1 != p2 {
@@ -486,7 +492,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             agent_endpoint,
             agent_model,
             agent_fallback,
-        } => cmd_setup(
+        } => cmd_setup(SetupCmdArgs {
             status,
             clear,
             template,
@@ -500,7 +506,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             agent_endpoint,
             agent_model,
             agent_fallback,
-        )?,
+        })?,
         Command::Validate { config } => {
             let config = resolve_config(config)?;
             RouterDocument::load_path(&config)?;

@@ -9,7 +9,7 @@ cargo test -p ariacompute-router-ffi -p ariacompute-router
 
 echo "== prepare FFI lib =="
 cargo build -q -p ariacompute-router-ffi
-CFG="$ROOT/config/examples/ffi-tiny.yaml"
+CFG="$ROOT/bindings/testdata/fast-response.yaml"
 export ARIA_ROUTER_CONFIG="$CFG"
 export ARIA_INCLUDE="$ROOT/ffi/include"
 if [[ "$(uname)" == "Darwin" ]]; then

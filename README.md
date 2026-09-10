@@ -35,8 +35,6 @@ Examples (English comments in every file):
 | [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | Daily agent gold path — `ariacompute/agent-auto`; in-process builtin tool-loop (no `endpoint` → first-eligible); demos / CI |
 | [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — symmetric to `semantic.yaml`: gold `ariacompute/agent-auto` plus `ariacompute/agent-catalog` (intentional `Unsupported`); prefer tiny / gateway for demos |
 | [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — same three cloud models (`tier` + swappable upstream); **setup default** for `--template agent`; needs `GATEWAY_API_KEY` |
-| [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | FFI / binding gold path — `fast-response` canned completion (no upstream); prefer in `cases.json` / `run-binding-tests.sh` |
-| [`ffi.yaml`](config/examples/ffi.yaml) | FFI catalog — gold `fast-response` plus the same Unsupported catalog recipe as `semantic.yaml`; prefer `ffi-tiny` in binding tests |
 
 ```bash
 # Setup — writes ~/.ariacompute/router.yml from semantic-gateway / agent-gateway.
@@ -285,9 +283,9 @@ Native C ABI (`ariacompute-router-ffi` / `libaria-router_ffi`) plus thin wrapper
 | Swift | `bindings/swift` | CocoaPods |
 | Kotlin | `bindings/kotlin` | Maven |
 
-C header: [`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init` (in-process YAML), `aria_router_connect` (HTTP to a running `serve`), `aria_router_complete` / `_stream`, `aria_router_models`, `aria_router_last_route`, `aria_router_destroy`, `aria_router_last_error`.
+C header: [`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init` (in-process YAML; `NULL`/empty → `~/.ariacompute/router.yml`), `aria_router_connect` (HTTP to a running `serve`), `aria_router_complete` / `_stream`, `aria_router_models`, `aria_router_last_route`, `aria_router_destroy`, `aria_router_last_error`.
 
-Dynamic lib order: `ARIA_ROUTER_FFI_LIB` → package-bundled path → `~/.ariacompute/lib/`. Instance `setup` is in-memory `base_url` / `token` only and **never** writes `router.yml`. `init` runs semantic and in-process builtin agent (fixed tools + `max_turns`); there is no subprocess harness.
+Dynamic lib order: `ARIA_ROUTER_FFI_LIB` → package-bundled path → `~/.ariacompute/lib/`. Instance `setup` is in-memory `base_url` / `token` only and **never** writes `router.yml`. `init` with no path uses the default `router.yml` from `aria-router setup` (export `GATEWAY_API_KEY` before `serve` for gateway templates). Offline binding CI uses [`bindings/testdata/fast-response.yaml`](bindings/testdata/fast-response.yaml) (canned completion, no upstream). `init` runs semantic and in-process builtin agent (fixed tools + `max_turns`); there is no subprocess harness.
 
 ```bash
 cargo test -p ariacompute-router-ffi -p ariacompute-router
@@ -303,7 +301,8 @@ C ABI changes must update [`bindings/testdata/cases.json`](bindings/testdata/cas
 ```python
 from aria_router import Router
 
-r = Router().init("config/examples/ffi-tiny.yaml")
+# After aria-router setup: loads ~/.ariacompute/router.yml
+r = Router().init()
 print(r.models())
 print(r.complete(
     [{"role": "user", "content": "hi"}],
@@ -325,7 +324,8 @@ use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut r = Router::new();
-    r.init("config/examples/ffi-tiny.yaml")?;
+    // Empty path → ~/.ariacompute/router.yml (after aria-router setup)
+    r.init("")?;
     let out = r.complete(
         json!([{"role": "user", "content": "hi"}]),
         json!({"model": "ariacompute/semantic-auto"}),

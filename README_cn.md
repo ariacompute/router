@@ -35,8 +35,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 | [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | 日常 agent 黄金路径 — `ariacompute/agent-auto`；进程内 builtin tool-loop（无 `endpoint` → first-eligible）；演示 / CI |
 | [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — 对称 `semantic.yaml`：黄金 `ariacompute/agent-auto` + `ariacompute/agent-catalog`（故意 `Unsupported`）；演示优先 tiny / gateway |
 | [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — 同上三档（`tier` + 可换上游）；**setup `--template agent` 默认**；需 `GATEWAY_API_KEY` |
-| [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | FFI / binding 黄金路径 — `fast-response` 固定回复（无需 upstream）；`cases.json` / `run-binding-tests.sh` 优先用此文件 |
-| [`ffi.yaml`](config/examples/ffi.yaml) | FFI catalog — 黄金 `fast-response` + 与 `semantic.yaml` 相同的 Unsupported catalog recipe；binding 测试优先 `ffi-tiny` |
 
 ```bash
 # 写入 ~/.ariacompute/router.yml：模板来自 semantic-gateway / agent-gateway。
@@ -279,9 +277,9 @@ C ABI（`ariacompute-router-ffi` / `libaria-router_ffi`）加 `bindings/` 薄封
 | Swift | `bindings/swift` | CocoaPods |
 | Kotlin | `bindings/kotlin` | Maven |
 
-C 头文件：[`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init`（进程内加载 YAML）、`aria_router_connect`（HTTP 连已运行的 `serve`）、`aria_router_complete` / `_stream`、`aria_router_models`、`aria_router_last_route`、`aria_router_destroy`、`aria_router_last_error`。
+C 头文件：[`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init`（进程内加载 YAML；`NULL`/空串 → `~/.ariacompute/router.yml`）、`aria_router_connect`（HTTP 连已运行的 `serve`）、`aria_router_complete` / `_stream`、`aria_router_models`、`aria_router_last_route`、`aria_router_destroy`、`aria_router_last_error`。
 
-动态库顺序：`ARIA_ROUTER_FFI_LIB` → 包内捆绑路径 → `~/.ariacompute/lib/`。实例 `setup` 仅内存 `base_url` / `token`，**禁止**写 `router.yml`。`init` 进程内跑 semantic 与轻量 builtin agent（固定工具 + `max_turns`）；无 subprocess harness。
+动态库顺序：`ARIA_ROUTER_FFI_LIB` → 包内捆绑路径 → `~/.ariacompute/lib/`。实例 `setup` 仅内存 `base_url` / `token`，**禁止**写 `router.yml`。无路径的 `init` 使用 `aria-router setup` 写入的默认 `router.yml`（gateway 模板 serve 前需 `export GATEWAY_API_KEY`）。离线 binding CI 使用 [`bindings/testdata/fast-response.yaml`](bindings/testdata/fast-response.yaml)（固定回复，无需 upstream）。`init` 进程内跑 semantic 与轻量 builtin agent（固定工具 + `max_turns`）；无 subprocess harness。
 
 ```bash
 cargo test -p ariacompute-router-ffi -p ariacompute-router
@@ -297,7 +295,8 @@ C ABI 变更必须同步 [`bindings/testdata/cases.json`](bindings/testdata/case
 ```python
 from aria_router import Router
 
-r = Router().init("config/examples/ffi-tiny.yaml")
+# aria-router setup 后：加载 ~/.ariacompute/router.yml
+r = Router().init()
 print(r.models())
 print(r.complete(
     [{"role": "user", "content": "hi"}],
@@ -319,7 +318,8 @@ use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut r = Router::new();
-    r.init("config/examples/ffi-tiny.yaml")?;
+    // 空路径 → ~/.ariacompute/router.yml（需先 aria-router setup）
+    r.init("")?;
     let out = r.complete(
         json!([{"role": "user", "content": "hi"}]),
         json!({"model": "ariacompute/semantic-auto"}),

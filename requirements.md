@@ -235,7 +235,7 @@ C API（`include/aria_router.h`）：
 
 | C API | 语义 |
 |------|------|
-| `aria_router_init(config_path)` | 进程内加载 YAML → opaque handle |
+| `aria_router_init(config_path)` | 进程内加载 YAML → opaque handle；`config_path` 可选（`NULL`/空串 → 默认 `~/.ariacompute/router.yml`） |
 | `aria_router_connect(base_url)` | HTTP 连已运行网关 |
 | `aria_router_complete` / `_stream` | chat；JSON 出参 / chunk 回调 |
 | `aria_router_models` / `aria_router_last_route` | 模型列表；最近决策 JSON |

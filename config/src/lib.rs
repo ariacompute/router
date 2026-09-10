@@ -1344,10 +1344,8 @@ recipes:
         for raw in [
             include_str!("../examples/semantic-tiny.yaml"),
             include_str!("../examples/agent-tiny.yaml"),
-            include_str!("../examples/ffi-tiny.yaml"),
             include_str!("../examples/semantic.yaml"),
             include_str!("../examples/agent.yaml"),
-            include_str!("../examples/ffi.yaml"),
             include_str!("../examples/semantic-gateway.yaml"),
             include_str!("../examples/agent-gateway.yaml"),
         ] {
@@ -1362,10 +1360,6 @@ recipes:
         assert!(!semantic.learned_signal_referenced(catalog).is_empty());
         let mom = semantic.recipe("mom").unwrap();
         assert!(semantic.learned_signal_referenced(mom).is_empty());
-
-        let ffi = RouterDocument::from_yaml_str(include_str!("../examples/ffi.yaml")).unwrap();
-        let ffi_cat = ffi.recipe("mom-catalog").unwrap();
-        assert!(!ffi.learned_signal_referenced(ffi_cat).is_empty());
 
         let agent = RouterDocument::from_yaml_str(include_str!("../examples/agent-tiny.yaml")).unwrap();
         assert_eq!(agent.entrypoints[0].router, RouterKind::Agent);

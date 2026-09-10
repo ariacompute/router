@@ -261,7 +261,7 @@ mod tests {
             temperature: None,
             extra: Default::default(),
         };
-        assert_eq!(req.last_user_text().contains("second"), true);
+        assert!(req.last_user_text().contains("second"));
         assert!(req.prompt_text().contains("first"));
         let joined = prompt_from_messages(&req.messages);
         assert!(joined.contains("system: sys"));
