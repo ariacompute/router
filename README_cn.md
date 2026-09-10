@@ -274,14 +274,14 @@ C ABI（`ariacompute-router-ffi` / `libaria-router_ffi`）加 `bindings/` 薄封
 
 | Binding | 路径 | 包 |
 |---------|------|-----|
-| Rust | `bindings/rust` | `ariacompute-router`（原生；不 dlopen） |
-| Python | `bindings/python` | `aria_router` |
-| Go | `bindings/go` | Go module |
+| Rust | `bindings/rust` | crates.io `ariacompute-router`（原生；不 dlopen） |
+| Python | `bindings/python` | PyPI `ariacompute-router`（`aria_router`） |
+| Go | `bindings/go` | `github.com/ariacompute/router/bindings/go`（cgo；build tag `aria_router_ffi`） |
 | TypeScript | `bindings/typescript` | npm `@ariacompute/router-ts` |
 | React Native | `bindings/react-native` | npm `@ariacompute/router-rn` |
-| Flutter | `bindings/flutter` | pub.dev |
-| Swift | `bindings/swift` | CocoaPods |
-| Kotlin | `bindings/kotlin` | Maven |
+| Flutter | `bindings/flutter` | pub.dev `aria_router` |
+| Swift | `bindings/swift` | CocoaPods / SPM `AriaRouter` |
+| Kotlin | `bindings/kotlin` | Maven `com.ariacompute:router` |
 
 C 头文件：[`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init`（进程内加载 YAML；`NULL`/空串 → `~/.ariacompute/router.yml`）、`aria_router_connect`（HTTP 连已运行的 `serve`）、`aria_router_complete` / `_stream`、`aria_router_models`、`aria_router_last_route`、`aria_router_destroy`、`aria_router_last_error`。
 
@@ -296,7 +296,13 @@ C ABI 变更必须同步 [`bindings/testdata/cases.json`](bindings/testdata/case
 
 ### 示例
 
+进程内 `init` + `complete` **不需要** Dashboard API key。`connect` 到开启 `require_api_key` 的已运行 `serve` 仍需 `setup(token=…)`。实例 `setup` 仅写内存。
+
 **Python**（需 `ARIA_ROUTER_FFI_LIB` 或捆绑/缓存的 `libaria-router_ffi`）：
+
+```bash
+pip install ariacompute-router
+```
 
 ```python
 from aria_router import Router
@@ -311,28 +317,225 @@ print(r.complete(
 print(r.last_route())
 r.close()
 
-# 或连接已运行的 serve（数据面）：
+# 或连接已运行的 serve（开启 require_api_key 时需 token）：
 r = Router().connect("http://127.0.0.1:8899")
-r.setup(base_url="http://127.0.0.1:8899", token="")  # 仅内存
-# 进程内 init+complete 不需要 Dashboard API key；connect 到开启 require_api_key 的远程 serve 仍需 setup(token=…)。
+r.setup(base_url="http://127.0.0.1:8899", token="")
 ```
 
 **Rust**（`ariacompute-router` — 原生 API，不 dlopen `libaria-router_ffi`）：
 
+```bash
+cargo add ariacompute-router
+```
+
 ```rust
-use ariacompute_router::Router;
+use ariacompute_router::{Router, SetupUpdates};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut r = Router::new();
     // 空路径 → ~/.ariacompute/router.yml（需先 aria-router setup）
     r.init("")?;
-    let out = r.complete(
-        json!([{"role": "user", "content": "hi"}]),
-        json!({"model": "ariacompute/semantic-auto"}),
-    )?;
-    println!("{out}");
+    println!("{}", r.models()?);
+    println!(
+        "{}",
+        r.complete(
+            json!([{"role": "user", "content": "hi"}]),
+            json!({"model": "ariacompute/semantic-auto"}),
+        )?
+    );
+    println!("{}", r.last_route());
+
+    // 或连接已运行的 serve（开启 require_api_key 时需 token）：
+    r.connect("http://127.0.0.1:8899");
+    r.setup(&SetupUpdates {
+        base_url: Some("http://127.0.0.1:8899".into()),
+        token: Some("".into()),
+    })?;
     Ok(())
+}
+```
+
+**Go**（cgo + `libaria-router_ffi`；build tag `aria_router_ffi`）：
+
+```bash
+go get github.com/ariacompute/router/bindings/go
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+
+	aria "github.com/ariacompute/router/bindings/go"
+)
+
+func main() {
+	r := aria.NewRouter()
+	// 空路径 → ~/.ariacompute/router.yml（需先 aria-router setup）
+	if err := r.Init(""); err != nil {
+		log.Fatal(err)
+	}
+	defer r.Close()
+	models, err := r.Models()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(models)
+	out, err := r.Complete(
+		[]map[string]string{{"role": "user", "content": "hi"}},
+		map[string]string{"model": "ariacompute/semantic-auto"},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(out)
+	route, err := r.LastRoute()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(route)
+
+	// 或连接已运行的 serve（开启 require_api_key 时需 token）：
+	_ = r.Connect("http://127.0.0.1:8899")
+	r.Setup("http://127.0.0.1:8899", "")
+}
+```
+
+**TypeScript**（`@ariacompute/router-ts`）：
+
+```bash
+npm install @ariacompute/router-ts
+```
+
+```ts
+import { Router } from "@ariacompute/router-ts";
+
+// aria-router setup 后：加载 ~/.ariacompute/router.yml
+const r = new Router().init();
+console.log(r.models());
+console.log(
+  r.complete([{ role: "user", content: "hi" }], {
+    model: "ariacompute/semantic-auto",
+  }),
+);
+console.log(r.lastRoute());
+r.close();
+
+// 或连接已运行的 serve（开启 require_api_key 时需 token）：
+const c = new Router().connect("http://127.0.0.1:8899");
+c.setup({ base_url: "http://127.0.0.1:8899", token: "" });
+```
+
+**React Native**（`@ariacompute/router-rn`）：
+
+```bash
+npm install @ariacompute/router-rn
+```
+
+```js
+const { Router } = require("@ariacompute/router-rn");
+
+const r = new Router().init();
+console.log(r.models());
+console.log(
+  r.complete([{ role: "user", content: "hi" }], {
+    model: "ariacompute/semantic-auto",
+  }),
+);
+console.log(r.lastRoute());
+r.close();
+
+// 或连接已运行的 serve（开启 require_api_key 时需 token）：
+const c = new Router().connect("http://127.0.0.1:8899");
+c.setup({ base_url: "http://127.0.0.1:8899", token: "" });
+```
+
+**Flutter**（`aria_router`）：
+
+```bash
+flutter pub add aria_router
+```
+
+```dart
+import 'package:aria_router/aria_router.dart';
+
+void main() {
+  // aria-router setup 后：加载 ~/.ariacompute/router.yml
+  final r = AriaRouter()..init();
+  print(r.models());
+  print(r.complete(
+    [
+      {'role': 'user', 'content': 'hi'}
+    ],
+    {'model': 'ariacompute/semantic-auto'},
+  ));
+  print(r.lastRoute());
+  r.close();
+
+  // 或连接已运行的 serve（开启 require_api_key 时需 token）：
+  final c = AriaRouter()..connect('http://127.0.0.1:8899');
+  c.setup(baseUrl: 'http://127.0.0.1:8899', token: '');
+}
+```
+
+**Swift**（dlopen `libaria-router_ffi`；SPM / CocoaPods `AriaRouter`）：
+
+```bash
+pod 'AriaRouter'
+```
+
+```swift
+import AriaRouter
+import Foundation
+
+do {
+    // load(nil) → ~/.ariacompute/router.yml（Swift 关键字；对应 aria_router_init）
+    let r = try Router().load(nil)
+    print(try r.models())
+    print(try r.complete(
+        messages: [["role": "user", "content": "hi"]],
+        options: ["model": "ariacompute/semantic-auto"]
+    ))
+    print(r.lastRoute())
+    r.close()
+
+    // 或连接已运行的 serve（开启 require_api_key 时需 token）：
+    let c = try Router().connect("http://127.0.0.1:8899")
+    c.setup(baseUrl: "http://127.0.0.1:8899", token: "")
+} catch {
+    fputs("\(error)\n", stderr)
+}
+```
+
+**Kotlin**（JNA + `libaria-router_ffi`；Maven `com.ariacompute:router`）：
+
+```kotlin
+implementation("com.ariacompute:router:+")
+```
+
+```kotlin
+import com.ariacompute.router.Router
+
+fun main() {
+    // aria-router setup 后：加载 ~/.ariacompute/router.yml
+    Router().init().use { r ->
+        println(r.models())
+        println(
+            r.complete(
+                listOf(mapOf("role" to "user", "content" to "hi")),
+                mapOf("model" to "ariacompute/semantic-auto"),
+            ),
+        )
+        println(r.lastRoute())
+    }
+
+    // 或连接已运行的 serve（开启 require_api_key 时需 token）：
+    Router().connect("http://127.0.0.1:8899").use { c ->
+        c.setup(baseUrl = "http://127.0.0.1:8899", token = "")
+    }
 }
 ```
 

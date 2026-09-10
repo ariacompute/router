@@ -280,14 +280,14 @@ Native C ABI (`ariacompute-router-ffi` / `libaria-router_ffi`) plus thin wrapper
 
 | Binding | Path | Package |
 |---------|------|---------|
-| Rust | `bindings/rust` | `ariacompute-router` (native; no dlopen) |
-| Python | `bindings/python` | `aria_router` |
-| Go | `bindings/go` | Go module |
+| Rust | `bindings/rust` | crates.io `ariacompute-router` (native; no dlopen) |
+| Python | `bindings/python` | PyPI `ariacompute-router` (`aria_router`) |
+| Go | `bindings/go` | `github.com/ariacompute/router/bindings/go` (cgo; build tag `aria_router_ffi`) |
 | TypeScript | `bindings/typescript` | npm `@ariacompute/router-ts` |
 | React Native | `bindings/react-native` | npm `@ariacompute/router-rn` |
-| Flutter | `bindings/flutter` | pub.dev |
-| Swift | `bindings/swift` | CocoaPods |
-| Kotlin | `bindings/kotlin` | Maven |
+| Flutter | `bindings/flutter` | pub.dev `aria_router` |
+| Swift | `bindings/swift` | CocoaPods / SPM `AriaRouter` |
+| Kotlin | `bindings/kotlin` | Maven `com.ariacompute:router` |
 
 C header: [`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init` (in-process YAML; `NULL`/empty → `~/.ariacompute/router.yml`), `aria_router_connect` (HTTP to a running `serve`), `aria_router_complete` / `_stream`, `aria_router_models`, `aria_router_last_route`, `aria_router_destroy`, `aria_router_last_error`.
 
@@ -302,7 +302,13 @@ C ABI changes must update [`bindings/testdata/cases.json`](bindings/testdata/cas
 
 ### Examples
 
+In-process `init` + `complete` does **not** need a Dashboard API key. `connect` to a running `serve` with `require_api_key` still needs `setup(token=…)`. Instance `setup` is in-memory only.
+
 **Python** (needs `ARIA_ROUTER_FFI_LIB` or a bundled/cached `libaria-router_ffi`):
+
+```bash
+pip install ariacompute-router
+```
 
 ```python
 from aria_router import Router
@@ -317,29 +323,225 @@ print(r.complete(
 print(r.last_route())
 r.close()
 
-# Or attach to a running serve (data plane):
+# Or attach to a running serve (needs token when require_api_key):
 r = Router().connect("http://127.0.0.1:8899")
-r.setup(base_url="http://127.0.0.1:8899", token="")  # memory only
-# In-process init+complete does not need a Dashboard API key; connect to a
-# remote serve with require_api_key still needs setup(token=…).
+r.setup(base_url="http://127.0.0.1:8899", token="")
 ```
 
 **Rust** (`ariacompute-router` — native API; does not dlopen `libaria-router_ffi`):
 
+```bash
+cargo add ariacompute-router
+```
+
 ```rust
-use ariacompute_router::Router;
+use ariacompute_router::{Router, SetupUpdates};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut r = Router::new();
     // Empty path → ~/.ariacompute/router.yml (after aria-router setup)
     r.init("")?;
-    let out = r.complete(
-        json!([{"role": "user", "content": "hi"}]),
-        json!({"model": "ariacompute/semantic-auto"}),
-    )?;
-    println!("{out}");
+    println!("{}", r.models()?);
+    println!(
+        "{}",
+        r.complete(
+            json!([{"role": "user", "content": "hi"}]),
+            json!({"model": "ariacompute/semantic-auto"}),
+        )?
+    );
+    println!("{}", r.last_route());
+
+    // Or attach to a running serve (needs token when require_api_key):
+    r.connect("http://127.0.0.1:8899");
+    r.setup(&SetupUpdates {
+        base_url: Some("http://127.0.0.1:8899".into()),
+        token: Some("".into()),
+    })?;
     Ok(())
+}
+```
+
+**Go** (cgo + `libaria-router_ffi`; build tag `aria_router_ffi`):
+
+```bash
+go get github.com/ariacompute/router/bindings/go
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+
+	aria "github.com/ariacompute/router/bindings/go"
+)
+
+func main() {
+	r := aria.NewRouter()
+	// Empty path → ~/.ariacompute/router.yml (after aria-router setup)
+	if err := r.Init(""); err != nil {
+		log.Fatal(err)
+	}
+	defer r.Close()
+	models, err := r.Models()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(models)
+	out, err := r.Complete(
+		[]map[string]string{{"role": "user", "content": "hi"}},
+		map[string]string{"model": "ariacompute/semantic-auto"},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(out)
+	route, err := r.LastRoute()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(route)
+
+	// Or attach to a running serve (needs token when require_api_key):
+	_ = r.Connect("http://127.0.0.1:8899")
+	r.Setup("http://127.0.0.1:8899", "")
+}
+```
+
+**TypeScript** (`@ariacompute/router-ts`):
+
+```bash
+npm install @ariacompute/router-ts
+```
+
+```ts
+import { Router } from "@ariacompute/router-ts";
+
+// After aria-router setup: loads ~/.ariacompute/router.yml
+const r = new Router().init();
+console.log(r.models());
+console.log(
+  r.complete([{ role: "user", content: "hi" }], {
+    model: "ariacompute/semantic-auto",
+  }),
+);
+console.log(r.lastRoute());
+r.close();
+
+// Or attach to a running serve (needs token when require_api_key):
+const c = new Router().connect("http://127.0.0.1:8899");
+c.setup({ base_url: "http://127.0.0.1:8899", token: "" });
+```
+
+**React Native** (`@ariacompute/router-rn`):
+
+```bash
+npm install @ariacompute/router-rn
+```
+
+```js
+const { Router } = require("@ariacompute/router-rn");
+
+const r = new Router().init();
+console.log(r.models());
+console.log(
+  r.complete([{ role: "user", content: "hi" }], {
+    model: "ariacompute/semantic-auto",
+  }),
+);
+console.log(r.lastRoute());
+r.close();
+
+// Or attach to a running serve (needs token when require_api_key):
+const c = new Router().connect("http://127.0.0.1:8899");
+c.setup({ base_url: "http://127.0.0.1:8899", token: "" });
+```
+
+**Flutter** (`aria_router`):
+
+```bash
+flutter pub add aria_router
+```
+
+```dart
+import 'package:aria_router/aria_router.dart';
+
+void main() {
+  // After aria-router setup: loads ~/.ariacompute/router.yml
+  final r = AriaRouter()..init();
+  print(r.models());
+  print(r.complete(
+    [
+      {'role': 'user', 'content': 'hi'}
+    ],
+    {'model': 'ariacompute/semantic-auto'},
+  ));
+  print(r.lastRoute());
+  r.close();
+
+  // Or attach to a running serve (needs token when require_api_key):
+  final c = AriaRouter()..connect('http://127.0.0.1:8899');
+  c.setup(baseUrl: 'http://127.0.0.1:8899', token: '');
+}
+```
+
+**Swift** (dlopen `libaria-router_ffi`; SPM / CocoaPods `AriaRouter`):
+
+```bash
+pod 'AriaRouter'
+```
+
+```swift
+import AriaRouter
+import Foundation
+
+do {
+    // load(nil) → ~/.ariacompute/router.yml (Swift keyword; maps to aria_router_init)
+    let r = try Router().load(nil)
+    print(try r.models())
+    print(try r.complete(
+        messages: [["role": "user", "content": "hi"]],
+        options: ["model": "ariacompute/semantic-auto"]
+    ))
+    print(r.lastRoute())
+    r.close()
+
+    // Or attach to a running serve (needs token when require_api_key):
+    let c = try Router().connect("http://127.0.0.1:8899")
+    c.setup(baseUrl: "http://127.0.0.1:8899", token: "")
+} catch {
+    fputs("\(error)\n", stderr)
+}
+```
+
+**Kotlin** (JNA + `libaria-router_ffi`; Maven `com.ariacompute:router`):
+
+```kotlin
+implementation("com.ariacompute:router:+")
+```
+
+```kotlin
+import com.ariacompute.router.Router
+
+fun main() {
+    // After aria-router setup: loads ~/.ariacompute/router.yml
+    Router().init().use { r ->
+        println(r.models())
+        println(
+            r.complete(
+                listOf(mapOf("role" to "user", "content" to "hi")),
+                mapOf("model" to "ariacompute/semantic-auto"),
+            ),
+        )
+        println(r.lastRoute())
+    }
+
+    // Or attach to a running serve (needs token when require_api_key):
+    Router().connect("http://127.0.0.1:8899").use { c ->
+        c.setup(baseUrl = "http://127.0.0.1:8899", token = "")
+    }
 }
 ```
 
