@@ -49,6 +49,7 @@ aria-router validate
 cargo run -p aria-router -- validate --config config/examples/semantic-tiny.yaml
 cargo run -p aria-router -- validate --config config/examples/semantic.yaml
 cargo run -p aria-router -- validate --config config/examples/semantic-gateway.yaml
+cargo run -p aria-router -- validate --config config/examples/semantic-stateful.yaml
 cargo run -p aria-router -- validate --config config/examples/agent-tiny.yaml
 cargo run -p aria-router -- validate --config config/examples/agent.yaml
 cargo run -p aria-router -- validate --config config/examples/agent-gateway.yaml
@@ -69,6 +70,12 @@ cargo run -p aria-router -- serve \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
+# Stateful semantic (retention sticky + stores.memory / semantic_cache / replay; no ML weights)
+cargo run -p aria-router -- serve \
+  --config config/examples/semantic-stateful.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
 # Daily agent gold path (ariacompute/agent-auto; builtin tool-loop)
 cargo run -p aria-router -- serve \
   --config config/examples/agent-tiny.yaml \
@@ -82,7 +89,7 @@ cargo run -p aria-router -- serve \
   --mgmt-bind 127.0.0.1:8090
 
 # Aria Gateway backends (export GATEWAY_API_KEY first; YAML uses ${GATEWAY_API_KEY:-})
-export GATEWAY_API_KEY=…   # do not commit
+export GATEWAY_API_KEY=…
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-gateway.yaml \
   --bind 127.0.0.1:8899 \
@@ -362,46 +369,42 @@ Two common tracks (same `routing` / `compare` CLIs; different what you measure):
 
 | Track | What runs | Flags | Measures |
 |-------|-----------|-------|----------|
-| Gateway pool-only | Chat **directly** at Aria Gateway model URLs | `--pool` + `--model-id` + `--api-key` only; **no** `--router` | Backend quality / cost ladder among `ariamodel-{small,mid,large}` (no local router process) |
+| Upstream pool-only | Chat **directly** at TokenHub (same triad as Track B) | `--pool` + `--model-id` + `--api-key` + `--prices`; **no** `--router` | Backend quality / cost ladder among `qwen3.5-flash` / `glm-5.3` / `deepseek-v4-pro` (no local router process) |
 | Multi-router ladder | Chat via **live routers**, then (optionally) shared pools | `--router` + `--entrypoint` / `--pick-header`, plus `--pool` for always/oracle baselines | Router pick quality (aria-router vs vLLM SR, etc.) on ADR-040 / MCQ |
 
-Optional middle step: serve `semantic-gateway` / `agent-gateway` locally and add `--router aria_router=…` to the Gateway track so picks go through the router into the same cloud pool.
+Optional middle step: serve `semantic-gateway` / `agent-gateway` locally and add `--router aria_router=…` (+ `--pick-map`) to the pool-only track so picks go through the router into the same upstream pool.
 
 ```bash
 python -m unittest discover -s bench/tests -t .
 
-# --- Track A: Aria Gateway pool-only (no local router required) ---
-export GATEWAY_BASE=https://gateway.ariacompute.com
+# --- Track A: upstream pool-only (no local router required) ---
+# Same TokenHub triad as Track B semantic routing; corpus expected_model = upstream names.
+export GATEWAY_BASE=https://tokenhub.tencentmaas.com
 export GATEWAY_API_KEY=your-api-key
-# Adapt expected_model to ariacompute/ariamodel-{small,mid,large}
-# (see bench/corpus/routing_gateway.json — systems/trade-off → mid).
 
-# ADR-040 ladder: chat Gateway pools directly (always_* / oracle / domain / knn; no --router).
+# ADR-040 ladder: chat pools directly (always_* / oracle / domain / knn; no --router).
 # --quality label scores against corpus expected_model; writes out/gateway_routing.{json,md}.
 python -m bench routing \
   --pool small=$GATEWAY_BASE --pool mid=$GATEWAY_BASE --pool large=$GATEWAY_BASE \
-  --model-id small=ariacompute/ariamodel-small \
-  --model-id mid=ariacompute/ariamodel-mid \
-  --model-id large=ariacompute/ariamodel-large \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
   --quality label \
   --corpus bench/corpus/routing_gateway.json \
   --report ./out/gateway_routing.json
 
-# MCQ accuracy + E2E latency + tokens on mmlu_tiny via the same Gateway pools (always_* only).
+# MCQ accuracy + E2E latency + tokens on mmlu_tiny via the same pools (always_* only).
 python -m bench compare \
   --pool small=$GATEWAY_BASE --pool mid=$GATEWAY_BASE --pool large=$GATEWAY_BASE \
-  --model-id small=ariacompute/ariamodel-small \
-  --model-id mid=ariacompute/ariamodel-mid \
-  --model-id large=ariacompute/ariamodel-large \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
   --corpus bench/corpus/mmlu_tiny.jsonl \
   --report ./out/gateway_compare.json
-
-# Optional: serve semantic-gateway or agent-gateway, then append to the commands above:
-#   --router aria_router=http://127.0.0.1:8899 \
-#   --entrypoint aria_router=ariacompute/semantic-auto \   # or ariacompute/agent-auto
-#   --pick-header aria_router=x-aria-router-model
 ```
 
 ```bash
