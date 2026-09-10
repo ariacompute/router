@@ -21,6 +21,7 @@ kotlin {
 
 dependencies {
     implementation 'org.json:json:20240303'
+    implementation 'net.java.dev.jna:jna:5.14.0'
     testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
 }
 

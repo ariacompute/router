@@ -81,6 +81,8 @@ class Router:
         self._ensure()
         if self._handle:
             self.close()
+        if config_path:
+            config_path = os.path.expanduser(config_path.strip())
         path_arg = None if not config_path else config_path.encode()
         self._handle = self._lib.aria_router_init(path_arg)
         if not self._handle:

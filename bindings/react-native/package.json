@@ -1,4 +1,11 @@
 {
   "name": "@ariacompute/router-rn",
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test test/setup.test.cjs"
+  },
+  "optionalDependencies": {
+    "koffi": "^2.8.0"
+  }
 }

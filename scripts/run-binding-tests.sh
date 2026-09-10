@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Host binding tests for aria-router: build libaria_router_ffi (cdylib), run Rust/Python/Go/TS/RN.
+# Host binding tests for aria-router: build libaria_router_ffi (cdylib), run Rust/Python/Go/TS/RN/Flutter/Kotlin.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -36,12 +36,38 @@ fi
 
 if command -v node >/dev/null && [[ -f bindings/typescript/package.json ]]; then
   echo "== typescript =="
+  if [[ ! -d bindings/typescript/node_modules ]]; then
+    npm install --prefix bindings/typescript
+  fi
   (cd bindings/typescript && node --test test/binding.test.mjs)
 fi
 
 if command -v node >/dev/null && [[ -f bindings/react-native/package.json ]]; then
-  echo "== react-native setup =="
+  echo "== react-native =="
+  if [[ ! -d bindings/react-native/node_modules ]]; then
+    npm install --prefix bindings/react-native
+  fi
   (cd bindings/react-native && node --test test/setup.test.cjs)
 fi
 
-echo "done (mobile Swift/Kotlin/Flutter: see bindings/*/ )"
+if command -v dart >/dev/null && [[ -f bindings/flutter/pubspec.yaml ]]; then
+  echo "== flutter =="
+  (cd bindings/flutter && dart pub get && dart test)
+else
+  echo "== flutter skipped (dart not found) =="
+fi
+
+GRADLE_BIN=""
+if command -v gradle >/dev/null; then
+  GRADLE_BIN="$(command -v gradle)"
+elif [[ -x "$ROOT/bindings/kotlin/gradlew" ]]; then
+  GRADLE_BIN="$ROOT/bindings/kotlin/gradlew"
+fi
+if [[ -n "$GRADLE_BIN" && -f bindings/kotlin/build.gradle ]]; then
+  echo "== kotlin =="
+  (cd bindings/kotlin && "$GRADLE_BIN" test)
+else
+  echo "== kotlin skipped (gradle/java not found) =="
+fi
+
+echo "done (Swift: bindings/swift Package.swift + host dlopen; run swift test when toolchain available)"

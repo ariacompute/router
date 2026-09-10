@@ -36,6 +36,17 @@ func TestInitComplete(t *testing.T) {
 	}
 }
 
+func TestConnect(t *testing.T) {
+	if os.Getenv("ARIA_ROUTER_FFI_LIB") == "" {
+		t.Skip("ARIA_ROUTER_FFI_LIB")
+	}
+	r := NewRouter()
+	if err := r.Connect("http://127.0.0.1:9"); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || (func() bool {
 		for i := 0; i+len(sub) <= len(s); i++ {

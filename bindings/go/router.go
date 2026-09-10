@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"unsafe"
 )
 
@@ -42,10 +44,30 @@ func (r *Router) Init(configPath string) error {
 	if configPath == "" {
 		h = C.aria_router_init(nil)
 	} else {
+		if strings.HasPrefix(configPath, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			configPath = filepath.Join(home, configPath[2:])
+		}
 		cs := C.CString(configPath)
 		defer C.free(unsafe.Pointer(cs))
 		h = C.aria_router_init(cs)
 	}
+	if h == nil {
+		return errors.New(C.GoString(C.aria_router_last_error()))
+	}
+	r.Close()
+	r.h = unsafe.Pointer(h)
+	return nil
+}
+
+// Connect creates a router handle that talks to a remote base URL (HTTP later).
+func (r *Router) Connect(baseURL string) error {
+	cs := C.CString(baseURL)
+	defer C.free(unsafe.Pointer(cs))
+	h := C.aria_router_connect(cs)
 	if h == nil {
 		return errors.New(C.GoString(C.aria_router_last_error()))
 	}

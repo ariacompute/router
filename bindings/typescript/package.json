@@ -5,5 +5,8 @@
   "main": "src/index.js",
   "scripts": {
     "test": "node --test test/binding.test.mjs"
+  },
+  "dependencies": {
+    "koffi": "^2.16.3"
   }
 }

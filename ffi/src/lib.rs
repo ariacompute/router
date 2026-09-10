@@ -82,7 +82,18 @@ pub extern "C" fn aria_router_init(config_path: *const c_char) -> *mut AriaRoute
 fn resolve_init_config_path(config_path: *const c_char) -> Result<std::path::PathBuf, String> {
     if !config_path.is_null() {
         match cstr(config_path) {
-            Ok(s) if !s.is_empty() => return Ok(std::path::PathBuf::from(s)),
+            Ok(s) if !s.is_empty() => {
+                let t = s.trim();
+                // Expand `~/…` (shell does not expand inside library calls).
+                if t.starts_with("~/") {
+                    return aria_router_config::resolve_home_path(
+                        t,
+                        aria_router_config::default_config_path,
+                    )
+                    .map_err(|e| e.to_string());
+                }
+                return Ok(std::path::PathBuf::from(t));
+            }
             Ok(_) => {}
             Err(()) => return Err("invalid config_path".into()),
         }
@@ -285,6 +296,31 @@ mod tests {
         let h = aria_router_init(p.as_ptr());
         assert!(h.is_null());
         assert!(!aria_router_last_error().is_null());
+    }
+
+    #[test]
+    fn init_expands_tilde() {
+        let home = std::env::var("HOME").expect("HOME");
+        let dir = std::path::PathBuf::from(&home).join(".ariacompute").join("tmp").join(format!(
+            "ffi-tilde-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("tilde.yaml");
+        std::fs::write(&cfg, include_str!("../../config/examples/semantic-tiny.yaml")).unwrap();
+        let rel = cfg.strip_prefix(&home).expect("under HOME");
+        let tilde = format!("~/{}", rel.display());
+        let p = CString::new(tilde).unwrap();
+        let h = aria_router_init(p.as_ptr());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!h.is_null(), "{}", unsafe {
+            CStr::from_ptr(aria_router_last_error()).to_string_lossy()
+        });
+        aria_router_destroy(h);
     }
 
     #[test]

@@ -65,7 +65,12 @@ impl Router {
         let path = if config_path.is_empty() {
             aria_router_config::default_config_path()?
         } else {
-            std::path::PathBuf::from(config_path)
+            let t = config_path.trim();
+            if t.starts_with("~/") {
+                aria_router_config::resolve_home_path(t, aria_router_config::default_config_path)?
+            } else {
+                std::path::PathBuf::from(t)
+            }
         };
         let doc = RouterDocument::load_path(&path)?;
         self.state = Some(Arc::new(AppState::new(doc)));
