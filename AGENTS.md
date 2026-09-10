@@ -16,7 +16,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 
 ## 目录
 - `config/` `signal/` `decision/` `algorithm/` `plugin/` `provider/` `agent/` `http/`：运行时 crate
-- `bin/`：`aria-router`（setup / validate / serve）
+- `bin/`：`aria-router`（setup / validate / serve / upgrade）
 - `ffi/`：`ariacompute-router-ffi`（`libaria-router_ffi`）
 - `bindings/`：rust / python / go / typescript / react-native / flutter / swift / kotlin
 - `dashboard/`：管理面 SPA（Login/Account/Keys/Users/Cost + Overview…）
@@ -36,6 +36,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `cargo test -p aria-router-signal --features ml`
 - `cargo run -p aria-router -- setup`
 - `cargo run -p aria-router -- validate`
+- `cargo run -p aria-router -- upgrade`
 - `cargo run -p aria-router -- serve --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090`
 - `npm --prefix dashboard ci && npm --prefix dashboard run build`
 - `./scripts/run-binding-tests.sh`
@@ -44,8 +45,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `python -m bench compare --corpus bench/corpus/mmlu_tiny.jsonl …`
 
 ## 进行中需求
-阶段 **R**（T50–T56）已落地：`emits`/retention、`global.stores|services`、feature `ml`
-learned（hash）、Elo、semantic_cache / 软限流 / 加厚 replay。见 `requirements.md` / `task.md`。
+阶段 **R**（T50–T56）已落地。**T81** `aria-router upgrade` 已落地。见 `requirements.md` / `task.md`。
 
 ## 注意事项
 - 黄金路径：keyword → static；retention sticky；agent → `submit_route`。

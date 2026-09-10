@@ -883,6 +883,71 @@ pub fn default_users_path() -> Result<PathBuf, RouterError> {
     Ok(aria_home()?.join("router-users.json"))
 }
 
+/// FFI install dir shared with SDKs (`ARIA_ROUTER_FFI_LIB` cache).
+pub fn lib_dir() -> Result<PathBuf, RouterError> {
+    Ok(aria_home()?.join("lib"))
+}
+
+/// CLI metadata (not the gateway recipe): `~/.ariacompute/router-cli.yml`.
+pub fn default_cli_config_path() -> Result<PathBuf, RouterError> {
+    Ok(aria_home()?.join("router-cli.yml"))
+}
+
+/// Ensure `~/.ariacompute`, `lib/`, and `tmp/` exist.
+pub fn ensure_aria_home() -> Result<PathBuf, RouterError> {
+    let home = aria_home()?;
+    std::fs::create_dir_all(&home).map_err(|e| RouterError::Io(e.to_string()))?;
+    std::fs::create_dir_all(home.join("lib")).map_err(|e| RouterError::Io(e.to_string()))?;
+    std::fs::create_dir_all(home.join("tmp")).map_err(|e| RouterError::Io(e.to_string()))?;
+    Ok(home)
+}
+
+/// Default Releases org root for `.com` (GitHub) / `.cn` (Gitee).
+pub const DEFAULT_UPGRADE_URL_COM: &str = "https://github.com/ariacompute";
+pub const DEFAULT_UPGRADE_URL_CN: &str = "https://gitee.com/ariacompute";
+
+/// Pick default `upgrade_url` from `serve_site` (`com` | `cn`).
+pub fn default_upgrade_url_for_site(serve_site: &str) -> &'static str {
+    if serve_site.trim().eq_ignore_ascii_case("cn") {
+        DEFAULT_UPGRADE_URL_CN
+    } else {
+        DEFAULT_UPGRADE_URL_COM
+    }
+}
+
+/// Sidecar CLI config (separate from recipe `router.yml`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RouterCliConfig {
+    #[serde(default)]
+    pub upgrade_url: String,
+}
+
+pub fn load_cli_config() -> Result<RouterCliConfig, RouterError> {
+    let path = default_cli_config_path()?;
+    if !path.exists() {
+        return Ok(RouterCliConfig::default());
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|e| RouterError::Io(e.to_string()))?;
+    serde_yaml::from_str(&raw).map_err(|e| RouterError::Config(e.to_string()))
+}
+
+pub fn save_cli_config(cfg: &RouterCliConfig) -> Result<PathBuf, RouterError> {
+    ensure_aria_home()?;
+    let path = default_cli_config_path()?;
+    let raw = serde_yaml::to_string(cfg).map_err(|e| RouterError::Config(e.to_string()))?;
+    std::fs::write(&path, raw).map_err(|e| RouterError::Io(e.to_string()))?;
+    Ok(path)
+}
+
+pub fn clear_cli_config() -> Result<Option<PathBuf>, RouterError> {
+    let path = default_cli_config_path()?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| RouterError::Io(e.to_string()))?;
+        return Ok(Some(path));
+    }
+    Ok(None)
+}
+
 /// Expand `~/` or leave absolute/relative paths as-is under aria home resolution.
 pub fn resolve_home_path(raw: &str, default: fn() -> Result<PathBuf, RouterError>) -> Result<PathBuf, RouterError> {
     let t = raw.trim();
@@ -1428,5 +1493,32 @@ recipes:
         assert!(doc.global.stores.memory.enabled);
         let d = &doc.recipe("mom").unwrap().routing.as_ref().unwrap().decisions[0];
         assert!(d.retention().is_some());
+    }
+
+    #[test]
+    fn cli_config_defaults_empty_upgrade_url() {
+        let cfg = RouterCliConfig::default();
+        assert!(cfg.upgrade_url.is_empty());
+        assert_eq!(default_upgrade_url_for_site("com"), DEFAULT_UPGRADE_URL_COM);
+        assert_eq!(default_upgrade_url_for_site("cn"), DEFAULT_UPGRADE_URL_CN);
+        assert_eq!(default_upgrade_url_for_site("COM"), DEFAULT_UPGRADE_URL_COM);
+    }
+
+    #[test]
+    fn cli_config_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
+        let cfg = RouterCliConfig {
+            upgrade_url: DEFAULT_UPGRADE_URL_COM.to_string(),
+        };
+        let path = save_cli_config(&cfg).unwrap();
+        assert!(path.ends_with("router-cli.yml"));
+        let loaded = load_cli_config().unwrap();
+        assert_eq!(loaded.upgrade_url, DEFAULT_UPGRADE_URL_COM);
+        assert!(lib_dir().unwrap().ends_with("lib"));
+        let cleared = clear_cli_config().unwrap();
+        assert!(cleared.is_some());
+        assert!(load_cli_config().unwrap().upgrade_url.is_empty());
+        std::env::remove_var("ARIA_COMPUTE_HOME");
     }
 }

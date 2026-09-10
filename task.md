@@ -341,3 +341,9 @@
 ### T59 — FFI/SDK 默认 config 路径
 - [x] 删除 `config/examples/ffi{,-tiny}.yaml`；离线 CI 用 `bindings/testdata/fast-response.yaml`
 - [x] `aria_router_init(NULL/"")` → `default_config_path()`；Python/Go/Rust SDK 空路径同语义；docs / cases / binding 脚本
+
+### T81 — `aria-router upgrade`
+- [x] Spec：`requirements.md` CLI 含 `upgrade`；`router-cli.yml` / `upgrade_url`；与 engine 对齐
+- [x] `lib_dir` / `ensure_aria_home` / `RouterCliConfig`；setup 写入 `--upgrade-url`
+- [x] `upgrade [version]`：Releases 拉取 → 替换 CLI + 安装 `libaria-router_ffi` 至 `~/.ariacompute/lib/`
+- [x] 单测（选版 / 资产名 / API path）；AGENTS / README

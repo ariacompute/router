@@ -37,9 +37,10 @@ Examples (English comments in every file):
 | [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — same three cloud models (`tier` + swappable upstream); **setup default** for `--template agent`; needs `GATEWAY_API_KEY` |
 
 ```bash
-# Setup — writes ~/.ariacompute/router.yml from semantic-gateway / agent-gateway.
+# Setup — writes ~/.ariacompute/router.yml from semantic-gateway / agent-gateway
+# and ~/.ariacompute/router-cli.yml (upgrade_url for `aria-router upgrade`).
 # Interactive: template → models (base_url, api_key_env name, gateway API key,
-#   three provider_model_id tiers; agent also endpoint/model/fallback) → admin.
+#   three provider_model_id tiers; agent also endpoint/model/fallback) → admin → upgrade_url.
 # Gateway API key is stored in router.yml (`backend_refs.api_key`); serve loads that
 # path by default (or falls back to $GATEWAY_API_KEY / --api-key-env).
 # Logical names ariacompute/ariamodel-{small,mid,large} stay fixed; swap upstream IDs only.
@@ -48,7 +49,11 @@ aria-router setup
 aria-router setup --status
 # Flags: --template --admin-user --admin-password
 #        --base-url --api-key-env --api-key --model-small --model-mid --model-large
-#        --agent-endpoint --agent-model --agent-fallback
+#        --agent-endpoint --agent-model --agent-fallback --upgrade-url
+
+# Upgrade CLI + libaria-router_ffi from GitHub/Gitee Releases (needs setup upgrade_url)
+aria-router upgrade
+aria-router upgrade 0.1.0
 
 # Validate (default path after setup, or pass --config)
 aria-router validate
@@ -353,6 +358,8 @@ On each GitHub Release, [`.github/workflows/release.yml`](.github/workflows/rele
 tar -xzf aria-router_0.1.0_linux_x86_64.tar.gz
 chmod +x aria-router
 ./aria-router --version
+
+# Or: aria-router upgrade  (after setup; replaces CLI + installs FFI under ~/.ariacompute/lib/)
 ```
 
 Cut a **GitHub Release** — language package publishes are **fail-pass** and do not block CLI / FFI assets. Version = release tag without leading `v`.

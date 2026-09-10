@@ -37,9 +37,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 | [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — 同上三档（`tier` + 可换上游）；**setup `--template agent` 默认**；需 `GATEWAY_API_KEY` |
 
 ```bash
-# 写入 ~/.ariacompute/router.yml：模板来自 semantic-gateway / agent-gateway。
+# 写入 ~/.ariacompute/router.yml（semantic-gateway / agent-gateway）
+# 以及 ~/.ariacompute/router-cli.yml（upgrade_url，供 `aria-router upgrade`）。
 # 交互：template → models（base_url、api_key_env 变量名、gateway API key、
-#   三档 provider_model_id；agent 另有 endpoint/model/fallback）→ admin。
+#   三档 provider_model_id；agent 另有 endpoint/model/fallback）→ admin → upgrade_url。
 # API key 写入 router.yml 的 backend_refs.api_key；serve 默认加载该文件
 # （无明文 key 时回退 $GATEWAY_API_KEY / --api-key-env）。
 # 逻辑名 ariacompute/ariamodel-{small,mid,large} 固定；只换上游 provider_model_id。
@@ -48,7 +49,11 @@ aria-router setup
 aria-router setup --status
 # Flags: --template --admin-user --admin-password
 #        --base-url --api-key-env --api-key --model-small --model-mid --model-large
-#        --agent-endpoint --agent-model --agent-fallback
+#        --agent-endpoint --agent-model --agent-fallback --upgrade-url
+
+# 从 GitHub/Gitee Releases 更新 CLI + libaria-router_ffi（需先 setup 写 upgrade_url）
+aria-router upgrade
+aria-router upgrade 0.1.0
 
 # 校验（setup 后默认路径，或传 --config）
 aria-router validate
@@ -347,6 +352,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 tar -xzf aria-router_0.1.0_linux_x86_64.tar.gz
 chmod +x aria-router
 ./aria-router --version
+
+# 或：aria-router upgrade（setup 后；替换 CLI 并把 FFI 装到 ~/.ariacompute/lib/）
 ```
 
 创建 **GitHub Release** — 语言包发布为 **fail-pass**，不阻塞 CLI / FFI 资产。版本号 = tag 去掉前缀 `v`。

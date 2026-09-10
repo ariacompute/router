@@ -8,7 +8,7 @@
 
 用 **Rust** 实现独立 OpenAI 兼容网关：按 entrypoint 选择 **semantic** 或 **agent**（builtin）决策器，在硬约束剪枝后选择或组合 provider 路径并转发。
 
-- **产品面**：`aria-router` CLI（`setup` / `validate` / `serve`）+ 进程内库 + C ABI + 八语言 SDK。
+- **产品面**：`aria-router` CLI（`setup` / `validate` / `serve` / `upgrade`）+ 进程内库 + C ABI + 八语言 SDK。
 - **两种 router**：`semantic`（signals → Boolean recipe → algorithm）与 `agent`（轻量进程内 builtin：固定工具 + `max_turns`）并列；共享 listeners / providers / 硬约束 / 转发 / replay。
 - **不做**：Operator、Helm、官网、Python `vllm-sr`、Envoy ExtProc、Grafana / Prometheus、ML wizard、Security Policy、wizmap、fleet-sim、pi / deepseek-harness / 可插拔 `extensions`、把 TS harness 链进 crate。
 - **与 engine**：engine 仅本地推理；可选向本网关注册为 provider。本仓 SDK 与 `ariacompute-engine` **两套包**，`.so` 名互不覆盖。
@@ -221,7 +221,10 @@ emits:
 
 管理面默认只绑 `127.0.0.1`。本地密钥明文只在 POST 响应出现一次；`keys_path` 只存 sha256；密码 argon2id。
 
-CLI：`aria-router setup` 写入 `~/.ariacompute/router.yml`，starter = **semantic-gateway** / **agent-gateway**（非 tiny）。交互：template → models（`base_url` / `api_key_env` / 三档 `provider_model_id`；agent 另 `endpoint`/`model`/`fallback`）→ admin。逻辑名 `ariacompute/ariamodel-{small,mid,large}` 为配方槽位默认保留；`providers.models[].tier`（`small|mid|large`）供 agent 认档，优先于名字启发式。默认 `allow_register=true`、`require_api_key=true`。flags：`--status` / `--clear` / `--template` / `--admin-user` / `--admin-password` / `--base-url` / `--api-key-env` / `--model-small|mid|large` / `--agent-endpoint|model|fallback`。`--template`+admin 齐全且未传 model flags → 静默用 gateway 默认。**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 扁平 `key: value`。`--clear` 可删 `router-keys.json` / `router-users.json`。CLI help 由 **clap** derive 生成（对齐 memo：`about` / `Usage` / `Commands` / `Options`；支持 `aria-router <cmd> --help`）。无参调用打印 help 并 exit **2**；`-v` / `--version` / 子命令 `version` 打印版本。离线 CI 仍可用显式 `--config *-tiny.yaml`。换上游后 bench Track B 须自备 `--model-id` / `--pick-map` / prices。
+CLI 子命令：`setup` / `validate` / `serve` / `upgrade [version]` / `version`。CLI help 由 **clap** derive 生成（对齐 memo：`about` / `Usage` / `Commands` / `Options`；支持 `aria-router <cmd> --help`）。无参调用打印 help 并 exit **2**；`-v` / `--version` / 子命令 `version` 打印版本。
+
+- `setup`：写入 `~/.ariacompute/router.yml`，starter = **semantic-gateway** / **agent-gateway**（非 tiny）。交互：template → models（`base_url` / `api_key_env` / 三档 `provider_model_id`；agent 另 `endpoint`/`model`/`fallback`）→ admin → `upgrade_url`。逻辑名 `ariacompute/ariamodel-{small,mid,large}` 为配方槽位默认保留；`providers.models[].tier`（`small|mid|large`）供 agent 认档，优先于名字启发式。默认 `allow_register=true`、`require_api_key=true`。flags：`--status` / `--clear` / `--template` / `--admin-user` / `--admin-password` / `--base-url` / `--api-key-env` / `--model-small|mid|large` / `--agent-endpoint|model|fallback` / `--upgrade-url`。`--template`+admin 齐全且未传 model flags → 静默用 gateway 默认。**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 扁平 `key: value`（含 `upgrade_url` 与 `lib`）。`--clear` 可删 `router-keys.json` / `router-users.json`，并清除 `router-cli.yml`。离线 CI 仍可用显式 `--config *-tiny.yaml`。换上游后 bench Track B 须自备 `--model-id` / `--pick-map` / prices。
+- `upgrade [version]`：按 `~/.ariacompute/router-cli.yml` 的 `upgrade_url`（组织根；与配方 `router.yml` **分离**）拼 `{upgrade_url}/router`，调 GitHub/Gitee Releases API；默认最新**正式** Release（忽略 prerelease/draft），可选 `0.1.0` / `v0.1.0`；下载本机平台 `aria-router_*` + `libaria-router_ffi_*`，原地原子替换当前 CLI，并将 FFI 装入 `~/.ariacompute/lib/`（提示 `ARIA_ROUTER_FFI_LIB`）。默认 org：`.com`→`https://github.com/ariacompute`，`.cn`→`https://gitee.com/ariacompute`（`setup` 写入）。未配置 `upgrade_url` 时报错并提示先 `setup`；下载/解压失败不得损坏现有 CLI。
 
 **与 engine**：单一 `router_api_key` 字段可传 `sk-aria_` 或 `sk-bf-`；router 按前缀解析 `keys[]`（`kind: local|oauth`）。
 

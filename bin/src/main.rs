@@ -1,6 +1,9 @@
+mod upgrade;
+
 use aria_router_config::{
-    clear_default_config, default_config_path, default_keys_path, default_users_path,
-    resolve_keys_path, resolve_users_path, RouterDocument,
+    clear_cli_config, clear_default_config, default_config_path, default_keys_path,
+    default_upgrade_url_for_site, default_users_path, lib_dir, load_cli_config, resolve_keys_path,
+    resolve_users_path, save_cli_config, RouterCliConfig, RouterDocument,
 };
 use aria_router_http::{
     data_router, mgmt_router, mgmt_router_serve_dashboard, AppState, KeyStore, LocalUserStore,
@@ -53,6 +56,11 @@ enum Command {
         #[arg(long)]
         no_dashboard: bool,
     },
+    /// Replace this CLI + libaria-router_ffi from Releases
+    Upgrade {
+        /// Target version (default: latest stable)
+        version: Option<String>,
+    },
     /// Print version
     Version,
 }
@@ -101,6 +109,9 @@ struct SetupArgs {
     /// Agent fallback logical model (agent template only)
     #[arg(long)]
     agent_fallback: Option<String>,
+    /// Releases org root for `aria-router upgrade` (written to router-cli.yml)
+    #[arg(long)]
+    upgrade_url: Option<String>,
 }
 
 #[tokio::main]
@@ -373,6 +384,49 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         true
     };
+
+    let serve_site = if path.exists() {
+        RouterDocument::load_path(&path)
+            .map(|d| d.global.serve_site.clone())
+            .unwrap_or_else(|_| "com".into())
+    } else {
+        "com".into()
+    };
+    let default_upgrade = default_upgrade_url_for_site(&serve_site);
+    let existing_cli = load_cli_config().unwrap_or_default();
+    let upgrade_url = if let Some(v) = args.upgrade_url {
+        let t = v.trim();
+        if t.is_empty() {
+            if existing_cli.upgrade_url.is_empty() {
+                default_upgrade.to_string()
+            } else {
+                existing_cli.upgrade_url.clone()
+            }
+        } else {
+            t.to_string()
+        }
+    } else if prompt_models || stdin_is_tty() {
+        let hint = if existing_cli.upgrade_url.is_empty() {
+            default_upgrade
+        } else {
+            existing_cli.upgrade_url.as_str()
+        };
+        let ans = prompt(&format!("upgrade_url (default: {hint}): "))?;
+        if ans.trim().is_empty() {
+            hint.to_string()
+        } else {
+            ans.trim().to_string()
+        }
+    } else if existing_cli.upgrade_url.is_empty() {
+        default_upgrade.to_string()
+    } else {
+        existing_cli.upgrade_url.clone()
+    };
+    let cli_path = save_cli_config(&RouterCliConfig {
+        upgrade_url: upgrade_url.clone(),
+    })?;
+    println!("wrote {} (upgrade_url={upgrade_url})", cli_path.display());
+
     if path.exists() && !overwrite {
         println!("kept {}", path.display());
         return Ok(());
@@ -438,6 +492,13 @@ fn setup_status() -> Result<(), Box<dyn std::error::Error>> {
         println!("(missing; run aria-router setup)");
         "~/.ariacompute/router-keys.json".into()
     };
+    let cli = load_cli_config().unwrap_or_default();
+    if cli.upgrade_url.is_empty() {
+        println!("upgrade_url: (not set)");
+    } else {
+        println!("upgrade_url: {}", cli.upgrade_url);
+    }
+    println!("lib: {}", lib_dir()?.display());
     let kpath = resolve_keys_path(&kp)?;
     if kpath.exists() {
         let store = KeyStore::load(&kpath).map_err(|e| e.to_string())?;
@@ -472,6 +533,9 @@ fn setup_status() -> Result<(), Box<dyn std::error::Error>> {
 fn setup_clear() -> Result<(), Box<dyn std::error::Error>> {
     let path = clear_default_config()?;
     println!("cleared {}", path.display());
+    if let Some(p) = clear_cli_config()? {
+        println!("cleared {}", p.display());
+    }
     let ans = prompt("also delete router-keys.json and router-users.json? [y/N]: ")?;
     if matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes") {
         for p in [default_keys_path()?, default_users_path()?] {
@@ -521,6 +585,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 r = a => r?,
                 r = b => r?,
             }
+        }
+        Command::Upgrade { version } => {
+            upgrade::run(version.as_deref(), ROUTER_VERSION)
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
         }
         Command::Version => {
             println!("aria-router {ROUTER_VERSION}");
