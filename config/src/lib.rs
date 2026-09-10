@@ -1227,9 +1227,27 @@ pub fn clear_default_config() -> Result<PathBuf, RouterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Serialize env mutation and always restore `ARIA_COMPUTE_HOME`.
+    fn with_aria_compute_home<T>(f: impl FnOnce(&Path) -> T) -> T {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
+        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(dir.path())));
+        match prev {
+            Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
+            None => std::env::remove_var("ARIA_COMPUTE_HOME"),
+        }
+        match out {
+            Ok(v) => v,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
 
     const TINY: &str = r#"
 version: v0.3
@@ -1310,113 +1328,98 @@ recipes:
 
     #[test]
     fn default_config_path_under_aria_compute_home() {
-        let _g = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
-        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
-        assert_eq!(default_config_path().unwrap(), dir.path().join("router.yml"));
-        match prev {
-            Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
-            None => std::env::remove_var("ARIA_COMPUTE_HOME"),
-        }
+        with_aria_compute_home(|home| {
+            assert_eq!(default_config_path().unwrap(), home.join("router.yml"));
+        });
     }
 
     #[test]
     fn write_semantic_template_roundtrip() {
-        let _g = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
-        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
-        let path = write_default_config("semantic", true).unwrap();
-        assert_eq!(path, dir.path().join("router.yml"));
-        let doc = RouterDocument::load_path(&path).unwrap();
-        assert_eq!(doc.entrypoints[0].router, RouterKind::Semantic);
-        let mid = doc.provider("ariacompute/ariamodel-mid").unwrap();
-        assert_eq!(mid.provider_model_id, "glm-5.3");
-        assert_eq!(mid.tier.as_deref(), Some("mid"));
-        assert!(mid.backend_refs[0]
-            .api_key_env
-            .as_deref()
-            .is_some_and(|e| e == "GATEWAY_API_KEY"));
-        assert!(write_default_config("semantic", false).is_err());
-        write_default_config("agent", true).unwrap();
-        let doc = RouterDocument::load_path(&path).unwrap();
-        assert_eq!(doc.entrypoints[0].router, RouterKind::Agent);
-        assert!(doc
-            .recipe("agent-default")
-            .unwrap()
-            .agent
-            .as_ref()
-            .unwrap()
-            .endpoint
-            .as_deref()
-            .is_some_and(|e| e.contains("tokenhub")));
-        clear_default_config().unwrap();
-        assert!(!path.exists());
-        match prev {
-            Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
-            None => std::env::remove_var("ARIA_COMPUTE_HOME"),
-        }
+        with_aria_compute_home(|home| {
+            let path = write_default_config("semantic", true).unwrap();
+            assert_eq!(path, home.join("router.yml"));
+            let doc = RouterDocument::load_path(&path).unwrap();
+            assert_eq!(doc.entrypoints[0].router, RouterKind::Semantic);
+            let mid = doc.provider("ariacompute/ariamodel-mid").unwrap();
+            assert_eq!(mid.provider_model_id, "glm-5.3");
+            assert_eq!(mid.tier.as_deref(), Some("mid"));
+            assert!(mid.backend_refs[0]
+                .api_key_env
+                .as_deref()
+                .is_some_and(|e| e == "GATEWAY_API_KEY"));
+            assert!(write_default_config("semantic", false).is_err());
+            write_default_config("agent", true).unwrap();
+            let doc = RouterDocument::load_path(&path).unwrap();
+            assert_eq!(doc.entrypoints[0].router, RouterKind::Agent);
+            assert!(doc
+                .recipe("agent-default")
+                .unwrap()
+                .agent
+                .as_ref()
+                .unwrap()
+                .endpoint
+                .as_deref()
+                .is_some_and(|e| e.contains("tokenhub")));
+            clear_default_config().unwrap();
+            assert!(!path.exists());
+        });
     }
 
     #[test]
     fn write_setup_model_opts_override_upstream() {
-        let _g = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
-        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
-        let opts = SetupModelOpts {
-            base_url: Some("https://example.test".into()),
-            api_key_env: Some("MY_GATEWAY_KEY".into()),
-            api_key: Some("sk-test-secret".into()),
-            small_provider_model_id: Some("foo-small".into()),
-            mid_provider_model_id: Some("foo-mid".into()),
-            large_provider_model_id: Some("foo-large".into()),
-            agent_endpoint: None,
-            agent_model: Some("ariacompute/ariamodel-mid".into()),
-            agent_fallback: Some("ariacompute/ariamodel-small".into()),
-        };
-        let path =
-            write_default_config_with_opts("agent", true, true, true, &opts).unwrap();
-        let doc = RouterDocument::load_path(&path).unwrap();
-        assert_eq!(
-            doc.provider("ariacompute/ariamodel-small")
-                .unwrap()
-                .provider_model_id,
-            "foo-small"
-        );
-        assert_eq!(
-            doc.provider("ariacompute/ariamodel-mid")
-                .unwrap()
-                .provider_model_id,
-            "foo-mid"
-        );
-        assert_eq!(
-            doc.provider("ariacompute/ariamodel-large")
-                .unwrap()
-                .provider_model_id,
-            "foo-large"
-        );
-        let small = doc.provider("ariacompute/ariamodel-small").unwrap();
-        assert_eq!(small.tier.as_deref(), Some("small"));
-        assert_eq!(small.backend_refs[0].base_url, "https://example.test");
-        assert_eq!(
-            small.backend_refs[0].api_key_env.as_deref(),
-            Some("MY_GATEWAY_KEY")
-        );
-        assert_eq!(
-            small.backend_refs[0].api_key.as_deref(),
-            Some("sk-test-secret")
-        );
-        let agent = doc.recipe("agent-default").unwrap().agent.as_ref().unwrap();
-        assert_eq!(agent.endpoint.as_deref(), Some("https://example.test"));
-        assert_eq!(agent.model.as_deref(), Some("ariacompute/ariamodel-mid"));
-        assert_eq!(agent.fallback.as_deref(), Some("ariacompute/ariamodel-small"));
-        clear_default_config().unwrap();
-        match prev {
-            Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
-            None => std::env::remove_var("ARIA_COMPUTE_HOME"),
-        }
+        with_aria_compute_home(|_| {
+            let opts = SetupModelOpts {
+                base_url: Some("https://example.test".into()),
+                api_key_env: Some("MY_GATEWAY_KEY".into()),
+                api_key: Some("sk-test-secret".into()),
+                small_provider_model_id: Some("foo-small".into()),
+                mid_provider_model_id: Some("foo-mid".into()),
+                large_provider_model_id: Some("foo-large".into()),
+                agent_endpoint: None,
+                agent_model: Some("ariacompute/ariamodel-mid".into()),
+                agent_fallback: Some("ariacompute/ariamodel-small".into()),
+            };
+            let path =
+                write_default_config_with_opts("agent", true, true, true, &opts).unwrap();
+            let doc = RouterDocument::load_path(&path).unwrap();
+            assert_eq!(
+                doc.provider("ariacompute/ariamodel-small")
+                    .unwrap()
+                    .provider_model_id,
+                "foo-small"
+            );
+            assert_eq!(
+                doc.provider("ariacompute/ariamodel-mid")
+                    .unwrap()
+                    .provider_model_id,
+                "foo-mid"
+            );
+            assert_eq!(
+                doc.provider("ariacompute/ariamodel-large")
+                    .unwrap()
+                    .provider_model_id,
+                "foo-large"
+            );
+            let small = doc.provider("ariacompute/ariamodel-small").unwrap();
+            assert_eq!(small.tier.as_deref(), Some("small"));
+            assert_eq!(small.backend_refs[0].base_url, "https://example.test");
+            assert_eq!(
+                small.backend_refs[0].api_key_env.as_deref(),
+                Some("MY_GATEWAY_KEY")
+            );
+            assert_eq!(
+                small.backend_refs[0].api_key.as_deref(),
+                Some("sk-test-secret")
+            );
+            let agent = doc.recipe("agent-default").unwrap().agent.as_ref().unwrap();
+            assert_eq!(agent.endpoint.as_deref(), Some("https://example.test"));
+            assert_eq!(agent.model.as_deref(), Some("ariacompute/ariamodel-mid"));
+            assert_eq!(
+                agent.fallback.as_deref(),
+                Some("ariacompute/ariamodel-small")
+            );
+            clear_default_config().unwrap();
+        });
     }
 
     #[test]
@@ -1506,19 +1509,18 @@ recipes:
 
     #[test]
     fn cli_config_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
-        let cfg = RouterCliConfig {
-            upgrade_url: DEFAULT_UPGRADE_URL_COM.to_string(),
-        };
-        let path = save_cli_config(&cfg).unwrap();
-        assert!(path.ends_with("router-cli.yml"));
-        let loaded = load_cli_config().unwrap();
-        assert_eq!(loaded.upgrade_url, DEFAULT_UPGRADE_URL_COM);
-        assert!(lib_dir().unwrap().ends_with("lib"));
-        let cleared = clear_cli_config().unwrap();
-        assert!(cleared.is_some());
-        assert!(load_cli_config().unwrap().upgrade_url.is_empty());
-        std::env::remove_var("ARIA_COMPUTE_HOME");
+        with_aria_compute_home(|_| {
+            let cfg = RouterCliConfig {
+                upgrade_url: DEFAULT_UPGRADE_URL_COM.to_string(),
+            };
+            let path = save_cli_config(&cfg).unwrap();
+            assert!(path.ends_with("router-cli.yml"));
+            let loaded = load_cli_config().unwrap();
+            assert_eq!(loaded.upgrade_url, DEFAULT_UPGRADE_URL_COM);
+            assert!(lib_dir().unwrap().ends_with("lib"));
+            let cleared = clear_cli_config().unwrap();
+            assert!(cleared.is_some());
+            assert!(load_cli_config().unwrap().upgrade_url.is_empty());
+        });
     }
 }
