@@ -30,19 +30,26 @@ cargo clippy --workspace --all-targets -- -D warnings
 |------|------|
 | [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | 日常 semantic 黄金路径 — `ariacompute/semantic-auto`；keyword 启发式 → `local/general`；可选 retention；无 ML 权重即可 `validate` + `serve` |
 | [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — 黄金 `ariacompute/semantic-auto` + `ariacompute/semantic-catalog`（learned signal + 未实现 algorithm → chat `Unsupported`，除非 `--features ml`）；演示优先 tiny |
-| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — 三档 `ariamodel-{small,mid,large}` 经 `cloud/gateway`；keyword → large，否则 small；需 `GATEWAY_API_KEY` |
+| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — 三档 `ariamodel-{small,mid,large}`（`tier` + 可换 `provider_model_id`）；**setup `--template semantic` 默认**；需 `GATEWAY_API_KEY` |
 | [`semantic-stateful.yaml`](config/examples/semantic-stateful.yaml) | Retention sticky + `stores.memory` / `semantic_cache` / replay |
 | [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | 日常 agent 黄金路径 — `ariacompute/agent-auto`；进程内 builtin tool-loop（无 `endpoint` → first-eligible）；演示 / CI |
 | [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — 对称 `semantic.yaml`：黄金 `ariacompute/agent-auto` + `ariacompute/agent-catalog`（故意 `Unsupported`）；演示优先 tiny / gateway |
-| [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — 同上三档云模型；builtin agent LLM 与后端经 `cloud/gateway`；需 `GATEWAY_API_KEY` |
+| [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — 同上三档（`tier` + 可换上游）；**setup `--template agent` 默认**；需 `GATEWAY_API_KEY` |
 | [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | FFI / binding 黄金路径 — `fast-response` 固定回复（无需 upstream）；`cases.json` / `run-binding-tests.sh` 优先用此文件 |
 | [`ffi.yaml`](config/examples/ffi.yaml) | FFI catalog — 黄金 `fast-response` + 与 `semantic.yaml` 相同的 Unsupported catalog recipe；binding 测试优先 `ffi-tiny` |
 
 ```bash
-# 写入配置 — template + admin（require_api_key / allow_register / OAuth 改 YAML 或 Dashboard）
+# 写入 ~/.ariacompute/router.yml：模板来自 semantic-gateway / agent-gateway。
+# 交互：template → models（base_url、api_key_env、三档 provider_model_id；
+#   agent 另有 endpoint/model/fallback）→ admin。Enter 保留 gateway 默认。
+# 逻辑名 ariacompute/ariamodel-{small,mid,large} 固定；只换上游 provider_model_id。
+# CI：--template + --admin-user + --admin-password 跳过 models 提示（用 gateway 默认）。
 aria-router setup
 aria-router setup --status
 # Flags: --template --admin-user --admin-password
+#        --base-url --api-key-env --model-small --model-mid --model-large
+#        --agent-endpoint --agent-model --agent-fallback
+# setup 后 serve 前：export GATEWAY_API_KEY=…（或你的 --api-key-env）
 
 # 校验（setup 后默认路径，或传 --config）
 aria-router validate
@@ -58,6 +65,7 @@ cargo run -p aria-router -- validate --config config/examples/agent-gateway.yaml
 # 管理面默认 127.0.0.1:8080。setup 后可省略 --config。
 # 若要注册 aria-engine，--mgmt-bind 不要占用 engine 的 8080。
 
+# 离线 CI / 演示（无需 GATEWAY_API_KEY）：显式 --config *-tiny.yaml
 # 日常 semantic 黄金路径（ariacompute/semantic-auto → local/general）
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
@@ -88,7 +96,8 @@ cargo run -p aria-router -- serve \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# Aria Gateway 后端（先 export GATEWAY_API_KEY；YAML 使用 ${GATEWAY_API_KEY:-}）
+# Aria Gateway 后端（先 export GATEWAY_API_KEY）。与 setup 默认拓扑相同。
+# providers.models[].tier 标注 small/mid/large；provider_model_id 为可替换上游 id。
 export GATEWAY_API_KEY=…
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-gateway.yaml \

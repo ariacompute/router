@@ -129,6 +129,7 @@ pub fn hard_filter(
             modality: p.modality.clone(),
             capabilities: p.capabilities.clone(),
             provider_model_id: p.provider_model_id.clone(),
+            tier: p.tier.clone(),
         })
         .collect()
 }
@@ -145,6 +146,7 @@ mod tests {
                 modality: "text".into(),
                 capabilities: vec!["chat".into()],
                 provider_model_id: "a".into(),
+                tier: None,
             },
             ModelCard {
                 name: "b".into(),
@@ -152,6 +154,7 @@ mod tests {
                 modality: "text".into(),
                 capabilities: vec!["chat".into()],
                 provider_model_id: "b".into(),
+                tier: None,
             },
         ]
     }

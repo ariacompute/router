@@ -86,7 +86,18 @@ impl BuiltinAgent {
         let eligible_line = task
             .eligible
             .iter()
-            .map(|m| format!("{} [tier={}]", m.name, tier_hint(&m.name)))
+            .map(|m| {
+                format!(
+                    "{} [tier={} upstream={}]",
+                    m.name,
+                    tier_of(m),
+                    if m.provider_model_id.is_empty() {
+                        "-"
+                    } else {
+                        m.provider_model_id.as_str()
+                    }
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let mut messages = vec![
@@ -205,7 +216,7 @@ fn tool_definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "list_eligible_models",
-                "description": "List models that passed hard constraints, with tier hints (small/mid/large/unknown) from logical name suffixes",
+                "description": "List eligible models with tier (small/mid/large/unknown) and provider_model_id (upstream). Prefer explicit tier over guessing from names.",
                 "parameters": { "type": "object", "properties": {} }
             }
         },
@@ -247,7 +258,7 @@ fn tool_definitions() -> Value {
             "type": "function",
             "function": {
                 "name": "submit_route",
-                "description": "Finalize routing with one eligible model. Choose tier by intent: large=explain/how-it-works; mid=systems/trade-offs/multi-concept; small=factoids/acronyms/greetings. Include reason naming the tier.",
+                "description": "Finalize routing with one eligible model. Choose tier by intent: large=explain/how-it-works; mid=systems/trade-offs/multi-concept; small=factoids/acronyms/greetings. Include reason naming the tier (not upstream id).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -263,8 +274,21 @@ fn tool_definitions() -> Value {
     ])
 }
 
+/// Prefer explicit `ModelCard.tier`; fall back to logical-name suffix heuristics.
+fn tier_of(card: &ModelCard) -> &'static str {
+    if let Some(t) = card.tier.as_deref() {
+        match t.trim().to_ascii_lowercase().as_str() {
+            "small" => return "small",
+            "mid" | "medium" => return "mid",
+            "large" => return "large",
+            _ => {}
+        }
+    }
+    tier_hint_from_name(&card.name)
+}
+
 /// Pool-role hint from logical name suffix (not user-prompt keyword routing).
-fn tier_hint(name: &str) -> &'static str {
+fn tier_hint_from_name(name: &str) -> &'static str {
     let lower = name.to_ascii_lowercase();
     if lower.ends_with("-large") || lower.contains("/ariamodel-large") || lower.ends_with("/large")
     {
@@ -295,7 +319,8 @@ fn run_tool(
             .iter()
             .map(|m| json!({
                 "name": m.name,
-                "tier": tier_hint(&m.name),
+                "tier": tier_of(m),
+                "provider_model_id": m.provider_model_id,
                 "locality": m.locality,
                 "modality": m.modality,
                 "capabilities": m.capabilities,
@@ -441,6 +466,18 @@ mod tests {
             modality: "text".into(),
             capabilities: vec!["chat".into()],
             provider_model_id: "x".into(),
+            tier: None,
+        }
+    }
+
+    fn card_tier(name: &str, tier: &str, upstream: &str) -> ModelCard {
+        ModelCard {
+            name: name.into(),
+            locality: "cloud".into(),
+            modality: "text".into(),
+            capabilities: vec!["chat".into()],
+            provider_model_id: upstream.into(),
+            tier: Some(tier.into()),
         }
     }
 
@@ -473,6 +510,7 @@ mod tests {
         let listed = run_tool("list_eligible_models", &json!({}), &eligible, &tools).unwrap();
         assert_eq!(listed[0]["name"], "local/general");
         assert_eq!(listed[0]["tier"], "unknown");
+        assert_eq!(listed[0]["provider_model_id"], "x");
         let health = run_tool("get_backend_health", &json!({}), &eligible, &tools).unwrap();
         assert_eq!(health["local/general"]["failures"], 2);
         assert_eq!(health["local/general"]["healthy"], false);
@@ -482,10 +520,10 @@ mod tests {
 
     #[test]
     fn tier_hint_from_logical_suffix() {
-        assert_eq!(tier_hint("ariacompute/ariamodel-small"), "small");
-        assert_eq!(tier_hint("ariacompute/ariamodel-mid"), "mid");
-        assert_eq!(tier_hint("ariacompute/ariamodel-large"), "large");
-        assert_eq!(tier_hint("local/general"), "unknown");
+        assert_eq!(tier_hint_from_name("ariacompute/ariamodel-small"), "small");
+        assert_eq!(tier_hint_from_name("ariacompute/ariamodel-mid"), "mid");
+        assert_eq!(tier_hint_from_name("ariacompute/ariamodel-large"), "large");
+        assert_eq!(tier_hint_from_name("local/general"), "unknown");
         let eligible = vec![
             card("ariacompute/ariamodel-small"),
             card("ariacompute/ariamodel-mid"),
@@ -501,6 +539,30 @@ mod tests {
         assert_eq!(listed[0]["tier"], "small");
         assert_eq!(listed[1]["tier"], "mid");
         assert_eq!(listed[2]["tier"], "large");
+    }
+
+    #[test]
+    fn tier_prefers_explicit_over_name() {
+        let custom = card_tier("acme/foo", "large", "other-model");
+        assert_eq!(tier_of(&custom), "large");
+        assert_eq!(tier_hint_from_name(&custom.name), "unknown");
+        let listed = run_tool(
+            "list_eligible_models",
+            &json!({}),
+            &[custom],
+            &ToolRuntime::default(),
+        )
+        .unwrap();
+        assert_eq!(listed[0]["tier"], "large");
+        assert_eq!(listed[0]["provider_model_id"], "other-model");
+    }
+
+    #[test]
+    fn upstream_change_keeps_tier() {
+        let mut c = card("ariacompute/ariamodel-mid");
+        c.tier = Some("mid".into());
+        c.provider_model_id = "totally-different-upstream".into();
+        assert_eq!(tier_of(&c), "mid");
     }
 
     #[test]

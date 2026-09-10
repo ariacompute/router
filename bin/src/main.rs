@@ -47,6 +47,30 @@ enum Command {
         /// Admin password
         #[arg(long)]
         admin_password: Option<String>,
+        /// Gateway backend base_url (all providers)
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Env var name for gateway API key
+        #[arg(long)]
+        api_key_env: Option<String>,
+        /// Upstream provider_model_id for ariamodel-small
+        #[arg(long)]
+        model_small: Option<String>,
+        /// Upstream provider_model_id for ariamodel-mid
+        #[arg(long)]
+        model_mid: Option<String>,
+        /// Upstream provider_model_id for ariamodel-large
+        #[arg(long)]
+        model_large: Option<String>,
+        /// Agent LLM endpoint (agent template only)
+        #[arg(long)]
+        agent_endpoint: Option<String>,
+        /// Agent LLM logical model (agent template only)
+        #[arg(long)]
+        agent_model: Option<String>,
+        /// Agent fallback logical model (agent template only)
+        #[arg(long)]
+        agent_fallback: Option<String>,
     },
     /// Validate router YAML
     Validate {
@@ -174,12 +198,52 @@ fn resolve_config(config: Option<String>) -> Result<String, Box<dyn std::error::
     Ok(path.display().to_string())
 }
 
+fn prompt_opt(label: &str, flag: Option<String>, interactive: bool) -> Option<String> {
+    if let Some(v) = flag {
+        let t = v.trim();
+        return if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        };
+    }
+    if !interactive {
+        return None;
+    }
+    let ans = prompt(label).unwrap_or_default();
+    let t = ans.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+fn stdin_is_tty() -> bool {
+    #[cfg(unix)]
+    {
+        unsafe { libc::isatty(libc::STDIN_FILENO) != 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 fn cmd_setup(
     status: bool,
     clear: bool,
     template: Option<String>,
     admin_user: Option<String>,
     admin_password: Option<String>,
+    base_url: Option<String>,
+    api_key_env: Option<String>,
+    model_small: Option<String>,
+    model_mid: Option<String>,
+    model_large: Option<String>,
+    agent_endpoint: Option<String>,
+    agent_model: Option<String>,
+    agent_fallback: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if status {
         return setup_status();
@@ -187,6 +251,11 @@ fn cmd_setup(
     if clear {
         return setup_clear();
     }
+
+    let template_flag = template.is_some();
+    let admin_flagged = admin_user.is_some() && admin_password.is_some();
+    // Fully flagged setup (CI): keep gateway defaults unless model flags passed.
+    let prompt_models = stdin_is_tty() && !(template_flag && admin_flagged);
 
     let raw = template.unwrap_or_else(|| {
         prompt("template [semantic|agent] (default: semantic): ").unwrap_or_default()
@@ -199,6 +268,57 @@ fn cmd_setup(
     if kind != "semantic" && kind != "agent" {
         return Err(format!("invalid template: {kind}").into());
     }
+
+    let models = aria_router_config::SetupModelOpts {
+        base_url: prompt_opt(
+            "gateway base_url [https://tokenhub.tencentmaas.com]: ",
+            base_url,
+            prompt_models,
+        ),
+        api_key_env: prompt_opt("api_key_env [GATEWAY_API_KEY]: ", api_key_env, prompt_models),
+        small_provider_model_id: prompt_opt(
+            "ariamodel-small provider_model_id [qwen3.5-flash]: ",
+            model_small,
+            prompt_models,
+        ),
+        mid_provider_model_id: prompt_opt(
+            "ariamodel-mid provider_model_id [glm-5.3]: ",
+            model_mid,
+            prompt_models,
+        ),
+        large_provider_model_id: prompt_opt(
+            "ariamodel-large provider_model_id [deepseek-v4-pro]: ",
+            model_large,
+            prompt_models,
+        ),
+        agent_endpoint: if kind == "agent" {
+            prompt_opt(
+                "agent.endpoint [same as base_url / tokenhub]: ",
+                agent_endpoint,
+                prompt_models,
+            )
+        } else {
+            None
+        },
+        agent_model: if kind == "agent" {
+            prompt_opt(
+                "agent.model [ariacompute/ariamodel-mid]: ",
+                agent_model,
+                prompt_models,
+            )
+        } else {
+            None
+        },
+        agent_fallback: if kind == "agent" {
+            prompt_opt(
+                "agent.fallback [ariacompute/ariamodel-mid]: ",
+                agent_fallback,
+                prompt_models,
+            )
+        } else {
+            None
+        },
+    };
 
     let admin_user = admin_user.unwrap_or_else(|| {
         let u = prompt("admin username [admin]: ").unwrap_or_default();
@@ -223,8 +343,13 @@ fn cmd_setup(
 
     let path = default_config_path()?;
     let overwrite = if path.exists() {
-        let ans = prompt(&format!("{} exists; overwrite? [y/N]: ", path.display()))?;
-        matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes")
+        if prompt_models || stdin_is_tty() {
+            let ans = prompt(&format!("{} exists; overwrite? [y/N]: ", path.display()))?;
+            matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes")
+        } else {
+            // Non-interactive flagged setup: overwrite.
+            true
+        }
     } else {
         true
     };
@@ -234,8 +359,15 @@ fn cmd_setup(
     }
 
     // Defaults: allow_register=true, require_api_key=true (edit YAML or Dashboard later).
-    let written = aria_router_config::write_default_config_with(&kind, true, true, true)?;
+    let written = aria_router_config::write_default_config_with_opts(
+        &kind, true, true, true, &models,
+    )?;
     println!("wrote {}", written.display());
+    let key_env = models
+        .api_key_env
+        .as_deref()
+        .unwrap_or("GATEWAY_API_KEY");
+    println!("export {key_env}=… before serve (TokenHub upstream)");
 
     let users_path = default_users_path()?;
     match LocalUserStore::create_admin(&users_path, &admin_user, &admin_pass) {
@@ -346,7 +478,29 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             template,
             admin_user,
             admin_password,
-        } => cmd_setup(status, clear, template, admin_user, admin_password)?,
+            base_url,
+            api_key_env,
+            model_small,
+            model_mid,
+            model_large,
+            agent_endpoint,
+            agent_model,
+            agent_fallback,
+        } => cmd_setup(
+            status,
+            clear,
+            template,
+            admin_user,
+            admin_password,
+            base_url,
+            api_key_env,
+            model_small,
+            model_mid,
+            model_large,
+            agent_endpoint,
+            agent_model,
+            agent_fallback,
+        )?,
         Command::Validate { config } => {
             let config = resolve_config(config)?;
             RouterDocument::load_path(&config)?;

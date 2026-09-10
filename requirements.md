@@ -221,7 +221,7 @@ emits:
 
 管理面默认只绑 `127.0.0.1`。本地密钥明文只在 POST 响应出现一次；`keys_path` 只存 sha256；密码 argon2id。
 
-CLI：`aria-router setup` 仅 template + admin（默认 `allow_register=true`、`require_api_key=true`；OAuth/`sk-bf-` 与开关改 YAML 或 Dashboard）。flags：`--status` / `--clear` / `--template` / `--admin-user` / `--admin-password`。**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 扁平 `key: value`。`--clear` 可删 `router-keys.json` / `router-users.json`。CLI help 由 **clap** derive 生成（对齐 memo：`about` / `Usage` / `Commands` / `Options`；支持 `aria-router <cmd> --help`）。无参调用打印 help 并 exit **2**；`-v` / `--version` / 子命令 `version` 打印版本。
+CLI：`aria-router setup` 写入 `~/.ariacompute/router.yml`，starter = **semantic-gateway** / **agent-gateway**（非 tiny）。交互：template → models（`base_url` / `api_key_env` / 三档 `provider_model_id`；agent 另 `endpoint`/`model`/`fallback`）→ admin。逻辑名 `ariacompute/ariamodel-{small,mid,large}` 为配方槽位默认保留；`providers.models[].tier`（`small|mid|large`）供 agent 认档，优先于名字启发式。默认 `allow_register=true`、`require_api_key=true`。flags：`--status` / `--clear` / `--template` / `--admin-user` / `--admin-password` / `--base-url` / `--api-key-env` / `--model-small|mid|large` / `--agent-endpoint|model|fallback`。`--template`+admin 齐全且未传 model flags → 静默用 gateway 默认。**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 扁平 `key: value`。`--clear` 可删 `router-keys.json` / `router-users.json`。CLI help 由 **clap** derive 生成（对齐 memo：`about` / `Usage` / `Commands` / `Options`；支持 `aria-router <cmd> --help`）。无参调用打印 help 并 exit **2**；`-v` / `--version` / 子命令 `version` 打印版本。离线 CI 仍可用显式 `--config *-tiny.yaml`。换上游后 bench Track B 须自备 `--model-id` / `--pick-map` / prices。
 
 **与 engine**：单一 `router_api_key` 字段可传 `sk-aria_` 或 `sk-bf-`；router 按前缀解析 `keys[]`（`kind: local|oauth`）。
 

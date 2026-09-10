@@ -30,19 +30,26 @@ Examples (English comments in every file):
 |------|------|
 | [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | Daily semantic gold path — `ariacompute/semantic-auto`; keyword heuristics → `local/general`; optional retention; `validate` + `serve` with no ML weights |
 | [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — gold `ariacompute/semantic-auto` plus `ariacompute/semantic-catalog` (learned signal + unimplemented algorithm → chat `Unsupported` unless `--features ml`); prefer tiny for demos |
-| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — pool `ariamodel-{small,mid,large}` via `cloud/gateway`; keyword → large, else small; needs `GATEWAY_API_KEY` |
+| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — pool `ariamodel-{small,mid,large}` via `cloud/gateway` (`tier` + swappable `provider_model_id`); **setup default** for `--template semantic`; needs `GATEWAY_API_KEY` |
 | [`semantic-stateful.yaml`](config/examples/semantic-stateful.yaml) | Retention sticky + `stores.memory` / `semantic_cache` / replay |
 | [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | Daily agent gold path — `ariacompute/agent-auto`; in-process builtin tool-loop (no `endpoint` → first-eligible); demos / CI |
 | [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — symmetric to `semantic.yaml`: gold `ariacompute/agent-auto` plus `ariacompute/agent-catalog` (intentional `Unsupported`); prefer tiny / gateway for demos |
-| [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — same three cloud models; builtin agent LLM + backends through `cloud/gateway`; needs `GATEWAY_API_KEY` |
+| [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — same three cloud models (`tier` + swappable upstream); **setup default** for `--template agent`; needs `GATEWAY_API_KEY` |
 | [`ffi-tiny.yaml`](config/examples/ffi-tiny.yaml) | FFI / binding gold path — `fast-response` canned completion (no upstream); prefer in `cases.json` / `run-binding-tests.sh` |
 | [`ffi.yaml`](config/examples/ffi.yaml) | FFI catalog — gold `fast-response` plus the same Unsupported catalog recipe as `semantic.yaml`; prefer `ffi-tiny` in binding tests |
 
 ```bash
-# Setup — template + admin (require_api_key / allow_register / OAuth via YAML or Dashboard)
+# Setup — writes ~/.ariacompute/router.yml from semantic-gateway / agent-gateway.
+# Interactive: template → models (base_url, api_key_env, three provider_model_id tiers;
+#   agent also endpoint/model/fallback) → admin. Enter keeps gateway defaults.
+# Logical names ariacompute/ariamodel-{small,mid,large} stay fixed; swap upstream IDs only.
+# CI: --template + --admin-user + --admin-password skips model prompts (gateway defaults).
 aria-router setup
 aria-router setup --status
 # Flags: --template --admin-user --admin-password
+#        --base-url --api-key-env --model-small --model-mid --model-large
+#        --agent-endpoint --agent-model --agent-fallback
+# After setup: export GATEWAY_API_KEY=… (or your --api-key-env) before serve.
 
 # Validate (default path after setup, or pass --config)
 aria-router validate
@@ -58,6 +65,7 @@ cargo run -p aria-router -- validate --config config/examples/agent-gateway.yaml
 # management defaults to 127.0.0.1:8080. Omit --config after setup.
 # Keep --mgmt-bind off engine's 8080 if you will register aria-engine.
 
+# Offline CI / demos (no GATEWAY_API_KEY): explicit --config *-tiny.yaml
 # Daily semantic gold path (ariacompute/semantic-auto → local/general)
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
@@ -88,7 +96,8 @@ cargo run -p aria-router -- serve \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# Aria Gateway backends (export GATEWAY_API_KEY first; YAML uses ${GATEWAY_API_KEY:-})
+# Aria Gateway backends (export GATEWAY_API_KEY first). Same topology as setup default.
+# providers.models[].tier marks small/mid/large; provider_model_id is the upstream id (swappable).
 export GATEWAY_API_KEY=…
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-gateway.yaml \

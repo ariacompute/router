@@ -18,6 +18,7 @@ providers:
   models:
     - name: ariacompute/ariamodel-small
       provider_model_id: qwen3.5-flash
+      tier: small
       locality: cloud
       modality: text
       capabilities: [chat]
@@ -32,6 +33,7 @@ providers:
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-mid
       provider_model_id: glm-5.3
+      tier: mid
       locality: cloud
       modality: text
       capabilities: [chat]
@@ -46,6 +48,7 @@ providers:
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-large
       provider_model_id: deepseek-v4-pro
+      tier: large
       locality: cloud
       modality: text
       capabilities: [chat]

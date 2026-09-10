@@ -374,6 +374,7 @@ fn apply_upsert(st: &AppState, body: ProviderUpsert) -> Result<Json<Value>, Rout
                 api_key_env: None,
             }],
             pricing: None,
+            tier: None,
         });
     }
     Ok(Json(json!({"ok": true, "name": body.name})))
@@ -395,6 +396,7 @@ fn providers_json(st: &AppState) -> Value {
             json!({
                 "name": m.name,
                 "provider_model_id": m.provider_model_id,
+                "tier": m.tier,
                 "locality": m.locality,
                 "modality": m.modality,
                 "backend_refs": m.backend_refs,

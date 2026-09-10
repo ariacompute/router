@@ -17,6 +17,7 @@ providers:
   models:
     - name: ariacompute/ariamodel-small
       provider_model_id: qwen3.5-flash
+      tier: small
       locality: cloud
       modality: text
       capabilities: [chat]
@@ -31,6 +32,7 @@ providers:
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-mid
       provider_model_id: glm-5.3
+      tier: mid
       locality: cloud
       modality: text
       capabilities: [chat]
@@ -45,6 +47,7 @@ providers:
           api_key_env: GATEWAY_API_KEY
     - name: ariacompute/ariamodel-large
       provider_model_id: deepseek-v4-pro
+      tier: large
       locality: cloud
       modality: text
       capabilities: [chat]
@@ -77,16 +80,19 @@ recipes:
         submit_route with exactly one eligible model. JSON tools only.
         Include a short reason that names the chosen tier (large / mid / small).
 
-        Tier policy (intent → model; do not default to mid without reason):
-        - large (…/ariamodel-large): teaching or explaining a mechanism/process
-          (how something works), even if the user asks for one sentence or brief
-          form. Prefer large whenever the ask is explanatory rather than a pure fact.
-        - mid (…/ariamodel-mid): systems and engineering judgment — trade-offs,
-          when to use an architecture, naming benefits of infra patterns (e.g. reverse
-          proxy), multi-concept compare ("what is A? what is B?"), design choices.
-        - small (…/ariamodel-small): pure factoids, acronyms/"stand for", unit
-          conversions, greetings. Never route an explain/how-it-works ask to small
-          just because the prompt is short.
+        Tier policy (intent → tier; do not default to mid without reason):
+        - large: teaching or explaining a mechanism/process (how something works),
+          even if the user asks for one sentence or brief form. Prefer large whenever
+          the ask is explanatory rather than a pure fact.
+        - mid: systems and engineering judgment — trade-offs, when to use an
+          architecture, naming benefits of infra patterns (e.g. reverse proxy),
+          multi-concept compare ("what is A? what is B?"), design choices.
+        - small: pure factoids, acronyms/"stand for", unit conversions, greetings.
+          Never route an explain/how-it-works ask to small just because the prompt
+          is short.
+
+        Match eligible models by their tier field (or name suffix). Upstream
+        provider_model_id may vary; do not key routing on upstream ids.
 
         Priority when intents overlap: explanatory (large) > systems/trade-off (mid)
         > pure factoid (small).

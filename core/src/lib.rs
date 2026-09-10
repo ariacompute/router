@@ -192,6 +192,9 @@ pub struct ModelCard {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub provider_model_id: String,
+    /// Explicit pool tier (`small` / `mid` / `large`); preferred over name heuristics.
+    #[serde(default)]
+    pub tier: Option<String>,
 }
 
 fn default_locality() -> String {

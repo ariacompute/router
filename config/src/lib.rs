@@ -289,6 +289,9 @@ pub struct ProviderModel {
     pub backend_refs: Vec<BackendRef>,
     #[serde(default)]
     pub pricing: Option<ModelPricing>,
+    /// Explicit pool tier (`small` / `mid` / `large`); preferred over name heuristics.
+    #[serde(default)]
+    pub tier: Option<String>,
 }
 
 impl ProviderModel {
@@ -851,9 +854,9 @@ pub fn expand_env(raw: &str) -> String {
     .into_owned()
 }
 
-/// Embedded starter templates written by `aria-router setup`.
-pub const SEMANTIC_TINY_YAML: &str = include_str!("../examples/semantic-tiny.yaml");
-pub const AGENT_TINY_YAML: &str = include_str!("../examples/agent-tiny.yaml");
+/// Embedded starter templates written by `aria-router setup` (gateway gold path).
+pub const SEMANTIC_GATEWAY_YAML: &str = include_str!("../examples/semantic-gateway.yaml");
+pub const AGENT_GATEWAY_YAML: &str = include_str!("../examples/agent-gateway.yaml");
 
 /// `$HOME/.ariacompute` (overridable via `ARIA_COMPUTE_HOME`).
 pub fn aria_home() -> Result<PathBuf, RouterError> {
@@ -907,6 +910,130 @@ pub fn resolve_users_path(raw: &str) -> Result<PathBuf, RouterError> {
     resolve_home_path(raw, default_users_path)
 }
 
+/// Optional overrides applied on top of the embedded gateway template.
+#[derive(Debug, Clone, Default)]
+pub struct SetupModelOpts {
+    pub base_url: Option<String>,
+    pub api_key_env: Option<String>,
+    pub small_provider_model_id: Option<String>,
+    pub mid_provider_model_id: Option<String>,
+    pub large_provider_model_id: Option<String>,
+    pub agent_endpoint: Option<String>,
+    pub agent_model: Option<String>,
+    pub agent_fallback: Option<String>,
+}
+
+const LOGICAL_SMALL: &str = "ariacompute/ariamodel-small";
+const LOGICAL_MID: &str = "ariacompute/ariamodel-mid";
+const LOGICAL_LARGE: &str = "ariacompute/ariamodel-large";
+
+fn yaml_str(s: &str) -> serde_yaml::Value {
+    serde_yaml::Value::String(s.to_string())
+}
+
+fn patch_setup_models(doc: &mut serde_yaml::Value, opts: &SetupModelOpts) {
+    let Some(root) = doc.as_mapping_mut() else {
+        return;
+    };
+    if let Some(providers) = root
+        .get_mut(serde_yaml::Value::String("providers".into()))
+        .and_then(|v| v.as_mapping_mut())
+    {
+        if let Some(models) = providers
+            .get_mut(serde_yaml::Value::String("models".into()))
+            .and_then(|v| v.as_sequence_mut())
+        {
+            for model in models.iter_mut() {
+                let Some(m) = model.as_mapping_mut() else {
+                    continue;
+                };
+                let name = m
+                    .get(serde_yaml::Value::String("name".into()))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let upstream = match name {
+                    LOGICAL_SMALL => opts.small_provider_model_id.as_deref(),
+                    LOGICAL_MID => opts.mid_provider_model_id.as_deref(),
+                    LOGICAL_LARGE => opts.large_provider_model_id.as_deref(),
+                    _ => None,
+                };
+                if let Some(id) = upstream {
+                    m.insert(
+                        serde_yaml::Value::String("provider_model_id".into()),
+                        yaml_str(id),
+                    );
+                }
+                if let Some(refs) = m
+                    .get_mut(serde_yaml::Value::String("backend_refs".into()))
+                    .and_then(|v| v.as_sequence_mut())
+                {
+                    for r in refs.iter_mut() {
+                        let Some(rm) = r.as_mapping_mut() else {
+                            continue;
+                        };
+                        if let Some(url) = opts.base_url.as_deref() {
+                            rm.insert(
+                                serde_yaml::Value::String("base_url".into()),
+                                yaml_str(url),
+                            );
+                        }
+                        if let Some(env) = opts.api_key_env.as_deref() {
+                            rm.insert(
+                                serde_yaml::Value::String("api_key_env".into()),
+                                yaml_str(env),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let agent_endpoint = opts
+        .agent_endpoint
+        .clone()
+        .or_else(|| opts.base_url.clone());
+    if agent_endpoint.is_none()
+        && opts.agent_model.is_none()
+        && opts.agent_fallback.is_none()
+    {
+        return;
+    }
+    let Some(recipes) = root
+        .get_mut(serde_yaml::Value::String("recipes".into()))
+        .and_then(|v| v.as_sequence_mut())
+    else {
+        return;
+    };
+    for recipe in recipes.iter_mut() {
+        let Some(rm) = recipe.as_mapping_mut() else {
+            continue;
+        };
+        let is_agent = rm
+            .get(serde_yaml::Value::String("router".into()))
+            .and_then(|v| v.as_str())
+            == Some("agent");
+        if !is_agent {
+            continue;
+        }
+        let Some(agent) = rm
+            .get_mut(serde_yaml::Value::String("agent".into()))
+            .and_then(|v| v.as_mapping_mut())
+        else {
+            continue;
+        };
+        if let Some(ep) = agent_endpoint.as_deref() {
+            agent.insert(serde_yaml::Value::String("endpoint".into()), yaml_str(ep));
+        }
+        if let Some(model) = opts.agent_model.as_deref() {
+            agent.insert(serde_yaml::Value::String("model".into()), yaml_str(model));
+        }
+        if let Some(fb) = opts.agent_fallback.as_deref() {
+            agent.insert(serde_yaml::Value::String("fallback".into()), yaml_str(fb));
+        }
+    }
+}
+
 /// Write a v0.3 starter YAML to `~/.ariacompute/router.yml`.
 /// `kind` is `semantic` (default) or `agent`.
 pub fn write_default_config(kind: &str, overwrite: bool) -> Result<PathBuf, RouterError> {
@@ -925,6 +1052,23 @@ pub fn write_default_config_with(
     require_api_key: bool,
     allow_register: bool,
 ) -> Result<PathBuf, RouterError> {
+    write_default_config_with_opts(
+        kind,
+        overwrite,
+        require_api_key,
+        allow_register,
+        &SetupModelOpts::default(),
+    )
+}
+
+/// Write gateway starter YAML with optional model/backend overrides.
+pub fn write_default_config_with_opts(
+    kind: &str,
+    overwrite: bool,
+    require_api_key: bool,
+    allow_register: bool,
+    models: &SetupModelOpts,
+) -> Result<PathBuf, RouterError> {
     let path = default_config_path()?;
     if path.exists() && !overwrite {
         return Err(RouterError::Io(format!(
@@ -933,8 +1077,8 @@ pub fn write_default_config_with(
         )));
     }
     let body = match kind {
-        "" | "semantic" => SEMANTIC_TINY_YAML,
-        "agent" => AGENT_TINY_YAML,
+        "" | "semantic" => SEMANTIC_GATEWAY_YAML,
+        "agent" => AGENT_GATEWAY_YAML,
         other => {
             return Err(RouterError::InvalidParam(format!(
                 "setup template must be semantic|agent, got {other}"
@@ -952,6 +1096,7 @@ pub fn write_default_config_with(
     let mut doc: serde_yaml::Value = serde_yaml::from_str(body).map_err(|e| {
         RouterError::Config(format!("embedded template: {e}"))
     })?;
+    patch_setup_models(&mut doc, models);
     if let Some(map) = doc.as_mapping_mut() {
         let mut g = serde_yaml::Mapping::new();
         g.insert(
@@ -1111,12 +1256,83 @@ recipes:
         assert_eq!(path, dir.path().join("router.yml"));
         let doc = RouterDocument::load_path(&path).unwrap();
         assert_eq!(doc.entrypoints[0].router, RouterKind::Semantic);
+        let mid = doc.provider("ariacompute/ariamodel-mid").unwrap();
+        assert_eq!(mid.provider_model_id, "glm-5.3");
+        assert_eq!(mid.tier.as_deref(), Some("mid"));
+        assert!(mid.backend_refs[0]
+            .api_key_env
+            .as_deref()
+            .is_some_and(|e| e == "GATEWAY_API_KEY"));
         assert!(write_default_config("semantic", false).is_err());
         write_default_config("agent", true).unwrap();
         let doc = RouterDocument::load_path(&path).unwrap();
         assert_eq!(doc.entrypoints[0].router, RouterKind::Agent);
+        assert!(doc
+            .recipe("agent-default")
+            .unwrap()
+            .agent
+            .as_ref()
+            .unwrap()
+            .endpoint
+            .as_deref()
+            .is_some_and(|e| e.contains("tokenhub")));
         clear_default_config().unwrap();
         assert!(!path.exists());
+        match prev {
+            Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
+            None => std::env::remove_var("ARIA_COMPUTE_HOME"),
+        }
+    }
+
+    #[test]
+    fn write_setup_model_opts_override_upstream() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
+        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
+        let opts = SetupModelOpts {
+            base_url: Some("https://example.test".into()),
+            api_key_env: Some("MY_GATEWAY_KEY".into()),
+            small_provider_model_id: Some("foo-small".into()),
+            mid_provider_model_id: Some("foo-mid".into()),
+            large_provider_model_id: Some("foo-large".into()),
+            agent_endpoint: None,
+            agent_model: Some("ariacompute/ariamodel-mid".into()),
+            agent_fallback: Some("ariacompute/ariamodel-small".into()),
+        };
+        let path =
+            write_default_config_with_opts("agent", true, true, true, &opts).unwrap();
+        let doc = RouterDocument::load_path(&path).unwrap();
+        assert_eq!(
+            doc.provider("ariacompute/ariamodel-small")
+                .unwrap()
+                .provider_model_id,
+            "foo-small"
+        );
+        assert_eq!(
+            doc.provider("ariacompute/ariamodel-mid")
+                .unwrap()
+                .provider_model_id,
+            "foo-mid"
+        );
+        assert_eq!(
+            doc.provider("ariacompute/ariamodel-large")
+                .unwrap()
+                .provider_model_id,
+            "foo-large"
+        );
+        let small = doc.provider("ariacompute/ariamodel-small").unwrap();
+        assert_eq!(small.tier.as_deref(), Some("small"));
+        assert_eq!(small.backend_refs[0].base_url, "https://example.test");
+        assert_eq!(
+            small.backend_refs[0].api_key_env.as_deref(),
+            Some("MY_GATEWAY_KEY")
+        );
+        let agent = doc.recipe("agent-default").unwrap().agent.as_ref().unwrap();
+        assert_eq!(agent.endpoint.as_deref(), Some("https://example.test"));
+        assert_eq!(agent.model.as_deref(), Some("ariacompute/ariamodel-mid"));
+        assert_eq!(agent.fallback.as_deref(), Some("ariacompute/ariamodel-small"));
+        clear_default_config().unwrap();
         match prev {
             Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
             None => std::env::remove_var("ARIA_COMPUTE_HOME"),

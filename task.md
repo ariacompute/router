@@ -332,3 +332,8 @@
 - [x] `cost` helpers + identity buckets；`elo` 表；`core` 请求/决策助手；`auth_api` / `embed` 纯函数
 - [x] 集成：`semantic_cache_hit_skips_upstream`、`replay_log_lists_recent`；decision OR/NOT/投影缺失
 - [x] `cargo test` 全绿；行覆盖约 69% → 74%（`semantic_cache` 9% → 98%）
+
+### T58 — setup gateway + 可配置 models
+- [x] setup 嵌入 `semantic-gateway` / `agent-gateway`；interactive / flags 覆盖 `provider_model_id`、`base_url`、`api_key_env`、agent endpoint/model/fallback
+- [x] `providers.models[].tier` + `ModelCard.tier`；agent 优先显式 tier；prompt 按 tier 标签而非上游 ID
+- [x] tiny 保留给 CI / `--config`；docs + config/agent 单测
