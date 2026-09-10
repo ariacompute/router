@@ -30,6 +30,7 @@ class Router : AutoCloseable {
         fun aria_router_init(path: String?): Pointer?
         fun aria_router_connect(url: String): Pointer?
         fun aria_router_destroy(h: Pointer)
+        fun aria_router_setup(h: Pointer, baseUrl: String?, token: String?)
         fun aria_router_complete(
             h: Pointer,
             messages: String,
@@ -45,6 +46,10 @@ class Router : AutoCloseable {
 
     fun setup(baseUrl: String? = null, token: String? = null): Router {
         auth = applySetup(auth, baseUrl = baseUrl, token = token)
+        val h = handle
+        if (h != null) {
+            lib?.aria_router_setup(h, baseUrl, token)
+        }
         return this
     }
 
@@ -52,6 +57,10 @@ class Router : AutoCloseable {
 
     fun setupClear(): Router {
         auth = SetupConfig()
+        val h = handle
+        if (h != null) {
+            lib?.aria_router_setup(h, "", "")
+        }
         return this
     }
 
@@ -65,6 +74,17 @@ class Router : AutoCloseable {
         return if (e.isNullOrEmpty()) fallback else e
     }
 
+    private fun syncAuthIfSet() {
+        val h = handle ?: return
+        if (auth.baseUrl.isNotEmpty() || auth.token.isNotEmpty()) {
+            lib?.aria_router_setup(
+                h,
+                auth.baseUrl.ifEmpty { null },
+                auth.token.ifEmpty { null },
+            )
+        }
+    }
+
     fun init(configPath: String? = null): Router {
         ensure()
         close()
@@ -74,6 +94,7 @@ class Router : AutoCloseable {
         val h = lib!!.aria_router_init(pathArg)
             ?: throw IllegalStateException(err("init failed"))
         handle = h
+        syncAuthIfSet()
         return this
     }
 
@@ -83,6 +104,7 @@ class Router : AutoCloseable {
         val h = lib!!.aria_router_connect(baseUrl)
             ?: throw IllegalStateException(err("connect failed"))
         handle = h
+        syncAuthIfSet()
         return this
     }
 

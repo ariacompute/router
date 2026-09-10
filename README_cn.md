@@ -314,6 +314,7 @@ r.close()
 # 或连接已运行的 serve（数据面）：
 r = Router().connect("http://127.0.0.1:8899")
 r.setup(base_url="http://127.0.0.1:8899", token="")  # 仅内存
+# 进程内 init+complete 不需要 Dashboard API key；connect 到开启 require_api_key 的远程 serve 仍需 setup(token=…)。
 ```
 
 **Rust**（`ariacompute-router` — 原生 API，不 dlopen `libaria-router_ffi`）：

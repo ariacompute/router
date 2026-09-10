@@ -21,6 +21,9 @@ public func applyRouterAuth(_ existing: AriaRouterAuth, baseUrl: String? = nil, 
 private typealias AriaRouterInitFn = @convention(c) (UnsafePointer<CChar>?) -> OpaquePointer?
 private typealias AriaRouterConnectFn = @convention(c) (UnsafePointer<CChar>?) -> OpaquePointer?
 private typealias AriaRouterDestroyFn = @convention(c) (OpaquePointer?) -> Void
+private typealias AriaRouterSetupFn = @convention(c) (
+    OpaquePointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?
+) -> Void
 private typealias AriaRouterCompleteFn = @convention(c) (
     OpaquePointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafeMutablePointer<CChar>?, Int
 ) -> Int32
@@ -38,6 +41,7 @@ public final class Router {
     private var fnInit: AriaRouterInitFn!
     private var fnConnect: AriaRouterConnectFn!
     private var fnDestroy: AriaRouterDestroyFn!
+    private var fnSetup: AriaRouterSetupFn!
     private var fnComplete: AriaRouterCompleteFn!
     private var fnModels: AriaRouterBufOutFn!
     private var fnLastRoute: AriaRouterBufOutFn!
@@ -50,6 +54,9 @@ public final class Router {
     @discardableResult
     public func setup(baseUrl: String? = nil, token: String? = nil) -> Router {
         auth = applyRouterAuth(auth, baseUrl: baseUrl, token: token)
+        if handle != nil {
+            syncFfiSetup(baseUrl: baseUrl, token: token)
+        }
         return self
     }
 
@@ -58,6 +65,9 @@ public final class Router {
     @discardableResult
     public func setupClear() -> Router {
         auth = AriaRouterAuth()
+        if handle != nil {
+            syncFfiSetup(baseUrl: "", token: "")
+        }
         return self
     }
 
@@ -125,6 +135,7 @@ public final class Router {
         fnInit = try bind("aria_router_init")
         fnConnect = try bind("aria_router_connect")
         fnDestroy = try bind("aria_router_destroy")
+        fnSetup = try bind("aria_router_setup")
         fnComplete = try bind("aria_router_complete")
         fnModels = try bind("aria_router_models")
         fnLastRoute = try bind("aria_router_last_route")
@@ -135,6 +146,27 @@ public final class Router {
         guard let p = fnLastError?() else { return fallback }
         let s = String(cString: p)
         return s.isEmpty ? fallback : s
+    }
+
+    private func syncFfiSetup(baseUrl: String?, token: String?) {
+        guard let h = handle, let fnSetup else { return }
+        var buC: UnsafeMutablePointer<CChar>?
+        var tokC: UnsafeMutablePointer<CChar>?
+        defer {
+            if let buC { free(buC) }
+            if let tokC { free(tokC) }
+        }
+        if let baseUrl { buC = strdup(baseUrl) }
+        if let token { tokC = strdup(token) }
+        fnSetup(h, buC, tokC)
+    }
+
+    private func syncAuthIfSet() {
+        guard !auth.baseUrl.isEmpty || !auth.token.isEmpty else { return }
+        syncFfiSetup(
+            baseUrl: auth.baseUrl.isEmpty ? nil : auth.baseUrl,
+            token: auth.token.isEmpty ? nil : auth.token
+        )
     }
 
     /// Load YAML (`aria_router_init`). nil/empty → default `~/.ariacompute/router.yml`.
@@ -156,6 +188,7 @@ public final class Router {
             )
         }
         handle = h
+        syncAuthIfSet()
         return self
     }
 
@@ -173,6 +206,7 @@ public final class Router {
             )
         }
         handle = h
+        syncAuthIfSet()
         return self
     }
 

@@ -76,6 +76,8 @@ typedef _ConnectC = Pointer Function(Pointer<Utf8>);
 typedef _ConnectDart = Pointer Function(Pointer<Utf8>);
 typedef _DestroyC = Void Function(Pointer);
 typedef _DestroyDart = void Function(Pointer);
+typedef _SetupC = Void Function(Pointer, Pointer<Utf8>, Pointer<Utf8>);
+typedef _SetupDart = void Function(Pointer, Pointer<Utf8>, Pointer<Utf8>);
 typedef _CompleteC = Int32 Function(
     Pointer, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, IntPtr);
 typedef _CompleteDart = int Function(
@@ -94,6 +96,7 @@ class AriaRouter {
   late final _InitDart _init;
   late final _ConnectDart _connect;
   late final _DestroyDart _destroy;
+  late final _SetupDart _setup;
   late final _CompleteDart _complete;
   late final _BufOutDart _models;
   late final _BufOutDart _lastRoute;
@@ -105,6 +108,10 @@ class AriaRouter {
 
   AriaRouter setup({String? baseUrl, String? token}) {
     _auth = applySetup(_auth, baseUrl: baseUrl, token: token);
+    final handle = _handle;
+    if (handle != null && handle.address != 0) {
+      _syncFfiSetup(baseUrl: baseUrl, token: token);
+    }
     return this;
   }
 
@@ -113,6 +120,10 @@ class AriaRouter {
 
   AriaRouter setupClear() {
     _auth = SetupConfig();
+    final handle = _handle;
+    if (handle != null && handle.address != 0) {
+      _syncFfiSetup(baseUrl: '', token: '');
+    }
     return this;
   }
 
@@ -125,6 +136,7 @@ class AriaRouter {
         _lib!.lookupFunction<_ConnectC, _ConnectDart>('aria_router_connect');
     _destroy =
         _lib!.lookupFunction<_DestroyC, _DestroyDart>('aria_router_destroy');
+    _setup = _lib!.lookupFunction<_SetupC, _SetupDart>('aria_router_setup');
     _complete =
         _lib!.lookupFunction<_CompleteC, _CompleteDart>('aria_router_complete');
     _models = _lib!.lookupFunction<_BufOutC, _BufOutDart>('aria_router_models');
@@ -132,6 +144,28 @@ class AriaRouter {
         _lib!.lookupFunction<_BufOutC, _BufOutDart>('aria_router_last_route');
     _lastError =
         _lib!.lookupFunction<_LastErrorC, _LastErrorDart>('aria_router_last_error');
+  }
+
+  void _syncFfiSetup({String? baseUrl, String? token}) {
+    final handle = _handle;
+    if (handle == null || handle.address == 0) return;
+    final bu = baseUrl != null ? baseUrl.toNativeUtf8() : nullptr;
+    final tok = token != null ? token.toNativeUtf8() : nullptr;
+    try {
+      _setup(handle, bu, tok);
+    } finally {
+      if (bu.address != 0) malloc.free(bu);
+      if (tok.address != 0) malloc.free(tok);
+    }
+  }
+
+  void _syncAuthIfSet() {
+    if (_auth.baseUrl.isNotEmpty || _auth.token.isNotEmpty) {
+      _syncFfiSetup(
+        baseUrl: _auth.baseUrl.isNotEmpty ? _auth.baseUrl : null,
+        token: _auth.token.isNotEmpty ? _auth.token : null,
+      );
+    }
   }
 
   String _err(String fallback) {
@@ -156,6 +190,7 @@ class AriaRouter {
     if (_handle == null || _handle!.address == 0) {
       throw StateError(_err('init failed'));
     }
+    _syncAuthIfSet();
     return this;
   }
 
@@ -171,6 +206,7 @@ class AriaRouter {
     if (_handle == null || _handle!.address == 0) {
       throw StateError(_err('connect failed'));
     }
+    _syncAuthIfSet();
     return this;
   }
 

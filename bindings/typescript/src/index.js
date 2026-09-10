@@ -64,6 +64,12 @@ export class Router {
   setup(u = {}) {
     if (u.base_url !== undefined) this._auth.base_url = u.base_url;
     if (u.token !== undefined) this._auth.token = u.token;
+    if (this._handle) {
+      this._syncFfiSetup(
+        u.base_url !== undefined ? u.base_url : null,
+        u.token !== undefined ? u.token : null,
+      );
+    }
     return this;
   }
 
@@ -73,6 +79,7 @@ export class Router {
 
   setupClear() {
     this._auth = { base_url: "", token: "" };
+    if (this._handle) this._syncFfiSetup("", "");
     return this;
   }
 
@@ -83,6 +90,7 @@ export class Router {
     this._fn.init = this._lib.func("aria_router_init", "void*", ["str"]);
     this._fn.connect = this._lib.func("aria_router_connect", "void*", ["str"]);
     this._fn.destroy = this._lib.func("aria_router_destroy", "void", ["void*"]);
+    this._fn.setup = this._lib.func("aria_router_setup", "void", ["void*", "str", "str"]);
     this._fn.complete = this._lib.func("aria_router_complete", "int", [
       "void*",
       "str",
@@ -99,6 +107,21 @@ export class Router {
     this._fn.lastError = this._lib.func("aria_router_last_error", "str", []);
   }
 
+  _syncFfiSetup(baseUrl, token) {
+    if (!this._handle || !this._fn.setup) return;
+    // koffi: null → NULL pointer (leave unchanged); string updates field.
+    this._fn.setup(this._handle, baseUrl, token);
+  }
+
+  _syncAuthIfSet() {
+    if (this._auth.base_url || this._auth.token) {
+      this._syncFfiSetup(
+        this._auth.base_url || null,
+        this._auth.token || null,
+      );
+    }
+  }
+
   _err(fallback) {
     const err = this._fn.lastError?.();
     return err || fallback;
@@ -113,6 +136,7 @@ export class Router {
     }
     this._handle = this._fn.init(pathArg);
     if (!this._handle) throw new Error(this._err("init failed"));
+    this._syncAuthIfSet();
     return this;
   }
 
@@ -121,6 +145,7 @@ export class Router {
     if (this._handle) this.close();
     this._handle = this._fn.connect(baseUrl);
     if (!this._handle) throw new Error(this._err("connect failed"));
+    this._syncAuthIfSet();
     return this;
   }
 

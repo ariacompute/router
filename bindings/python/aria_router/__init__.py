@@ -49,6 +49,11 @@ class Router:
             self._auth["base_url"] = base_url
         if token is not None:
             self._auth["token"] = token
+        if self._handle:
+            self._sync_ffi_setup(
+                base_url if base_url is not None else None,
+                token if token is not None else None,
+            )
         return self
 
     def setup_status(self) -> dict[str, str]:
@@ -56,6 +61,8 @@ class Router:
 
     def setup_clear(self) -> "Router":
         self._auth = {"base_url": "", "token": ""}
+        if self._handle:
+            self._sync_ffi_setup("", "")
         return self
 
     def _ensure(self) -> None:
@@ -67,6 +74,7 @@ class Router:
         self._lib.aria_router_connect.restype = c_void_p
         self._lib.aria_router_connect.argtypes = [c_char_p]
         self._lib.aria_router_destroy.argtypes = [c_void_p]
+        self._lib.aria_router_setup.argtypes = [c_void_p, c_char_p, c_char_p]
         self._lib.aria_router_complete.restype = c_int
         self._lib.aria_router_complete.argtypes = [c_void_p, c_char_p, c_char_p, c_char_p, c_size_t]
         self._lib.aria_router_complete_stream.restype = c_int
@@ -75,6 +83,23 @@ class Router:
         self._lib.aria_router_last_route.restype = c_int
         self._lib.aria_router_last_route.argtypes = [c_void_p, c_char_p, c_size_t]
         self._lib.aria_router_last_error.restype = c_char_p
+
+    def _sync_ffi_setup(
+        self, base_url: Optional[str] = None, token: Optional[str] = None
+    ) -> None:
+        """Push setup fields into the FFI handle. None → leave unchanged (NULL)."""
+        if not self._handle or not self._lib:
+            return
+        bu = None if base_url is None else base_url.encode()
+        tok = None if token is None else token.encode()
+        self._lib.aria_router_setup(self._handle, bu, tok)
+
+    def _sync_auth_if_set(self) -> None:
+        if self._auth["base_url"] or self._auth["token"]:
+            self._sync_ffi_setup(
+                self._auth["base_url"] if self._auth["base_url"] else None,
+                self._auth["token"] if self._auth["token"] else None,
+            )
 
     def init(self, config_path: Optional[str] = None) -> "Router":
         """Load YAML. None/empty → ~/.ariacompute/router.yml (after aria-router setup)."""
@@ -88,6 +113,7 @@ class Router:
         if not self._handle:
             err = self._lib.aria_router_last_error()
             raise RuntimeError(err.decode() if err else "init failed")
+        self._sync_auth_if_set()
         return self
 
     def connect(self, base_url: str) -> "Router":
@@ -98,6 +124,7 @@ class Router:
         if not self._handle:
             err = self._lib.aria_router_last_error()
             raise RuntimeError(err.decode() if err else "connect failed")
+        self._sync_auth_if_set()
         return self
 
     def close(self) -> None:

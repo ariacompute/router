@@ -82,6 +82,7 @@ function createKoffiBackend() {
     init: lib.func('aria_router_init', 'void*', ['str']),
     connect: lib.func('aria_router_connect', 'void*', ['str']),
     destroy: lib.func('aria_router_destroy', 'void', ['void*']),
+    setup: lib.func('aria_router_setup', 'void', ['void*', 'str', 'str']),
     complete: lib.func('aria_router_complete', 'int', ['void*', 'str', 'str', 'void*', 'size_t']),
     models: lib.func('aria_router_models', 'int', ['void*', 'void*', 'size_t']),
     lastRoute: lib.func('aria_router_last_route', 'int', ['void*', 'void*', 'size_t']),
@@ -99,6 +100,13 @@ class Router {
 
   setup(u = {}) {
     this._auth = applySetup(this._auth, u);
+    if (this._handle && this._fn?.setup) {
+      this._fn.setup(
+        this._handle,
+        u.base_url !== undefined ? u.base_url : null,
+        u.token !== undefined ? u.token : null,
+      );
+    }
     return this;
   }
 
@@ -108,6 +116,9 @@ class Router {
 
   setupClear() {
     this._auth = defaultSetup();
+    if (this._handle && this._fn?.setup) {
+      this._fn.setup(this._handle, '', '');
+    }
     return this;
   }
 
@@ -125,10 +136,22 @@ class Router {
     return fallback;
   }
 
+  _syncAuthIfSet() {
+    if (!this._handle || !this._fn?.setup) return;
+    if (this._auth.base_url || this._auth.token) {
+      this._fn.setup(
+        this._handle,
+        this._auth.base_url || null,
+        this._auth.token || null,
+      );
+    }
+  }
+
   init(configPath) {
     const mode = this._ensureHost();
     if (mode === 'native') {
       this._native.init(configPath || null);
+      this._native.setup?.(this._auth.base_url || null, this._auth.token || null);
       return this;
     }
     if (this._handle) this.close();
@@ -138,6 +161,7 @@ class Router {
     }
     this._handle = this._fn.init(pathArg);
     if (!this._handle) throw new Error(this._err('init failed'));
+    this._syncAuthIfSet();
     return this;
   }
 
@@ -145,11 +169,13 @@ class Router {
     const mode = this._ensureHost();
     if (mode === 'native') {
       this._native.connect(baseUrl);
+      this._native.setup?.(this._auth.base_url || null, this._auth.token || null);
       return this;
     }
     if (this._handle) this.close();
     this._handle = this._fn.connect(baseUrl);
     if (!this._handle) throw new Error(this._err('connect failed'));
+    this._syncAuthIfSet();
     return this;
   }
 

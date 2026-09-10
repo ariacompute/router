@@ -587,6 +587,26 @@ async fn chat_mgmt(
     chat_inner(st, headers, body, true).await
 }
 
+/// Trusted in-process chat for SDK/FFI (not an HTTP route). Skips Bearer /
+/// `require_api_key` — spoofable headers must never reach this path on `serve`.
+pub async fn sdk_chat_complete(st: Arc<AppState>, body: Value) -> Result<Response, RouterError> {
+    chat_with_auth(
+        st,
+        HeaderMap::new(),
+        body,
+        ChatAuth {
+            user: "sdk".into(),
+            key_id: None,
+            key_name: None,
+            identity: "sdk".into(),
+            serve_user_id: None,
+            serve_email: None,
+            serve_site: None,
+        },
+    )
+    .await
+}
+
 async fn chat_inner(
     st: Arc<AppState>,
     headers: HeaderMap,
@@ -623,18 +643,26 @@ async fn chat_inner(
         Ok(v) => v,
         Err(e) => return AppError(e).into_response(),
     };
-    let req: ChatRequest = match serde_json::from_value(body) {
+    match chat_with_auth(st, headers, body, auth).await {
         Ok(r) => r,
-        Err(e) => {
-            return AppError(RouterError::InvalidParam(e.to_string())).into_response();
-        }
-    };
+        Err(e) => AppError(e).into_response(),
+    }
+}
+
+async fn chat_with_auth(
+    st: Arc<AppState>,
+    headers: HeaderMap,
+    body: Value,
+    auth: ChatAuth,
+) -> Result<Response, RouterError> {
+    let req: ChatRequest = serde_json::from_value(body)
+        .map_err(|e| RouterError::InvalidParam(e.to_string()))?;
     let session = session_id(&headers, &req);
     let mut metadata = metadata_from_headers(&headers);
     metadata.insert("session".into(), session.clone());
     let want_stream = req.stream;
     let entrypoint = req.model.clone();
-    match route_and_forward(
+    route_and_forward(
         st,
         req,
         want_stream,
@@ -652,10 +680,6 @@ async fn chat_inner(
         },
     )
     .await
-    {
-        Ok(r) => r,
-        Err(e) => AppError(e).into_response(),
-    }
 }
 
 struct ChatAuth {
@@ -2580,6 +2604,18 @@ global:
         let report = st.cost.lock().unwrap().report(5);
         let by_key = report["by_key"].as_object().unwrap();
         assert!(!by_key.is_empty());
+
+        // Trusted SDK path must not require Bearer when require_api_key is true.
+        let sdk_res = sdk_chat_complete(
+            st.clone(),
+            json!({
+                "model": "ariacompute/semantic-auto",
+                "messages": [{"role":"user","content":"please explain"}]
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sdk_res.status(), 200);
 
         st.keys.lock().unwrap().revoke(&created.id).unwrap();
         let app2 = data_router(st);

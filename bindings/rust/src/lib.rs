@@ -2,9 +2,9 @@
 
 use aria_router_config::RouterDocument;
 use aria_router_core::RouterError;
-use aria_router_http::{data_router, last_route_json, AppState};
+use aria_router_http::{data_router, last_route_json, sdk_chat_complete, AppState};
 use axum::body::{to_bytes, Body};
-use axum::http::Request;
+use axum::http::{Request, StatusCode};
 use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -89,26 +89,41 @@ impl Router {
             .get("model")
             .and_then(|m| m.as_str())
             .unwrap_or("ariacompute/semantic-auto");
-        let req = serde_json::json!({"model": model, "messages": messages});
+        let mut req = serde_json::json!({"model": model, "messages": messages});
+        if let Some(mt) = options.get("max_tokens") {
+            req["max_tokens"] = mt.clone();
+        }
         if let Some(st) = &self.state {
-            let app = data_router(st.clone());
-            let body = serde_json::to_vec(&req).unwrap();
-            let resp = self
-                .rt
-                .block_on(async {
-                    app.oneshot(
-                        Request::post("/v1/chat/completions")
-                            .header("content-type", "application/json")
-                            .body(Body::from(body))
-                            .unwrap(),
-                    )
-                    .await
-                })
-                .map_err(|e| RouterError::Upstream(e.to_string()))?;
+            let resp = if !self.setup.token.is_empty() {
+                let app = data_router(st.clone());
+                let body = serde_json::to_vec(&req).unwrap();
+                self.rt
+                    .block_on(async {
+                        app.oneshot(
+                            Request::post("/v1/chat/completions")
+                                .header("content-type", "application/json")
+                                .header("authorization", format!("Bearer {}", self.setup.token))
+                                .body(Body::from(body))
+                                .unwrap(),
+                        )
+                        .await
+                    })
+                    .map_err(|e| RouterError::Upstream(e.to_string()))?
+            } else {
+                self.rt
+                    .block_on(sdk_chat_complete(st.clone(), req))
+                    .map_err(|e| RouterError::Upstream(e.to_string()))?
+            };
+            let status = resp.status();
             let bytes = self
                 .rt
                 .block_on(to_bytes(resp.into_body(), 1 << 22))
                 .map_err(|e| RouterError::Upstream(e.to_string()))?;
+            if status != StatusCode::OK {
+                return Err(RouterError::Upstream(
+                    String::from_utf8_lossy(&bytes).into_owned(),
+                ));
+            }
             serde_json::from_slice(&bytes).map_err(|e| RouterError::Upstream(e.to_string()))
         } else {
             let url = self
@@ -123,13 +138,17 @@ impl Router {
             let text = self
                 .rt
                 .block_on(async {
-                    reqwest::Client::new()
+                    let client = reqwest::Client::new();
+                    let mut builder = client
                         .post(format!("{}/v1/chat/completions", url.trim_end_matches('/')))
-                        .json(&req)
-                        .send()
-                        .await?
-                        .text()
-                        .await
+                        .json(&req);
+                    if !self.setup.token.is_empty() {
+                        builder = builder.header(
+                            "authorization",
+                            format!("Bearer {}", self.setup.token),
+                        );
+                    }
+                    builder.send().await?.text().await
                 })
                 .map_err(|e| RouterError::Upstream(e.to_string()))?;
             serde_json::from_str(&text).map_err(|e| RouterError::Upstream(e.to_string()))
@@ -193,5 +212,39 @@ mod tests {
         assert_eq!(r.setup_status().token, "t");
         r.setup_clear();
         assert!(r.setup_status().token.is_empty());
+    }
+
+    #[test]
+    fn complete_require_api_key_without_token() {
+        let mut r = Router::new();
+        let dir = std::env::temp_dir().join(format!(
+            "aria-router-sdk-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("fast-response-require-key.yaml");
+        let p1 = std::path::Path::new("../../bindings/testdata/fast-response.yaml");
+        let p2 = std::path::Path::new("bindings/testdata/fast-response.yaml");
+        let fixture = if p1.exists() {
+            std::fs::read_to_string(p1).unwrap()
+        } else {
+            std::fs::read_to_string(p2).unwrap()
+        };
+        let yaml = fixture.replace("require_api_key: false", "require_api_key: true");
+        std::fs::write(&cfg, &yaml).unwrap();
+        r.init(cfg.to_str().unwrap()).unwrap();
+        let out = r
+            .complete(
+                serde_json::json!([{"role":"user","content":"hi"}]),
+                serde_json::json!({"model":"ariacompute/semantic-auto"}),
+            )
+            .unwrap();
+        let s = out.to_string();
+        assert!(s.contains("hello-from-router"), "{s}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

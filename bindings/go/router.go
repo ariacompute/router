@@ -33,10 +33,36 @@ func (r *Router) Setup(baseURL, token string) {
 	if token != "" {
 		r.authToken = token
 	}
+	r.syncFFISetup(baseURL != "", token != "")
 }
 
 func (r *Router) SetupClear() {
 	r.authBaseURL, r.authToken = "", ""
+	if r.h != nil {
+		emptyBu := C.CString("")
+		emptyTok := C.CString("")
+		defer C.free(unsafe.Pointer(emptyBu))
+		defer C.free(unsafe.Pointer(emptyTok))
+		C.aria_router_setup((*C.AriaRouter)(r.h), emptyBu, emptyTok)
+	}
+}
+
+func (r *Router) syncFFISetup(setBase, setToken bool) {
+	if r.h == nil {
+		return
+	}
+	var bu, tok *C.char
+	if setBase {
+		bu = C.CString(r.authBaseURL)
+		defer C.free(unsafe.Pointer(bu))
+	}
+	if setToken {
+		tok = C.CString(r.authToken)
+		defer C.free(unsafe.Pointer(tok))
+	}
+	if bu != nil || tok != nil {
+		C.aria_router_setup((*C.AriaRouter)(r.h), bu, tok)
+	}
 }
 
 func (r *Router) Init(configPath string) error {
@@ -60,6 +86,9 @@ func (r *Router) Init(configPath string) error {
 	}
 	r.Close()
 	r.h = unsafe.Pointer(h)
+	if r.authToken != "" || r.authBaseURL != "" {
+		r.syncFFISetup(r.authBaseURL != "", r.authToken != "")
+	}
 	return nil
 }
 
@@ -73,6 +102,9 @@ func (r *Router) Connect(baseURL string) error {
 	}
 	r.Close()
 	r.h = unsafe.Pointer(h)
+	if r.authToken != "" || r.authBaseURL != "" {
+		r.syncFFISetup(r.authBaseURL != "", r.authToken != "")
+	}
 	return nil
 }
 

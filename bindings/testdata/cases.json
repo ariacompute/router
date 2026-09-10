@@ -10,7 +10,8 @@
     {"id": "models_ok", "intent": "List entrypoint + provider names", "assert": "data array includes ariacompute/semantic-auto"},
     {"id": "last_route_after_complete", "intent": "last_route JSON", "assert": "layer/model present after complete"},
     {"id": "connect_without_server", "intent": "aria_router_connect", "assert": "handle non-null (HTTP later)"},
-    {"id": "setup_memory_only", "intent": "SDK setup base_url/token", "assert": "in memory; no router.yml write"},
+    {"id": "setup_memory_only", "intent": "SDK setup base_url/token via aria_router_setup; memory only", "assert": "in memory; no router.yml write"},
+    {"id": "complete_require_api_key_no_token", "intent": "In-process complete with require_api_key true and no setup token", "assert": "success via sdk_chat_complete (not 401)"},
     {"id": "fail_closed_unknown_model", "intent": "Unknown model name", "assert": "error path"}
   ]
 }

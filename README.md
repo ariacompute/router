@@ -320,6 +320,8 @@ r.close()
 # Or attach to a running serve (data plane):
 r = Router().connect("http://127.0.0.1:8899")
 r.setup(base_url="http://127.0.0.1:8899", token="")  # memory only
+# In-process init+complete does not need a Dashboard API key; connect to a
+# remote serve with require_api_key still needs setup(token=…).
 ```
 
 **Rust** (`ariacompute-router` — native API; does not dlopen `libaria-router_ffi`):

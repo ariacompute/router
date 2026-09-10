@@ -3,7 +3,7 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: pointers are caller-owned
 
 use aria_router_config::RouterDocument;
-use aria_router_http::{data_router, last_route_json, AppState};
+use aria_router_http::{data_router, last_route_json, sdk_chat_complete, AppState};
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use std::ffi::{CStr, CString};
@@ -35,6 +35,7 @@ pub extern "C" fn aria_router_last_error() -> *const c_char {
 pub struct AriaRouterHandle {
     state: Option<Arc<AppState>>,
     base_url: Option<String>,
+    token: Option<String>,
     rt: tokio::runtime::Runtime,
 }
 
@@ -54,6 +55,17 @@ fn cstr<'a>(p: *const c_char) -> Result<&'a str, ()> {
     unsafe { CStr::from_ptr(p).to_str().map_err(|_| ()) }
 }
 
+fn opt_cstr_update(dest: &mut Option<String>, p: *const c_char) {
+    if p.is_null() {
+        return;
+    }
+    match cstr(p) {
+        Ok("") => *dest = None,
+        Ok(s) => *dest = Some(s.to_string()),
+        Err(()) => {}
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn aria_router_init(config_path: *const c_char) -> *mut AriaRouterHandle {
     let path = match resolve_init_config_path(config_path) {
@@ -68,6 +80,7 @@ pub extern "C" fn aria_router_init(config_path: *const c_char) -> *mut AriaRoute
             let h = Box::new(AriaRouterHandle {
                 state: Some(Arc::new(AppState::new(doc))),
                 base_url: None,
+                token: None,
                 rt: AriaRouterHandle::runtime(),
             });
             Box::into_raw(h)
@@ -113,8 +126,25 @@ pub extern "C" fn aria_router_connect(base_url: *const c_char) -> *mut AriaRoute
     Box::into_raw(Box::new(AriaRouterHandle {
         state: None,
         base_url: Some(url),
+        token: None,
         rt: AriaRouterHandle::runtime(),
     }))
+}
+
+/// In-memory client auth only (never writes router.yml).
+/// Non-NULL `base_url` / `token` update that field; empty string clears; NULL leaves unchanged.
+#[no_mangle]
+pub extern "C" fn aria_router_setup(
+    router: *mut AriaRouterHandle,
+    base_url: *const c_char,
+    token: *const c_char,
+) {
+    if router.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *router };
+    opt_cstr_update(&mut h.base_url, base_url);
+    opt_cstr_update(&mut h.token, token);
 }
 
 #[no_mangle]
@@ -143,6 +173,10 @@ fn write_out(out: *mut c_char, out_len: usize, s: &str) -> i32 {
     0
 }
 
+fn token_nonempty(h: &AriaRouterHandle) -> Option<&str> {
+    h.token.as_deref().filter(|t| !t.is_empty())
+}
+
 fn complete_inner(h: &AriaRouterHandle, messages_json: &str, options_json: &str) -> Result<String, String> {
     let opts: serde_json::Value =
         serde_json::from_str(if options_json.is_empty() { "{}" } else { options_json })
@@ -161,18 +195,26 @@ fn complete_inner(h: &AriaRouterHandle, messages_json: &str, options_json: &str)
         req_json["max_tokens"] = mt.clone();
     }
     if let Some(st) = &h.state {
-        let app = data_router(st.clone());
-        let body = serde_json::to_vec(&req_json).unwrap();
-        let resp = h.rt.block_on(async {
-            app.oneshot(
-                Request::post("/v1/chat/completions")
-                    .header("content-type", "application/json")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-        })
-        .map_err(|e| e.to_string())?;
+        let resp = if let Some(tok) = token_nonempty(h) {
+            let app = data_router(st.clone());
+            let body = serde_json::to_vec(&req_json).unwrap();
+            h.rt
+                .block_on(async {
+                    app.oneshot(
+                        Request::post("/v1/chat/completions")
+                            .header("content-type", "application/json")
+                            .header("authorization", format!("Bearer {tok}"))
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                })
+                .map_err(|e| e.to_string())?
+        } else {
+            h.rt
+                .block_on(sdk_chat_complete(st.clone(), req_json))
+                .map_err(|e| e.to_string())?
+        };
         let status = resp.status();
         let bytes = h
             .rt
@@ -187,7 +229,12 @@ fn complete_inner(h: &AriaRouterHandle, messages_json: &str, options_json: &str)
         let resp = h
             .rt
             .block_on(async {
-                reqwest::Client::new().post(&url).json(&req_json).send().await
+                let client = reqwest::Client::new();
+                let mut req = client.post(&url).json(&req_json);
+                if let Some(tok) = token_nonempty(h) {
+                    req = req.header("authorization", format!("Bearer {tok}"));
+                }
+                req.send().await
             })
             .map_err(|e| e.to_string())?;
         let text = h
@@ -369,6 +416,55 @@ mod tests {
         );
         aria_router_destroy(h);
         aria_router_destroy(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn complete_require_api_key_without_token() {
+        let dir = tempfile_dir();
+        let cfg = dir.join("fast-response-require-key.yaml");
+        let mut yaml = include_str!("../../bindings/testdata/fast-response.yaml").to_string();
+        yaml = yaml.replace("require_api_key: false", "require_api_key: true");
+        assert!(yaml.contains("require_api_key: true"), "fixture must enable require_api_key");
+        std::fs::write(&cfg, yaml).unwrap();
+        let p = CString::new(cfg.to_str().unwrap()).unwrap();
+        let h = aria_router_init(p.as_ptr());
+        assert!(!h.is_null());
+        let msgs = CString::new(r#"[{"role":"user","content":"hi"}]"#).unwrap();
+        let opts = CString::new(r#"{"model":"ariacompute/semantic-auto"}"#).unwrap();
+        let mut buf = vec![0u8; 8192];
+        let rc = aria_router_complete(
+            h,
+            msgs.as_ptr(),
+            opts.as_ptr(),
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len(),
+        );
+        assert_eq!(rc, 0, "{}", unsafe {
+            CStr::from_ptr(aria_router_last_error()).to_string_lossy()
+        });
+        let s = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(s.contains("hello-from-router"), "{s}");
+        assert!(!s.to_lowercase().contains("unauthorized"), "{s}");
+        aria_router_destroy(h);
+    }
+
+    #[test]
+    fn setup_memory_only() {
+        let dir = tempfile_dir();
+        let cfg = dir.join("fast-response.yaml");
+        std::fs::write(&cfg, include_str!("../../bindings/testdata/fast-response.yaml")).unwrap();
+        let p = CString::new(cfg.to_str().unwrap()).unwrap();
+        let h = aria_router_init(p.as_ptr());
+        assert!(!h.is_null());
+        let tok = CString::new("sk-test").unwrap();
+        aria_router_setup(h, std::ptr::null(), tok.as_ptr());
+        assert_eq!(unsafe { &*h }.token.as_deref(), Some("sk-test"));
+        let empty = CString::new("").unwrap();
+        aria_router_setup(h, std::ptr::null(), empty.as_ptr());
+        assert!(unsafe { &*h }.token.is_none());
+        aria_router_destroy(h);
     }
 
     #[test]

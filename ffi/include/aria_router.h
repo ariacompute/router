@@ -16,6 +16,13 @@ AriaRouter *aria_router_init(const char *config_path);
 AriaRouter *aria_router_connect(const char *base_url);
 void aria_router_destroy(AriaRouter *router);
 
+/*
+ * In-memory client auth for this handle only (never writes router.yml).
+ * Non-NULL base_url / token update that field (empty string clears).
+ * NULL leaves the field unchanged.
+ */
+void aria_router_setup(AriaRouter *router, const char *base_url, const char *token);
+
 int aria_router_complete(
     AriaRouter *router,
     const char *messages_json,
