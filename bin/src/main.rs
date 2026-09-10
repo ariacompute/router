@@ -5,7 +5,7 @@ use aria_router_config::{
 use aria_router_http::{
     data_router, mgmt_router, mgmt_router_serve_dashboard, AppState, KeyStore, LocalUserStore,
 };
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,47 +31,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Write router.yml and create admin user
-    Setup {
-        /// Show config status
-        #[arg(long)]
-        status: bool,
-        /// Remove router.yml (optional keys/users files)
-        #[arg(long)]
-        clear: bool,
-        /// Template: semantic | agent
-        #[arg(long)]
-        template: Option<String>,
-        /// Admin username
-        #[arg(long)]
-        admin_user: Option<String>,
-        /// Admin password
-        #[arg(long)]
-        admin_password: Option<String>,
-        /// Gateway backend base_url (all providers)
-        #[arg(long)]
-        base_url: Option<String>,
-        /// Env var name for gateway API key
-        #[arg(long)]
-        api_key_env: Option<String>,
-        /// Upstream provider_model_id for ariamodel-small
-        #[arg(long)]
-        model_small: Option<String>,
-        /// Upstream provider_model_id for ariamodel-mid
-        #[arg(long)]
-        model_mid: Option<String>,
-        /// Upstream provider_model_id for ariamodel-large
-        #[arg(long)]
-        model_large: Option<String>,
-        /// Agent LLM endpoint (agent template only)
-        #[arg(long)]
-        agent_endpoint: Option<String>,
-        /// Agent LLM logical model (agent template only)
-        #[arg(long)]
-        agent_model: Option<String>,
-        /// Agent fallback logical model (agent template only)
-        #[arg(long)]
-        agent_fallback: Option<String>,
-    },
+    Setup(Box<SetupArgs>),
     /// Validate router YAML
     Validate {
         /// Config path (default: ~/.ariacompute/router.yml)
@@ -95,6 +55,52 @@ enum Command {
     },
     /// Print version
     Version,
+}
+
+#[derive(Args)]
+struct SetupArgs {
+    /// Show config status
+    #[arg(long)]
+    status: bool,
+    /// Remove router.yml (optional keys/users files)
+    #[arg(long)]
+    clear: bool,
+    /// Template: semantic | agent
+    #[arg(long)]
+    template: Option<String>,
+    /// Admin username
+    #[arg(long)]
+    admin_user: Option<String>,
+    /// Admin password
+    #[arg(long)]
+    admin_password: Option<String>,
+    /// Gateway backend base_url (all providers)
+    #[arg(long)]
+    base_url: Option<String>,
+    /// Env var name for gateway API key (default GATEWAY_API_KEY)
+    #[arg(long)]
+    api_key_env: Option<String>,
+    /// Gateway API key secret (stored in router.yml backend_refs.api_key)
+    #[arg(long)]
+    api_key: Option<String>,
+    /// Upstream provider_model_id for ariamodel-small
+    #[arg(long)]
+    model_small: Option<String>,
+    /// Upstream provider_model_id for ariamodel-mid
+    #[arg(long)]
+    model_mid: Option<String>,
+    /// Upstream provider_model_id for ariamodel-large
+    #[arg(long)]
+    model_large: Option<String>,
+    /// Agent LLM endpoint (agent template only)
+    #[arg(long)]
+    agent_endpoint: Option<String>,
+    /// Agent LLM logical model (agent template only)
+    #[arg(long)]
+    agent_model: Option<String>,
+    /// Agent fallback logical model (agent template only)
+    #[arg(long)]
+    agent_fallback: Option<String>,
 }
 
 #[tokio::main]
@@ -230,23 +236,7 @@ fn stdin_is_tty() -> bool {
     }
 }
 
-struct SetupCmdArgs {
-    status: bool,
-    clear: bool,
-    template: Option<String>,
-    admin_user: Option<String>,
-    admin_password: Option<String>,
-    base_url: Option<String>,
-    api_key_env: Option<String>,
-    model_small: Option<String>,
-    model_mid: Option<String>,
-    model_large: Option<String>,
-    agent_endpoint: Option<String>,
-    agent_model: Option<String>,
-    agent_fallback: Option<String>,
-}
-
-fn cmd_setup(args: SetupCmdArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
     if args.status {
         return setup_status();
     }
@@ -278,10 +268,34 @@ fn cmd_setup(args: SetupCmdArgs) -> Result<(), Box<dyn std::error::Error>> {
             prompt_models,
         ),
         api_key_env: prompt_opt(
-            "api_key_env [GATEWAY_API_KEY]: ",
+            "api_key_env name [GATEWAY_API_KEY]: ",
             args.api_key_env,
             prompt_models,
         ),
+        api_key: {
+            // Secret → backend_refs.api_key so serve reads it from router.yml.
+            if let Some(v) = args.api_key {
+                let t = v.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            } else if prompt_models {
+                let ans = prompt_password(
+                    "gateway API key (saved in router.yml; Enter=env only): ",
+                )
+                .unwrap_or_default();
+                let t = ans.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            } else {
+                None
+            }
+        },
         small_provider_model_id: prompt_opt(
             "ariamodel-small provider_model_id [qwen3.5-flash]: ",
             args.model_small,
@@ -369,11 +383,6 @@ fn cmd_setup(args: SetupCmdArgs) -> Result<(), Box<dyn std::error::Error>> {
         &kind, true, true, true, &models,
     )?;
     println!("wrote {}", written.display());
-    let key_env = models
-        .api_key_env
-        .as_deref()
-        .unwrap_or("GATEWAY_API_KEY");
-    println!("export {key_env}=… before serve (TokenHub upstream)");
 
     let users_path = default_users_path()?;
     match LocalUserStore::create_admin(&users_path, &admin_user, &admin_pass) {
@@ -478,35 +487,7 @@ fn setup_clear() -> Result<(), Box<dyn std::error::Error>> {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Setup {
-            status,
-            clear,
-            template,
-            admin_user,
-            admin_password,
-            base_url,
-            api_key_env,
-            model_small,
-            model_mid,
-            model_large,
-            agent_endpoint,
-            agent_model,
-            agent_fallback,
-        } => cmd_setup(SetupCmdArgs {
-            status,
-            clear,
-            template,
-            admin_user,
-            admin_password,
-            base_url,
-            api_key_env,
-            model_small,
-            model_mid,
-            model_large,
-            agent_endpoint,
-            agent_model,
-            agent_fallback,
-        })?,
+        Command::Setup(args) => cmd_setup(*args)?,
         Command::Validate { config } => {
             let config = resolve_config(config)?;
             RouterDocument::load_path(&config)?;

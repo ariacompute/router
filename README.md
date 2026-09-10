@@ -38,16 +38,17 @@ Examples (English comments in every file):
 
 ```bash
 # Setup — writes ~/.ariacompute/router.yml from semantic-gateway / agent-gateway.
-# Interactive: template → models (base_url, api_key_env, three provider_model_id tiers;
-#   agent also endpoint/model/fallback) → admin. Enter keeps gateway defaults.
+# Interactive: template → models (base_url, api_key_env name, gateway API key,
+#   three provider_model_id tiers; agent also endpoint/model/fallback) → admin.
+# Gateway API key is stored in router.yml (`backend_refs.api_key`); serve loads that
+# path by default (or falls back to $GATEWAY_API_KEY / --api-key-env).
 # Logical names ariacompute/ariamodel-{small,mid,large} stay fixed; swap upstream IDs only.
 # CI: --template + --admin-user + --admin-password skips model prompts (gateway defaults).
 aria-router setup
 aria-router setup --status
 # Flags: --template --admin-user --admin-password
-#        --base-url --api-key-env --model-small --model-mid --model-large
+#        --base-url --api-key-env --api-key --model-small --model-mid --model-large
 #        --agent-endpoint --agent-model --agent-fallback
-# After setup: export GATEWAY_API_KEY=… (or your --api-key-env) before serve.
 
 # Validate (default path after setup, or pass --config)
 aria-router validate

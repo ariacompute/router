@@ -914,7 +914,11 @@ pub fn resolve_users_path(raw: &str) -> Result<PathBuf, RouterError> {
 #[derive(Debug, Clone, Default)]
 pub struct SetupModelOpts {
     pub base_url: Option<String>,
+    /// Env var **name** for upstream auth (default in template: `GATEWAY_API_KEY`).
     pub api_key_env: Option<String>,
+    /// Optional secret written into each `backend_refs[].api_key` so serve can auth
+    /// from `router.yml` without exporting an env var.
+    pub api_key: Option<String>,
     pub small_provider_model_id: Option<String>,
     pub mid_provider_model_id: Option<String>,
     pub large_provider_model_id: Option<String>,
@@ -981,6 +985,12 @@ fn patch_setup_models(doc: &mut serde_yaml::Value, opts: &SetupModelOpts) {
                             rm.insert(
                                 serde_yaml::Value::String("api_key_env".into()),
                                 yaml_str(env),
+                            );
+                        }
+                        if let Some(key) = opts.api_key.as_deref() {
+                            rm.insert(
+                                serde_yaml::Value::String("api_key".into()),
+                                yaml_str(key),
                             );
                         }
                     }
@@ -1293,6 +1303,7 @@ recipes:
         let opts = SetupModelOpts {
             base_url: Some("https://example.test".into()),
             api_key_env: Some("MY_GATEWAY_KEY".into()),
+            api_key: Some("sk-test-secret".into()),
             small_provider_model_id: Some("foo-small".into()),
             mid_provider_model_id: Some("foo-mid".into()),
             large_provider_model_id: Some("foo-large".into()),
@@ -1327,6 +1338,10 @@ recipes:
         assert_eq!(
             small.backend_refs[0].api_key_env.as_deref(),
             Some("MY_GATEWAY_KEY")
+        );
+        assert_eq!(
+            small.backend_refs[0].api_key.as_deref(),
+            Some("sk-test-secret")
         );
         let agent = doc.recipe("agent-default").unwrap().agent.as_ref().unwrap();
         assert_eq!(agent.endpoint.as_deref(), Some("https://example.test"));

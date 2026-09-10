@@ -260,10 +260,23 @@ pub fn backend_api_key(b: &aria_router_config::BackendRef) -> Option<String> {
             return Some(k.clone());
         }
     }
-    b.api_key_env
-        .as_ref()
-        .and_then(|e| std::env::var(e).ok())
-        .filter(|s| !s.is_empty())
+    let name = b.api_key_env.as_ref()?;
+    if let Ok(v) = std::env::var(name) {
+        if !v.is_empty() {
+            return Some(v);
+        }
+    }
+    // If a secret was pasted into api_key_env (not an env var name), use it directly
+    // so serve can auth from router.yml without a matching process env.
+    if looks_like_inline_api_key(name) {
+        return Some(name.clone());
+    }
+    None
+}
+
+fn looks_like_inline_api_key(s: &str) -> bool {
+    let t = s.trim();
+    t.starts_with("sk-") || t.starts_with("sk_") || (t.len() >= 32 && t.contains('-'))
 }
 
 fn api_key(b: &aria_router_config::BackendRef) -> Option<String> {

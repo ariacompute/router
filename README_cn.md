@@ -38,16 +38,17 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ```bash
 # 写入 ~/.ariacompute/router.yml：模板来自 semantic-gateway / agent-gateway。
-# 交互：template → models（base_url、api_key_env、三档 provider_model_id；
-#   agent 另有 endpoint/model/fallback）→ admin。Enter 保留 gateway 默认。
+# 交互：template → models（base_url、api_key_env 变量名、gateway API key、
+#   三档 provider_model_id；agent 另有 endpoint/model/fallback）→ admin。
+# API key 写入 router.yml 的 backend_refs.api_key；serve 默认加载该文件
+# （无明文 key 时回退 $GATEWAY_API_KEY / --api-key-env）。
 # 逻辑名 ariacompute/ariamodel-{small,mid,large} 固定；只换上游 provider_model_id。
 # CI：--template + --admin-user + --admin-password 跳过 models 提示（用 gateway 默认）。
 aria-router setup
 aria-router setup --status
 # Flags: --template --admin-user --admin-password
-#        --base-url --api-key-env --model-small --model-mid --model-large
+#        --base-url --api-key-env --api-key --model-small --model-mid --model-large
 #        --agent-endpoint --agent-model --agent-fallback
-# setup 后 serve 前：export GATEWAY_API_KEY=…（或你的 --api-key-env）
 
 # 校验（setup 后默认路径，或传 --config）
 aria-router validate
