@@ -19,9 +19,9 @@ import (
 )
 
 type Router struct {
-	h            unsafe.Pointer
-	authBaseURL  string
-	authToken    string
+	h           unsafe.Pointer
+	authBaseURL string
+	authToken   string
 }
 
 func NewRouter() *Router { return &Router{} }
