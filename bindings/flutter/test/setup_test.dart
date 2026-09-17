@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:test/test.dart';
-import 'package:aria_router/aria_router.dart';
+import 'package:ariacompute_router/ariacompute_router.dart';
 
 void main() {
   test('setup memory', () {

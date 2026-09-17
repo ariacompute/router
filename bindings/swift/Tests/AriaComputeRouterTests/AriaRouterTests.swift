@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import AriaRouter
+@testable import AriaComputeRouter
 
 final class AriaRouterTests: XCTestCase {
     func testSetupMemoryOnly() {

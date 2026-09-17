@@ -100,7 +100,7 @@ public final class Router {
             if FileManager.default.fileExists(atPath: p) { return p }
         }
         throw NSError(
-            domain: "AriaRouter",
+            domain: "AriaComputeRouter",
             code: 1,
             userInfo: [NSLocalizedDescriptionKey: "libaria-router_ffi not found; set ARIA_ROUTER_FFI_LIB"]
         )
@@ -119,13 +119,13 @@ public final class Router {
         let path = try Self.resolveLibPath()
         guard let h = dlopen(path, RTLD_NOW | RTLD_LOCAL) else {
             let msg = String(cString: dlerror())
-            throw NSError(domain: "AriaRouter", code: 2, userInfo: [NSLocalizedDescriptionKey: msg])
+            throw NSError(domain: "AriaComputeRouter", code: 2, userInfo: [NSLocalizedDescriptionKey: msg])
         }
         dl = h
         func bind<T>(_ name: String) throws -> T {
             guard let sym = dlsym(h, name) else {
                 throw NSError(
-                    domain: "AriaRouter",
+                    domain: "AriaComputeRouter",
                     code: 3,
                     userInfo: [NSLocalizedDescriptionKey: "missing symbol \(name)"]
                 )
@@ -182,7 +182,7 @@ public final class Router {
         }
         guard let h = fnInit(pathC) else {
             throw NSError(
-                domain: "AriaRouter",
+                domain: "AriaComputeRouter",
                 code: 4,
                 userInfo: [NSLocalizedDescriptionKey: lastError("init failed")]
             )
@@ -200,7 +200,7 @@ public final class Router {
         defer { free(urlC) }
         guard let h = fnConnect(urlC) else {
             throw NSError(
-                domain: "AriaRouter",
+                domain: "AriaComputeRouter",
                 code: 5,
                 userInfo: [NSLocalizedDescriptionKey: lastError("connect failed")]
             )
@@ -222,7 +222,7 @@ public final class Router {
     public func complete(messages: Any, options: Any = [String: Any]()) throws -> [String: Any] {
         guard let h = handle else {
             throw NSError(
-                domain: "AriaRouter",
+                domain: "AriaComputeRouter",
                 code: 6,
                 userInfo: [NSLocalizedDescriptionKey: "router not initialized"]
             )
@@ -244,7 +244,7 @@ public final class Router {
         let rc = fnComplete(h, msgC, optC, buf, cap)
         if rc != 0 {
             throw NSError(
-                domain: "AriaRouter",
+                domain: "AriaComputeRouter",
                 code: 7,
                 userInfo: [NSLocalizedDescriptionKey: lastError("complete failed")]
             )
@@ -258,7 +258,7 @@ public final class Router {
     public func models() throws -> [String: Any] {
         guard let h = handle else {
             throw NSError(
-                domain: "AriaRouter",
+                domain: "AriaComputeRouter",
                 code: 6,
                 userInfo: [NSLocalizedDescriptionKey: "router not initialized"]
             )
@@ -270,7 +270,7 @@ public final class Router {
         let rc = fnModels(h, buf, cap)
         if rc != 0 {
             throw NSError(
-                domain: "AriaRouter",
+                domain: "AriaComputeRouter",
                 code: 8,
                 userInfo: [NSLocalizedDescriptionKey: lastError("models failed")]
             )

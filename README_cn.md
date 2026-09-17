@@ -280,7 +280,7 @@ C ABI（`ariacompute-router-ffi` / `libaria-router_ffi`）加 `bindings/` 薄封
 | TypeScript | `bindings/typescript` | npm `@ariacompute/router-ts` |
 | React Native | `bindings/react-native` | npm `@ariacompute/router-rn` |
 | Flutter | `bindings/flutter` | pub.dev `aria_router` |
-| Swift | `bindings/swift` | CocoaPods / SPM `AriaRouter` |
+| Swift | `bindings/swift` | CocoaPods / SPM `AriaComputeRouter` |
 | Kotlin | `bindings/kotlin` | Maven `com.ariacompute:router` |
 
 C 头文件：[`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init`（进程内加载 YAML；`NULL`/空串 → `~/.ariacompute/router.yml`）、`aria_router_connect`（HTTP 连已运行的 `serve`）、`aria_router_complete` / `_stream`、`aria_router_models`、`aria_router_last_route`、`aria_router_destroy`、`aria_router_last_error`。
@@ -453,14 +453,14 @@ const c = new Router().connect("http://127.0.0.1:8899");
 c.setup({ base_url: "http://127.0.0.1:8899", token: "" });
 ```
 
-**Flutter**（`aria_router`）：
+**Flutter**（`ariacompute_router`）：
 
 ```bash
-flutter pub add aria_router
+flutter pub add ariacompute_router
 ```
 
 ```dart
-import 'package:aria_router/aria_router.dart';
+import 'package:ariacompute_router/ariacompute_router.dart';
 
 void main() {
   // aria-router setup 后：加载 ~/.ariacompute/router.yml
@@ -481,14 +481,14 @@ void main() {
 }
 ```
 
-**Swift**（dlopen `libaria-router_ffi`；SPM / CocoaPods `AriaRouter`）：
+**Swift**（dlopen `libaria-router_ffi`；SPM / CocoaPods `AriaComputeRouter`）：
 
 ```bash
-pod 'AriaRouter'
+pod 'AriaComputeRouter'
 ```
 
 ```swift
-import AriaRouter
+import AriaComputeRouter
 import Foundation
 
 do {

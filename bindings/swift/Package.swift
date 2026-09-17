@@ -2,23 +2,23 @@
 import PackageDescription
 
 let package = Package(
-    name: "AriaRouter",
+    name: "AriaComputeRouter",
     platforms: [
         .macOS(.v13),
         .iOS(.v15),
     ],
     products: [
-        .library(name: "AriaRouter", targets: ["AriaRouter"]),
+        .library(name: "AriaComputeRouter", targets: ["AriaComputeRouter"]),
     ],
     targets: [
         .target(
-            name: "AriaRouter",
-            path: "Sources/AriaRouter"
+            name: "AriaComputeRouter",
+            path: "Sources/AriaComputeRouter"
         ),
         .testTarget(
-            name: "AriaRouterTests",
-            dependencies: ["AriaRouter"],
-            path: "Tests/AriaRouterTests"
+            name: "AriaComputeRouterTests",
+            dependencies: ["AriaComputeRouter"],
+            path: "Tests/AriaComputeRouterTests"
         ),
     ]
 )
