@@ -18,6 +18,7 @@ aria-router-algorithm.workspace = true
 aria-router-plugin.workspace = true
 aria-router-provider.workspace = true
 aria-router-agent.workspace = true
+aria-router-afm-d.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tower.workspace = true

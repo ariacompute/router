@@ -73,7 +73,7 @@ struct SetupArgs {
     /// Remove router.yml (optional keys/users files)
     #[arg(long)]
     clear: bool,
-    /// Template: semantic | agent
+    /// Template: semantic | agent | afm-d
     #[arg(long)]
     template: Option<String>,
     /// Admin username
@@ -109,6 +109,12 @@ struct SetupArgs {
     /// Agent fallback logical model (agent template only)
     #[arg(long)]
     agent_fallback: Option<String>,
+    /// AFM-D System One endpoint (afm-d template only)
+    #[arg(long)]
+    afm_d_endpoint: Option<String>,
+    /// AFM-D fallback logical model (afm-d template only)
+    #[arg(long)]
+    afm_d_fallback: Option<String>,
     /// Releases org root for `aria-router upgrade` (written to router-cli.yml)
     #[arg(long)]
     upgrade_url: Option<String>,
@@ -261,14 +267,14 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
     let prompt_models = stdin_is_tty() && !(template_flag && admin_flagged);
 
     let raw = args.template.unwrap_or_else(|| {
-        prompt("template [semantic|agent] (default: semantic): ").unwrap_or_default()
+        prompt("template [semantic|agent|afm-d] (default: semantic): ").unwrap_or_default()
     });
     let kind = if raw.is_empty() {
         "semantic".to_string()
     } else {
         raw.to_ascii_lowercase()
     };
-    if kind != "semantic" && kind != "agent" {
+    if kind != "semantic" && kind != "agent" && kind != "afm-d" {
         return Err(format!("invalid template: {kind}").into());
     }
 
@@ -344,6 +350,24 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
             prompt_opt(
                 "agent.fallback [ariacompute/ariamodel-mid]: ",
                 args.agent_fallback,
+                prompt_models,
+            )
+        } else {
+            None
+        },
+        afm_d_endpoint: if kind == "afm-d" {
+            prompt_opt(
+                "afm-d.endpoint [http://127.0.0.1:8011]: ",
+                args.afm_d_endpoint,
+                prompt_models,
+            )
+        } else {
+            None
+        },
+        afm_d_fallback: if kind == "afm-d" {
+            prompt_opt(
+                "afm-d.fallback [ariacompute/ariamodel-mid]: ",
+                args.afm_d_fallback,
                 prompt_models,
             )
         } else {

@@ -4,18 +4,20 @@
 
 ## 概述
 `router` 仓库 = aria 推理网关（Rust）：独立 OpenAI 兼容 HTTP，**不走 Envoy**。
-两种并列决策器：**semantic**（对齐 vLLM Semantic Router YAML v0.3）与 **agent**
-（进程内轻量 builtin：固定工具 + 限 turns）。共享 providers、硬约束、转发。
+三种并列决策器：**semantic**（对齐 vLLM Semantic Router YAML v0.3）、**agent**
+（进程内轻量 builtin：固定工具 + 限 turns）、**afm-d**（HTTP System One Choice，
+契约对齐 `model/afm-d` / aria-engine）。共享 providers、硬约束、转发。
 产物：`aria-router` CLI + C ABI + 八语言 SDK（与 engine SDK **两套包**）。
 
 ## 架构
-OpenAI 面 → Entrypoint（`semantic` | `agent`）→ 硬约束剪枝 → 决策 → plugin → provider。
+OpenAI 面 → Entrypoint（`semantic` | `agent` | `afm-d`）→ 硬约束剪枝 → 决策 → plugin → provider。
 Semantic：signals → projections → Boolean decision → algorithm/looper。
 Agent：`BuiltinAgent` tool-loop → `submit_route` → typed `RouteDecision`。
+AFM-D：eligible → System One Choice → `POST {endpoint}/v1/systemone` → `RouteDecision`。
 Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 bypass recipe。
 
 ## 目录
-- `config/` `signal/` `decision/` `algorithm/` `plugin/` `provider/` `agent/` `http/`：运行时 crate
+- `config/` `signal/` `decision/` `algorithm/` `plugin/` `provider/` `agent/` `afm_d/` `http/`：运行时 crate
 - `bin/`：`aria-router`（setup / validate / serve / upgrade）
 - `ffi/`：`ariacompute-router-ffi`（`libaria-router_ffi`）
 - `bindings/`：rust / python / go / typescript / react-native / flutter / swift / kotlin
@@ -45,10 +47,10 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `python -m bench compare --corpus bench/corpus/mmlu_tiny.jsonl …`
 
 ## 进行中需求
-阶段 **R**（T50–T56）已落地。**T81** `aria-router upgrade` 已落地。见 `requirements.md` / `task.md`。
+阶段 **R**（T50–T56）已落地。**T81** upgrade、**T82–T84** AFM-D 决策器（`router: afm-d`）已落地。
 
 ## 注意事项
-- 黄金路径：keyword → static；retention sticky；agent → `submit_route`。
+- 黄金路径：keyword → static；retention sticky；agent → `submit_route`；afm-d → System One。
 - 四维：Models / Compute / Location / Preference。不做 Envoy / HaluGate / Prometheus。
-- 一次请求禁止串跑 semantic+agent。`cargo test`；learned：`--features ml`。
+- 一次请求禁止串跑多种决策器。`cargo test`；learned：`--features ml`。
 - Bench report-only；对标 aria `:8899`、vLLM SR `:8890`。

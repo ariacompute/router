@@ -366,6 +366,8 @@ pub struct Recipe {
     pub routing: Option<Routing>,
     #[serde(default)]
     pub agent: Option<AgentRecipe>,
+    #[serde(default, rename = "afm-d")]
+    pub afm_d: Option<AfmDRecipe>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -582,6 +584,26 @@ pub struct AgentRecipe {
     pub endpoint: Option<String>,
 }
 
+/// AFM-D System One decisioner recipe (`router: afm-d`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AfmDRecipe {
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub fallback: Option<String>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// Optional per-model Choice descriptions (overrides synthesized text).
+    #[serde(default)]
+    pub descriptions: HashMap<String, String>,
+    /// If set and answer confidence is below this, use fallback / FailClosed.
+    #[serde(default)]
+    pub min_confidence: Option<f32>,
+}
+
 const LEARNED_SIGNAL_KEYS: &[&str] = &[
     "classifier",
     "classifiers",
@@ -697,12 +719,24 @@ impl RouterDocument {
                             recipe.name
                         )));
                     }
+                    if recipe.afm_d.is_some() {
+                        return Err(RouterError::Config(format!(
+                            "semantic recipe {} must not contain afm-d:",
+                            recipe.name
+                        )));
+                    }
                     let routing = recipe.routing.as_ref().ok_or_else(|| {
                         RouterError::Config(format!("semantic recipe {} missing routing", recipe.name))
                     })?;
                     self.validate_routing(routing)?;
                 }
                 RouterKind::Agent => {
+                    if recipe.afm_d.is_some() {
+                        return Err(RouterError::Config(format!(
+                            "agent recipe {} must not contain afm-d:",
+                            recipe.name
+                        )));
+                    }
                     if recipe.routing.as_ref().is_some_and(|r| {
                         !r.signals.keywords.is_empty() || !r.decisions.is_empty()
                     }) {
@@ -729,6 +763,44 @@ impl RouterDocument {
                         if t == 0 || t > 8 {
                             return Err(RouterError::Config(format!(
                                 "agent recipe {} max_turns must be 1..=8, got {t}",
+                                recipe.name
+                            )));
+                        }
+                    }
+                }
+                RouterKind::AfmD => {
+                    if recipe.agent.is_some() {
+                        return Err(RouterError::Config(format!(
+                            "afm-d recipe {} must not contain agent:",
+                            recipe.name
+                        )));
+                    }
+                    if recipe.routing.as_ref().is_some_and(|r| {
+                        !r.signals.keywords.is_empty() || !r.decisions.is_empty()
+                    }) {
+                        return Err(RouterError::Config(format!(
+                            "afm-d recipe {} must not contain signals/decisions",
+                            recipe.name
+                        )));
+                    }
+                    let afm = recipe.afm_d.as_ref().ok_or_else(|| {
+                        RouterError::Config(format!(
+                            "afm-d recipe {} missing afm-d:",
+                            recipe.name
+                        ))
+                    })?;
+                    if let Some(fb) = &afm.fallback {
+                        if self.provider(fb).is_none() {
+                            return Err(RouterError::Config(format!(
+                                "afm-d recipe {} fallback {fb} not in providers",
+                                recipe.name
+                            )));
+                        }
+                    }
+                    if let Some(c) = afm.min_confidence {
+                        if !(0.0..=1.0).contains(&c) {
+                            return Err(RouterError::Config(format!(
+                                "afm-d recipe {} min_confidence must be 0..=1, got {c}",
                                 recipe.name
                             )));
                         }
@@ -845,11 +917,15 @@ impl RouterDocument {
 }
 
 pub fn expand_env(raw: &str) -> String {
+    // `${VAR}` / `${VAR:-default}` — `:-` matches bash (unset **or empty** → default).
     let re = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}").expect("regex");
     re.replace_all(raw, |caps: &regex::Captures| {
         let key = &caps[1];
         let default = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-        std::env::var(key).unwrap_or_else(|_| default.to_string())
+        match std::env::var(key) {
+            Ok(v) if !v.is_empty() => v,
+            _ => default.to_string(),
+        }
     })
     .into_owned()
 }
@@ -857,6 +933,7 @@ pub fn expand_env(raw: &str) -> String {
 /// Embedded starter templates written by `aria-router setup` (gateway gold path).
 pub const SEMANTIC_GATEWAY_YAML: &str = include_str!("../examples/semantic-gateway.yaml");
 pub const AGENT_GATEWAY_YAML: &str = include_str!("../examples/agent-gateway.yaml");
+pub const AFM_D_GATEWAY_YAML: &str = include_str!("../examples/afm-d-gateway.yaml");
 
 /// `$HOME/.ariacompute` (overridable via `ARIA_COMPUTE_HOME`).
 pub fn aria_home() -> Result<PathBuf, RouterError> {
@@ -990,6 +1067,9 @@ pub struct SetupModelOpts {
     pub agent_endpoint: Option<String>,
     pub agent_model: Option<String>,
     pub agent_fallback: Option<String>,
+    /// AFM-D System One endpoint (`afm-d` template).
+    pub afm_d_endpoint: Option<String>,
+    pub afm_d_fallback: Option<String>,
 }
 
 const LOGICAL_SMALL: &str = "ariacompute/ariamodel-small";
@@ -1068,10 +1148,12 @@ fn patch_setup_models(doc: &mut serde_yaml::Value, opts: &SetupModelOpts) {
         .agent_endpoint
         .clone()
         .or_else(|| opts.base_url.clone());
-    if agent_endpoint.is_none()
-        && opts.agent_model.is_none()
-        && opts.agent_fallback.is_none()
-    {
+    let afm_d_endpoint = opts.afm_d_endpoint.clone();
+    let patch_agent = agent_endpoint.is_some()
+        || opts.agent_model.is_some()
+        || opts.agent_fallback.is_some();
+    let patch_afm_d = afm_d_endpoint.is_some() || opts.afm_d_fallback.is_some();
+    if !patch_agent && !patch_afm_d {
         return;
     }
     let Some(recipes) = root
@@ -1084,33 +1166,45 @@ fn patch_setup_models(doc: &mut serde_yaml::Value, opts: &SetupModelOpts) {
         let Some(rm) = recipe.as_mapping_mut() else {
             continue;
         };
-        let is_agent = rm
+        let router = rm
             .get(serde_yaml::Value::String("router".into()))
             .and_then(|v| v.as_str())
-            == Some("agent");
-        if !is_agent {
-            continue;
+            .unwrap_or("")
+            .to_string();
+        if patch_agent && router == "agent" {
+            if let Some(agent) = rm
+                .get_mut(serde_yaml::Value::String("agent".into()))
+                .and_then(|v| v.as_mapping_mut())
+            {
+                if let Some(ep) = agent_endpoint.as_deref() {
+                    agent.insert(serde_yaml::Value::String("endpoint".into()), yaml_str(ep));
+                }
+                if let Some(model) = opts.agent_model.as_deref() {
+                    agent.insert(serde_yaml::Value::String("model".into()), yaml_str(model));
+                }
+                if let Some(fb) = opts.agent_fallback.as_deref() {
+                    agent.insert(serde_yaml::Value::String("fallback".into()), yaml_str(fb));
+                }
+            }
         }
-        let Some(agent) = rm
-            .get_mut(serde_yaml::Value::String("agent".into()))
-            .and_then(|v| v.as_mapping_mut())
-        else {
-            continue;
-        };
-        if let Some(ep) = agent_endpoint.as_deref() {
-            agent.insert(serde_yaml::Value::String("endpoint".into()), yaml_str(ep));
-        }
-        if let Some(model) = opts.agent_model.as_deref() {
-            agent.insert(serde_yaml::Value::String("model".into()), yaml_str(model));
-        }
-        if let Some(fb) = opts.agent_fallback.as_deref() {
-            agent.insert(serde_yaml::Value::String("fallback".into()), yaml_str(fb));
+        if patch_afm_d && router == "afm-d" {
+            if let Some(afm) = rm
+                .get_mut(serde_yaml::Value::String("afm-d".into()))
+                .and_then(|v| v.as_mapping_mut())
+            {
+                if let Some(ep) = afm_d_endpoint.as_deref() {
+                    afm.insert(serde_yaml::Value::String("endpoint".into()), yaml_str(ep));
+                }
+                if let Some(fb) = opts.afm_d_fallback.as_deref() {
+                    afm.insert(serde_yaml::Value::String("fallback".into()), yaml_str(fb));
+                }
+            }
         }
     }
 }
 
 /// Write a v0.3 starter YAML to `~/.ariacompute/router.yml`.
-/// `kind` is `semantic` (default) or `agent`.
+/// `kind` is `semantic` (default), `agent`, or `afm-d`.
 pub fn write_default_config(kind: &str, overwrite: bool) -> Result<PathBuf, RouterError> {
     write_default_config_with(kind, overwrite, true, true)
 }
@@ -1154,9 +1248,10 @@ pub fn write_default_config_with_opts(
     let body = match kind {
         "" | "semantic" => SEMANTIC_GATEWAY_YAML,
         "agent" => AGENT_GATEWAY_YAML,
+        "afm-d" => AFM_D_GATEWAY_YAML,
         other => {
             return Err(RouterError::InvalidParam(format!(
-                "setup template must be semantic|agent, got {other}"
+                "setup template must be semantic|agent|afm-d, got {other}"
             )))
         }
     };
@@ -1305,6 +1400,19 @@ recipes:
     }
 
     #[test]
+    fn env_expand_colon_dash_uses_default_when_empty() {
+        std::env::set_var("ARIA_TEST_EMPTY", "");
+        let s = expand_env("ep: ${ARIA_TEST_EMPTY:-http://127.0.0.1:8011}");
+        assert!(
+            s.contains("http://127.0.0.1:8011"),
+            "empty env with :- must fall back to default, got {s}"
+        );
+        std::env::remove_var("ARIA_TEST_EMPTY");
+        let s2 = expand_env("ep: ${ARIA_TEST_UNSET_XYZ:-http://127.0.0.1:8011}");
+        assert!(s2.contains("http://127.0.0.1:8011"));
+    }
+
+    #[test]
     fn mismatch_router_fails() {
         let raw = TINY.replace("router: semantic\n    recipe", "router: agent\n    recipe");
         assert!(RouterDocument::from_yaml_str(&raw).is_err());
@@ -1378,6 +1486,8 @@ recipes:
                 agent_endpoint: None,
                 agent_model: Some("ariacompute/ariamodel-mid".into()),
                 agent_fallback: Some("ariacompute/ariamodel-small".into()),
+                afm_d_endpoint: None,
+                afm_d_fallback: None,
             };
             let path =
                 write_default_config_with_opts("agent", true, true, true, &opts).unwrap();
@@ -1431,9 +1541,51 @@ recipes:
             include_str!("../examples/agent.yaml"),
             include_str!("../examples/semantic-gateway.yaml"),
             include_str!("../examples/agent-gateway.yaml"),
+            include_str!("../examples/afm-d-tiny.yaml"),
+            include_str!("../examples/afm-d.yaml"),
+            include_str!("../examples/afm-d-gateway.yaml"),
         ] {
             RouterDocument::from_yaml_str(raw).unwrap();
         }
+    }
+
+    #[test]
+    fn afm_d_tiny_entrypoint() {
+        let doc =
+            RouterDocument::from_yaml_str(include_str!("../examples/afm-d-tiny.yaml")).unwrap();
+        assert_eq!(doc.entrypoints[0].router, RouterKind::AfmD);
+        assert!(doc.recipe("afm-d-default").unwrap().afm_d.is_some());
+    }
+
+    #[test]
+    fn afm_d_gateway_endpoint_quoted_default() {
+        std::env::remove_var("DECISION_MODEL_URL");
+        let doc =
+            RouterDocument::from_yaml_str(include_str!("../examples/afm-d-gateway.yaml")).unwrap();
+        let ep = doc.recipes[0]
+            .afm_d
+            .as_ref()
+            .unwrap()
+            .endpoint
+            .as_deref();
+        assert_eq!(ep, Some("http://127.0.0.1:8011"));
+    }
+
+    #[test]
+    fn afm_d_catalog_example() {
+        let doc = RouterDocument::from_yaml_str(include_str!("../examples/afm-d.yaml")).unwrap();
+        assert_eq!(doc.entrypoints[0].router, RouterKind::AfmD);
+        assert_eq!(doc.entrypoints[1].model_names, vec!["ariacompute/afm-d-catalog"]);
+        assert_eq!(
+            doc.recipe("afm-d-catalog")
+                .unwrap()
+                .afm_d
+                .as_ref()
+                .unwrap()
+                .fallback
+                .as_deref(),
+            Some("local/general")
+        );
     }
 
     #[test]

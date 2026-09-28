@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-Aria Compute inference gateway: OpenAI-compatible HTTP, two parallel routers (**semantic** YAML v0.3 and **lightweight builtin agent** with fixed in-process tools + limited turns). Shared providers, hard constraints, and forwarding.
+Aria Compute inference gateway: OpenAI-compatible HTTP, three parallel routers (**semantic** YAML v0.3, **lightweight builtin agent** with fixed in-process tools + limited turns, and **afm-d** System One Choice via aria-engine). Shared providers, hard constraints, and forwarding.
 
 ## Build / Test
 
@@ -10,18 +10,19 @@ Aria Compute inference gateway: OpenAI-compatible HTTP, two parallel routers (**
 cargo test
 cargo clippy --workspace --all-targets -- -D warnings
 ./scripts/run-binding-tests.sh
+cargo build --release -p aria-router -p ariacompute-router-ffi
 ```
 
 ## Config / Run
 
-Routing policy is YAML v0.3 (`--config`). Secrets expand as `${VAR}` / `${VAR:-default}`. `entrypoint.router` must equal `recipe.router`. Semantic recipes must not contain `agent:`; agent recipes must not contain `signals` / `decisions`. Unknown top-level keys fail `validate`. Unimplemented YAML capabilities return `Unsupported` (no silent no-op). There is **no** top-level `extensions` block and no pi / deepseek-harness subprocess.
+Routing policy is YAML v0.3 (`--config`). Secrets expand as `${VAR}` / `${VAR:-default}`. `entrypoint.router` must equal `recipe.router`. Semantic recipes must not contain `agent:` / `afm-d:`; agent recipes must not contain `signals` / `decisions` / `afm-d:`; afm-d recipes must not contain `routing` / `agent:`. Unknown top-level keys fail `validate`. Unimplemented YAML capabilities return `Unsupported` (no silent no-op). There is **no** top-level `extensions` block and no pi / deepseek-harness subprocess.
 
 | Block | Meaning |
 |-------|---------|
 | `listeners` | Data-plane bind (`address` + `port`; default `--bind`) |
 | `providers` | `defaults.default_model` + named models / `backend_refs` |
-| `entrypoints` | Virtual model names → `router: semantic\|agent` + `recipe` |
-| `recipes` | Semantic `routing.*` or agent `agent.*` (endpoint / max_turns / timeout / fallback) |
+| `entrypoints` | Virtual model names → `router: semantic\|agent\|afm-d` + `recipe` |
+| `recipes` | Semantic `routing.*`, agent `agent.*`, or afm-d `afm-d.*` (System One endpoint / timeout / fallback) |
 | `global` | Auth / keys / users paths (optional) |
 
 Examples (English comments in every file):
@@ -35,9 +36,12 @@ Examples (English comments in every file):
 | [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | Daily agent gold path — `ariacompute/agent-auto`; in-process builtin tool-loop (no `endpoint` → first-eligible); demos / CI |
 | [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — symmetric to `semantic.yaml`: gold `ariacompute/agent-auto` plus `ariacompute/agent-catalog` (intentional `Unsupported`); prefer tiny / gateway for demos |
 | [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — same three cloud models (`tier` + swappable upstream); **setup default** for `--template agent`; needs `GATEWAY_API_KEY` |
+| [`afm-d-tiny.yaml`](config/examples/afm-d-tiny.yaml) | Daily AFM-D gold path — `ariacompute/afm-d-auto`; no `endpoint` → first-eligible; demos / CI |
+| [`afm-d.yaml`](config/examples/afm-d.yaml) | AFM-D catalog — symmetric to `agent.yaml`: gold `ariacompute/afm-d-auto` plus `ariacompute/afm-d-catalog`; prefer tiny / gateway for demos |
+| [`afm-d-gateway.yaml`](config/examples/afm-d-gateway.yaml) | AFM-D + Aria Gateway — System One Choice among three tiers; **setup** `--template afm-d`; needs `GATEWAY_API_KEY` + aria-engine at `DECISION_MODEL_URL` |
 
 ```bash
-# Setup — writes ~/.ariacompute/router.yml from semantic-gateway / agent-gateway
+# Setup — writes ~/.ariacompute/router.yml from semantic-gateway / agent-gateway / afm-d-gateway
 # and ~/.ariacompute/router-cli.yml (upgrade_url for `aria-router upgrade`).
 # Interactive: template → models (base_url, api_key_env name, gateway API key,
 #   three provider_model_id tiers; agent also endpoint/model/fallback) → admin → upgrade_url.
@@ -64,6 +68,9 @@ cargo run -p aria-router -- validate --config config/examples/semantic-stateful.
 cargo run -p aria-router -- validate --config config/examples/agent-tiny.yaml
 cargo run -p aria-router -- validate --config config/examples/agent.yaml
 cargo run -p aria-router -- validate --config config/examples/agent-gateway.yaml
+cargo run -p aria-router -- validate --config config/examples/afm-d-tiny.yaml
+cargo run -p aria-router -- validate --config config/examples/afm-d.yaml
+cargo run -p aria-router -- validate --config config/examples/afm-d-gateway.yaml
 
 # Serve — data plane from YAML listeners (examples use 127.0.0.1:8899);
 # management defaults to 127.0.0.1:8080. Omit --config after setup.
@@ -100,6 +107,18 @@ cargo run -p aria-router -- serve \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
+# Daily AFM-D gold path (ariacompute/afm-d-auto; no endpoint → first-eligible)
+cargo run -p aria-router -- serve \
+  --config config/examples/afm-d-tiny.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+# AFM-D catalog (ariacompute/afm-d-auto + ariacompute/afm-d-catalog)
+cargo run -p aria-router -- serve \
+  --config config/examples/afm-d.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
 # Aria Gateway backends (export GATEWAY_API_KEY first). Same topology as setup default.
 # providers.models[].tier marks small/mid/large; provider_model_id is the upstream id (swappable).
 export GATEWAY_API_KEY=…
@@ -108,13 +127,21 @@ cargo run -p aria-router -- serve \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
+export GATEWAY_API_KEY=…
 cargo run -p aria-router -- serve \
   --config config/examples/agent-gateway.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
+
+# AFM-D gateway (also needs aria-engine at DECISION_MODEL_URL, default :8011)
+export GATEWAY_API_KEY=…
+cargo run -p aria-router -- serve \
+  --config config/examples/afm-d-gateway.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
 ```
 
-`--bind` is the **data** plane (`POST /v1/chat/completions`, `GET /v1/models`). `--mgmt-bind` is the **management** plane (`/health`, validate, replay, providers, config, topology, playground chat, and the ops dashboard). One request never runs both semantic and agent. Concrete provider names **bypass** recipes and forward straight to that backend.
+`--bind` is the **data** plane (`POST /v1/chat/completions`, `GET /v1/models`). `--mgmt-bind` is the **management** plane (`/health`, validate, replay, providers, config, topology, playground chat, and the ops dashboard). One request never runs more than one of semantic, agent, or afm-d. Concrete provider names **bypass** recipes and forward straight to that backend.
 
 ## Dashboard
 
@@ -163,56 +190,6 @@ curl -s -X POST http://127.0.0.1:8090/v1/router/keys \
 
 Hard constraints (location / auth / modality / tools) prune **before** ranking. Compute is ranking only. No eligible path → fail closed.
 
-## Register aria-engine
-
-This process routes; `aria-engine serve` optionally registers as a local provider. Use **different ports**: engine `--bind` vs this `--mgmt-bind` (default `127.0.0.1:8080`). Clients talk to the **data** plane.
-
-```bash
-# 1. router repo — data :8899, management :8090
-cargo run -p aria-router -- serve \
-  --config config/examples/semantic-tiny.yaml \
-  --bind 127.0.0.1:8899 \
-  --mgmt-bind 127.0.0.1:8090
-
-# 2. engine repo — OpenAI on :8080, then PUT to management
-# When router require_api_key is true, pass the Dashboard-issued secret:
-aria-engine serve gemma-4-e2b-it_q4 \
-  --bind 127.0.0.1:8080 \
-  --router http://127.0.0.1:8090 \
-  --router-api-key sk-aria_… \
-  --compute auto
-
-# Persist on the engine side instead of --router / --router-api-key each time:
-#   aria-engine setup  # router URL + optional router API key (from Dashboard)
-#   # or ~/.ariacompute/engine.yml:
-#   # router: http://127.0.0.1:8090
-#   # router_api_key: sk-aria_…
-
-# 3. Chat via this gateway (concrete name = bypass → registered engine)
-curl -s http://127.0.0.1:8899/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -d '{
-    "model": "gemma-4-e2b-it_q4",
-    "messages":[{"role":"user","content":"Hello"}],
-    "max_tokens": 32
-  }' | jq .
-```
-
-`serve` on engine does `PUT {router}/v1/router/providers` with `{name, endpoint, provider_model_id, locality}` and **exits** if that fails. `ariacompute/semantic-auto` / `ariacompute/agent-auto` only hit that engine if YAML `modelRefs` / `default_model` use the same registered name.
-
-Manual upsert (same contract):
-
-```bash
-curl -s -X PUT http://127.0.0.1:8090/v1/router/providers \
-  -H 'content-type: application/json' \
-  -d '{
-    "name": "gemma-4-e2b-it_q4",
-    "endpoint": "127.0.0.1:8080",
-    "provider_model_id": "gemma-4-e2b-it_q4",
-    "locality": "local"
-  }' | jq .
-```
-
 ## OpenAI API
 
 Assuming data plane `http://127.0.0.1:8899` and management `http://127.0.0.1:8090`:
@@ -239,6 +216,15 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
     "max_tokens": 32
   }' | jq .
 
+# AFM-D entry (afm-d-tiny.yaml; no endpoint → first-eligible)
+curl -s http://127.0.0.1:8899/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "ariacompute/afm-d-auto",
+    "messages":[{"role":"user","content":"Hello"}],
+    "max_tokens": 32
+  }' | jq .
+
 # Chat (SSE)
 curl -sN http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
@@ -256,7 +242,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
     "messages":[{"role":"user","content":"Hello"}]
   }' | jq .
 
-# Route headers (layer = semantic | agent | bypass)
+# Route headers (layer = semantic | agent | afm-d | bypass)
 curl -sD - -o /dev/null http://127.0.0.1:8899/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{"model":"ariacompute/semantic-auto","messages":[{"role":"user","content":"please explain rust"}]}' \

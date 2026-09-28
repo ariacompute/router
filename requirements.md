@@ -1,17 +1,17 @@
 # requirements.md — aria router（Rust）
 
-> 本文件为 `router` 仓库 **Semantic + 轻量 Builtin Agent 并列网关 / OpenAI 兼容 HTTP / 八语言 SDK** 的功能边界、API、配置、异常与验收标准。**须经人工逐项审核**，审核通过后方可据其生成 / 执行 `task.md`。
+> 本文件为 `router` 仓库 **Semantic + Builtin Agent + AFM-D 并列网关 / OpenAI 兼容 HTTP / 八语言 SDK** 的功能边界、API、配置、异常与验收标准。**须经人工逐项审核**，审核通过后方可据其生成 / 执行 `task.md`。
 >
-> 架构参考：[vLLM Semantic Router](https://github.com/vllm-project/semantic-router) YAML v0.3（运行时对等，不做 Operator/Envoy）；运维 Dashboard 对齐其 dashboard 的 Config / Topology / Playground / Replay，不接 Grafana / ML / Security。Agent 面为 **进程内** 定制 builtin（少量固定工具 + 限 turns），不做 pi / deepseek-harness 子进程。
+> 架构参考：[vLLM Semantic Router](https://github.com/vllm-project/semantic-router) YAML v0.3（运行时对等，不做 Operator/Envoy）；运维 Dashboard 对齐其 dashboard 的 Config / Topology / Playground / Replay，不接 Grafana / ML / Security。Agent 面为 **进程内** 定制 builtin（少量固定工具 + 限 turns），不做 pi / deepseek-harness 子进程。AFM-D 面为 **HTTP System One**（契约对齐 `model/afm-d` / aria-engine），不做进程内 candle。
 
 ## 1. 目标与范围
 
-用 **Rust** 实现独立 OpenAI 兼容网关：按 entrypoint 选择 **semantic** 或 **agent**（builtin）决策器，在硬约束剪枝后选择或组合 provider 路径并转发。
+用 **Rust** 实现独立 OpenAI 兼容网关：按 entrypoint 选择 **semantic**、**agent**（builtin）或 **afm-d**（System One）决策器，在硬约束剪枝后选择或组合 provider 路径并转发。
 
 - **产品面**：`aria-router` CLI（`setup` / `validate` / `serve` / `upgrade`）+ 进程内库 + C ABI + 八语言 SDK。
-- **两种 router**：`semantic`（signals → Boolean recipe → algorithm）与 `agent`（轻量进程内 builtin：固定工具 + `max_turns`）并列；共享 listeners / providers / 硬约束 / 转发 / replay。
-- **不做**：Operator、Helm、官网、Python `vllm-sr`、Envoy ExtProc、Grafana / Prometheus、ML wizard、Security Policy、wizmap、fleet-sim、pi / deepseek-harness / 可插拔 `extensions`、把 TS harness 链进 crate。
-- **与 engine**：engine 仅本地推理；可选向本网关注册为 provider。本仓 SDK 与 `ariacompute-engine` **两套包**，`.so` 名互不覆盖。
+- **三种 router**：`semantic`（signals → Boolean recipe → algorithm）、`agent`（轻量进程内 builtin：固定工具 + `max_turns`）、`afm-d`（eligible → System One Choice → aria-engine）并列；共享 listeners / providers / 硬约束 / 转发 / replay。
+- **不做**：Operator、Helm、官网、Python `vllm-sr`、Envoy ExtProc、Grafana / Prometheus、ML wizard、Security Policy、wizmap、fleet-sim、pi / deepseek-harness / 可插拔 `extensions`、把 TS harness 链进 crate、在 router 内嵌 AFM-D 权重 / candle。
+- **与 engine**：engine 为本地 typed-decision 推理；**afm-d** 决策器经 HTTP `POST /v1/systemone` 调用；也可另将 engine 注册为 chat provider。本仓 SDK 与 `ariacompute-engine` **两套包**，`.so` 名互不覆盖。
 
 ### 1.1 阶段
 
@@ -19,6 +19,7 @@
 |------|------|----------|
 | **A-semantic** | 黄金路径 | YAML 加载、keyword、Boolean、static、chat/SSE、bypass、fail closed |
 | **A-agent** | 并列黄金路径 | 进程内 builtin tool-loop、硬剪枝、越权拒绝、与 semantic 入口隔离 |
+| **A-afm-d** | AFM-D 决策器 | `router: afm-d`；硬剪枝 → System One Choice → `RouteDecision`；无 endpoint first-eligible；tiny/gateway 示例 |
 | **B** | 启发式管线 | 启发式 signals、projections、latency-aware / multi-factor、核心 plugins |
 | **C** | 运行时对等 | learned signals（ONNX feature `ml`）、剩余 algorithm/looper/plugin；未实现显式 Unsupported |
 | **E** | SDK | C ABI + 八语言；`cases.json`；`run-binding-tests.sh` |
@@ -31,12 +32,12 @@
 
 ### 1.2 硬不变量
 
-- **Location / auth / modality / tools**：硬剪枝在决策之前；agent 只看见合格候选；无合格路径 fail closed。
+- **Location / auth / modality / tools**：硬剪枝在决策之前；agent / afm-d 只看见合格候选；无合格路径 fail closed。
 - **Compute** 进 pool 排名/工具结果，不进 eligibility。
-- **Preference**：semantic 用 signal；agent 用 prompt/tools 上下文；不得覆盖 Location。
-- 检测 ≠ 执行。Agent 输出必须是 typed `RouteDecision`。
-- 一次请求禁止串跑两种决策器。实名模型 **bypass** recipe。
-- `entrypoint.router` 必须等于 `recipe.router`。Semantic recipe 禁止 `agent:`；agent recipe 禁止 `signals`/`decisions`。
+- **Preference**：semantic 用 signal；agent 用 prompt/tools 上下文；afm-d 用 System One Choice；不得覆盖 Location。
+- 检测 ≠ 执行。Agent / AFM-D 输出必须是 typed `RouteDecision`。
+- 一次请求禁止串跑多种决策器。实名模型 **bypass** recipe。
+- `entrypoint.router` 必须等于 `recipe.router`。Semantic recipe 禁止 `agent:` / `afm-d:`；agent recipe 禁止 `signals`/`decisions` / `afm-d:`；afm-d recipe 禁止 `routing`/`agent:`。
 
 ## 2. 功能边界
 
@@ -45,6 +46,7 @@
 | 1 | **config** | YAML v0.3 结构：`version` / `listeners` / `providers` / `entrypoints` / `recipes` / `global`；`${VAR}` 替换；引用校验；**无**顶层 `extensions` |
 | 2 | **semantic** | signals、projections、Boolean AST、priority/confidence、algorithms、plugins |
 | 3 | **agent** | 进程内 `BuiltinAgent`；固定工具 + `max_turns` / `timeout_ms`；schema 校验 |
+| 3b | **afm-d** | HTTP System One Choice 决策器；`afm-d.endpoint` → aria-engine；无 endpoint → first-eligible；`fallback` / `min_confidence` |
 | 4 | **provider** | OpenAI 兼容转发、加权 `backend_refs`、health、latency 采样 |
 | 5 | **http** | 数据面 `:8899` chat/SSE/`/v1/models`；管理面默认 `127.0.0.1` health/validate/replay/providers + Dashboard API |
 | 6 | **ffi** | `libaria-router_ffi`：init/connect/complete/stream/models/last_route |
@@ -101,6 +103,9 @@ entrypoints:
   - model_names: [ariacompute/agent-auto]
     router: agent
     recipe: agent-default
+  - model_names: [ariacompute/afm-d-auto]
+    router: afm-d
+    recipe: afm-d-default
 recipes:
   - name: mom
     router: semantic
@@ -116,6 +121,13 @@ recipes:
       timeout_ms: 5000
       max_turns: 3
       fallback: local/general
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      endpoint: "${DECISION_MODEL_URL:-http://127.0.0.1:8011}"
+      timeout_ms: 5000
+      fallback: local/general
+      instructions: Pick the best model for this user request.
 global:
   require_api_key: true           # default true；false → 数据面可不带 Bearer
   allow_register: true            # Dashboard 普通用户自助注册
@@ -198,6 +210,33 @@ emits:
 
 约束：`max_turns` 默认 3、clamp ≤8；`timeout_ms` 默认 5000（整段 loop）；无 `endpoint` → first-eligible / 测试 canned。超时 / 超 turns / 非法 JSON / 越权 → fail closed，或 recipe `fallback`（须为已声明 provider）。禁止 shell / 任意 HTTP / 文件 IO / 动态注册 tool。
 
+### 3.4.1 AFM-D（System One 决策器）
+
+`RouteDecision { model, algorithm?, reason, confidence }`。`model` ∈ 硬剪枝后 eligible pool。`layer` / `decision` = `"afm-d"`。
+
+流程：硬剪枝 →（裸问候/短寒暄且池中有 `tier=small` → 直选 small，`reason=afm-d:chitchat-small`）→（`eligible.len()<=1` 或无 `endpoint` → first-eligible）→ 将候选编成单题 Choice → `POST {endpoint}/v1/systemone`：
+
+```json
+{
+  "state": "User message: <last user text>",
+  "questions": {
+    "route": {
+      "type": "choice",
+      "instructions": "<afm-d.instructions>",
+      "criteria": { "<model_name>": "<description>" }
+    }
+  }
+}
+```
+
+- `state` 为纯文本 `User message: …`（不用 JSON blob；Encoder 对问候更稳）。
+- `criteria` 描述：YAML `afm-d.descriptions` 覆盖优先，否则由 `tier` / `locality` / `capabilities` 合成。
+- 响应 `answers.route.choice` 须 ∈ eligible；`confidence` 写入 `RouteDecision`；`reason` = `afm-d:{choice}`。
+- `timeout_ms` 默认 5000；超时 / 非法响应 / 越权 choice → `fallback`（若配置且为已声明 provider）否则 FailClosed。
+- `min_confidence`：若配置且响应 confidence 低于阈值 → 同 fallback / FailClosed。
+- `eligible.len()>255` → FailClosed。Decoder Choice 上限 16：大池文档约定用 Encoder serve；runtime 不强制轨。
+- **不做**：进程内 candle / 加载 `afm-de` 权重；Score/Noul 路由原语（首期仅 Choice）。
+
 ### 3.5 HTTP
 
 **数据面**（listener）：
@@ -223,7 +262,7 @@ emits:
 
 CLI 子命令：`setup` / `validate` / `serve` / `upgrade [version]` / `version`。CLI help 由 **clap** derive 生成（对齐 memo：`about` / `Usage` / `Commands` / `Options`；支持 `aria-router <cmd> --help`）。无参调用打印 help 并 exit **2**；`-v` / `--version` / 子命令 `version` 打印版本。
 
-- `setup`：写入 `~/.ariacompute/router.yml`，starter = **semantic-gateway** / **agent-gateway**（非 tiny）。交互：template → models（`base_url` / `api_key_env` / 三档 `provider_model_id`；agent 另 `endpoint`/`model`/`fallback`）→ admin → `upgrade_url`。逻辑名 `ariacompute/ariamodel-{small,mid,large}` 为配方槽位默认保留；`providers.models[].tier`（`small|mid|large`）供 agent 认档，优先于名字启发式。默认 `allow_register=true`、`require_api_key=true`。flags：`--status` / `--clear` / `--template` / `--admin-user` / `--admin-password` / `--base-url` / `--api-key-env` / `--model-small|mid|large` / `--agent-endpoint|model|fallback` / `--upgrade-url`。`--template`+admin 齐全且未传 model flags → 静默用 gateway 默认。**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 扁平 `key: value`（含 `upgrade_url` 与 `lib`）。`--clear` 可删 `router-keys.json` / `router-users.json`，并清除 `router-cli.yml`。离线 CI 仍可用显式 `--config *-tiny.yaml`。换上游后 bench Track B 须自备 `--model-id` / `--pick-map` / prices。
+- `setup`：写入 `~/.ariacompute/router.yml`，starter = **semantic-gateway** / **agent-gateway** / **afm-d-gateway**（非 tiny）。交互：template → models（`base_url` / `api_key_env` / 三档 `provider_model_id`；agent 另 `endpoint`/`model`/`fallback`；afm-d 另 System One `endpoint`/`fallback`）→ admin → `upgrade_url`。逻辑名 `ariacompute/ariamodel-{small,mid,large}` 为配方槽位默认保留；`providers.models[].tier`（`small|mid|large`）供 agent / afm-d 认档，优先于名字启发式。默认 `allow_register=true`、`require_api_key=true`。flags：`--status` / `--clear` / `--template` / `--admin-user` / `--admin-password` / `--base-url` / `--api-key-env` / `--model-small|mid|large` / `--agent-endpoint|model|fallback` / `--afm-d-endpoint|fallback` / `--upgrade-url`。`--template`+admin 齐全且未传 model flags → 静默用 gateway 默认。**不**签发 `sk-aria_`、不跑 OAuth 浏览器。`--status` 扁平 `key: value`（含 `upgrade_url` 与 `lib`）。`--clear` 可删 `router-keys.json` / `router-users.json`，并清除 `router-cli.yml`。离线 CI 仍可用显式 `--config *-tiny.yaml`。换上游后 bench Track B 须自备 `--model-id` / `--pick-map` / prices。
 - `upgrade [version]`：按 `~/.ariacompute/router-cli.yml` 的 `upgrade_url`（组织根；与配方 `router.yml` **分离**）拼 `{upgrade_url}/router`，调 GitHub/Gitee Releases API；默认最新**正式** Release（忽略 prerelease/draft），可选 `0.1.0` / `v0.1.0`；下载本机平台 `aria-router_*` + `libaria-router_ffi_*`，原地原子替换当前 CLI，并将 FFI 装入 `~/.ariacompute/lib/`（提示 `ARIA_ROUTER_FFI_LIB`）。默认 org：`.com`→`https://github.com/ariacompute`，`.cn`→`https://gitee.com/ariacompute`（`setup` 写入）。未配置 `upgrade_url` 时报错并提示先 `setup`；下载/解压失败不得损坏现有 CLI。
 
 **与 engine**：单一 `router_api_key` 字段可传 `sk-aria_` 或 `sk-bf-`；router 按前缀解析 `keys[]`（`kind: local|oauth`）。
@@ -258,6 +297,7 @@ C API（`include/aria_router.h`）：
 
 - A-semantic：keyword 命中转发；实名 bypass；无路径 fail closed；SSE 至少 1 chunk。
 - A-agent：`submit_route` / 合法终态采纳；工具结果正确；非法/越权/超时/超 `max_turns` fail closed；与 semantic 入口不串扰。
+- A-afm-d：`afm-d-tiny` validate；无 endpoint → first-eligible；mock System One → choice 入 eligible；越权 / 低 confidence → fallback 或 FailClosed；与 semantic/agent 入口不串扰。
 - B：启发式 + 三算法 + 五插件单测。
 - C：无 `ml` 时 learned 被引用 → Unsupported；未知 algorithm 同。
 - R：retention sticky 同 session 第二轮粘住模型；`semantic_cache` hit 头；ratelimit 超限 429；`elo` 选高分 modelRef；`cargo test` 默认绿；`cargo test -p aria-router-signal --features ml`（及 http `-F ml`）绿。
@@ -270,7 +310,7 @@ C API（`include/aria_router.h`）：
 
 ```
 router/
-  config/ signal/ decision/ algorithm/ plugin/ provider/ agent/ http/ bin/ ffi/
+  config/ signal/ decision/ algorithm/ plugin/ provider/ agent/ afm_d/ http/ bin/ ffi/
   dashboard/   # Vite React SPA；产物 dashboard/dist 由管理面托管
   bindings/{rust,python,go,typescript,react-native,flutter,swift,kotlin,testdata}/
   bench/       # Python report-only 路由 / DRACO 评测（§6）

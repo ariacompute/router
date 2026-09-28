@@ -9,6 +9,7 @@ members = [
     "plugin",
     "provider",
     "agent",
+    "afm_d",
     "http",
     "bin",
     "ffi",
@@ -30,6 +31,7 @@ aria-router-algorithm = { path = "algorithm", version = "0.1.0" }
 aria-router-plugin = { path = "plugin", version = "0.1.0" }
 aria-router-provider = { path = "provider", version = "0.1.0" }
 aria-router-agent = { path = "agent", version = "0.1.0" }
+aria-router-afm-d = { path = "afm_d", version = "0.1.0" }
 aria-router-http = { path = "http", version = "0.1.0" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

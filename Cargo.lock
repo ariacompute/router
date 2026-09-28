@@ -121,6 +121,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aria-router-afm-d"
+version = "0.1.0"
+dependencies = [
+ "aria-router-config",
+ "aria-router-core",
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "aria-router-agent"
 version = "0.1.0"
 dependencies = [
@@ -178,6 +191,7 @@ name = "aria-router-http"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "aria-router-afm-d",
  "aria-router-agent",
  "aria-router-algorithm",
  "aria-router-config",

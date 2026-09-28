@@ -347,3 +347,18 @@
 - [x] `lib_dir` / `ensure_aria_home` / `RouterCliConfig`；setup 写入 `--upgrade-url`
 - [x] `upgrade [version]`：Releases 拉取 → 替换 CLI + 安装 `libaria-router_ffi` 至 `~/.ariacompute/lib/`
 - [x] 单测（选版 / 资产名 / API path）；AGENTS / README
+
+## 阶段 A-afm-d — AFM-D 决策器
+
+### T82 — Spec
+- [x] `requirements.md`：三种决策器、§3.4.1 AFM-D、阶段 A-afm-d、硬不变量互斥
+- [x] 本清单；`AGENTS.md` 概述 / 架构 / 目录
+
+### T83 — Core + Config
+- [x] `RouterKind::AfmD`（YAML `afm-d`）；`AfmDRecipe`；`Recipe.afm_d`；validate 互斥
+- [x] 示例 `afm-d-tiny.yaml` / `afm-d-gateway.yaml`；setup `--template afm-d`
+
+### T84 — `afm_d` crate + HTTP
+- [x] System One client → `RouteDecision`；无 endpoint first-eligible；单测
+- [x] `route_afm_d` + topology；workspace `aria-router-afm-d`
+- [x] README / README_cn；`cargo test` 全绿

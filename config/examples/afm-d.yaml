@@ -1,0 +1,110 @@
+# Catalog AFM-D config (YAML v0.3).
+# Gold-path entrypoint: ariacompute/afm-d-auto (System One Choice; no endpoint → first-eligible).
+# Daily demos prefer afm-d-tiny.yaml or afm-d-gateway.yaml.
+# Catalog entrypoint: ariacompute/afm-d-catalog — validate succeeds; documents private/cloud
+#   models for bypass / Location pruning (symmetric to agent.yaml / semantic.yaml).
+# Set afm-d.endpoint (e.g. ${DECISION_MODEL_URL}) for a live aria-engine System One.
+# Secrets: ${VAR} / ${VAR:-default}.
+# entrypoint.router must equal recipe.router.
+
+version: v0.3
+
+listeners:
+  - name: http-8899
+    address: 127.0.0.1
+    port: 8899
+    timeout: 300s
+
+# Named models. Recipes only reference local/*; private/cloud are catalog examples
+# (bypass or add to eligible set when Location pruning should see them).
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/fast
+      provider_model_id: echo-fast
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:8000
+          protocol: http
+          weight: 70
+          api_key_env: ${ARIA_UPSTREAM_KEY:-}
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:8000
+          protocol: http
+          weight: 100
+          api_key_env: ${ARIA_UPSTREAM_KEY:-}
+    - name: private/general
+      provider_model_id: private-echo
+      locality: private
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 10.0.0.10:8000
+          protocol: http
+          weight: 100
+          api_key_env: ${ARIA_PRIVATE_KEY:-}
+      pricing:
+        input_per_mtok: 0.05
+        output_per_mtok: 0.15
+    - name: cloud/general
+      provider_model_id: cloud-echo
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          base_url: https://api.example.com/v1
+          protocol: http
+          weight: 100
+          api_key_env: ${ARIA_CLOUD_KEY:-}
+      pricing:
+        input_per_mtok: 0.15
+        output_per_mtok: 0.60
+
+global:
+  require_api_key: false
+
+entrypoints:
+  - model_names: [ariacompute/afm-d-auto]
+    router: afm-d
+    recipe: afm-d-default
+  - model_names: [ariacompute/afm-d-catalog]
+    router: afm-d
+    recipe: afm-d-catalog
+
+recipes:
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      timeout_ms: 5000
+      fallback: local/general
+      instructions: |
+        Pick the best model for this user request.
+      descriptions:
+        local/fast: low-latency local chat
+        local/general: default local general chat
+
+  # Catalog demo: same AFM-D path as afm-d-default; private/cloud models
+  # remain for bypass / Location pruning documentation (symmetric to agent.yaml).
+  # Optional: set endpoint (e.g. "${DECISION_MODEL_URL:-http://127.0.0.1:8011}") for live System One.
+  - name: afm-d-catalog
+    router: afm-d
+    afm-d:
+      timeout_ms: 5000
+      fallback: local/general
+      instructions: |
+        Catalog demo: prefer local/general; private/cloud exist for bypass only.
+      descriptions:
+        local/fast: low-latency local chat
+        local/general: default local general chat

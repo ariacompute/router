@@ -1,0 +1,89 @@
+# Gateway AFM-D gold path (YAML v0.3).
+# Entrypoint: ariacompute/afm-d-auto. AFM-D System One chooses among ariamodel-{small,mid,large}.
+# Backends: TokenHub (aligned with semantic-gateway / agent-gateway).
+# XOR with other gateways on :8899. Requires: export GATEWAY_API_KEY=…
+# Also needs aria-engine System One at DECISION_MODEL_URL (default :8011).
+# entrypoint.router must equal recipe.router.
+
+version: v0.3
+
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+
+providers:
+  defaults:
+    default_model: ariacompute/ariamodel-mid
+  models:
+    - name: ariacompute/ariamodel-small
+      provider_model_id: qwen3.5-flash
+      tier: small
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      pricing:
+        input_per_mtok: 0.10
+        output_per_mtok: 0.20
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://tokenhub.tencentmaas.com
+          protocol: http
+          weight: 100
+          api_key_env: GATEWAY_API_KEY
+    - name: ariacompute/ariamodel-mid
+      provider_model_id: glm-5.3
+      tier: mid
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      pricing:
+        input_per_mtok: 0.40
+        output_per_mtok: 0.80
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://tokenhub.tencentmaas.com
+          protocol: http
+          weight: 100
+          api_key_env: GATEWAY_API_KEY
+    - name: ariacompute/ariamodel-large
+      provider_model_id: deepseek-v4-pro
+      tier: large
+      locality: cloud
+      modality: text
+      capabilities: [chat]
+      pricing:
+        input_per_mtok: 1.20
+        output_per_mtok: 2.40
+      backend_refs:
+        - name: cloud/gateway
+          base_url: https://tokenhub.tencentmaas.com
+          protocol: http
+          weight: 100
+          api_key_env: GATEWAY_API_KEY
+
+entrypoints:
+  - model_names: [ariacompute/afm-d-auto]
+    router: afm-d
+    recipe: afm-d-default
+
+recipes:
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      endpoint: "${DECISION_MODEL_URL:-http://127.0.0.1:8011}"
+      timeout_ms: 5000
+      fallback: ariacompute/ariamodel-mid
+      instructions: |
+        Pick the cheapest sufficient model tier for the user message.
+        small = greetings/thanks/short chitchat/factoids/acronyms
+        mid = systems judgment and trade-offs
+        large = teaching and how-it-works explanations
+        Greetings (hi/hello/hey) are always small.
+      descriptions:
+        ariacompute/ariamodel-small: small — greetings (hi/hello/hey), thanks, short chitchat, factoids, acronyms
+        ariacompute/ariamodel-mid: mid — systems judgment and trade-offs
+        ariacompute/ariamodel-large: large — teaching and how-it-works explanations
+
+global:
+  require_api_key: false

@@ -85,6 +85,29 @@ pub fn topology_graph(doc: &RouterDocument) -> Value {
                     }
                 }
             }
+            RouterKind::AfmD => {
+                if let Some(afm) = &recipe.afm_d {
+                    let nid = "afm-d:systemone".to_string();
+                    add_node(
+                        &mut nodes,
+                        &mut seen,
+                        nid.clone(),
+                        "afm-d",
+                        "afm-d",
+                        &[
+                            ("timeout_ms", json!(afm.timeout_ms.unwrap_or(5000))),
+                            (
+                                "endpoint",
+                                json!(afm.endpoint.as_deref().unwrap_or("")),
+                            ),
+                        ],
+                    );
+                    edges.push(json!({"from": rid, "to": nid}));
+                    if let Some(fb) = &afm.fallback {
+                        edges.push(json!({"from": nid, "to": format!("model:{fb}")}));
+                    }
+                }
+            }
         }
     }
 

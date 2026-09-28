@@ -44,6 +44,8 @@ impl From<serde_json::Error> for RouterError {
 pub enum RouterKind {
     Semantic,
     Agent,
+    #[serde(rename = "afm-d")]
+    AfmD,
 }
 
 impl RouterKind {
@@ -51,6 +53,7 @@ impl RouterKind {
         match self {
             Self::Semantic => "semantic",
             Self::Agent => "agent",
+            Self::AfmD => "afm-d",
         }
     }
 }
@@ -61,7 +64,10 @@ impl std::str::FromStr for RouterKind {
         match s {
             "semantic" => Ok(Self::Semantic),
             "agent" => Ok(Self::Agent),
-            other => Err(RouterError::Config(format!("router must be semantic|agent, got {other}"))),
+            "afm-d" => Ok(Self::AfmD),
+            other => Err(RouterError::Config(format!(
+                "router must be semantic|agent|afm-d, got {other}"
+            ))),
         }
     }
 }
@@ -272,7 +278,15 @@ mod tests {
     fn router_kind_and_bypass() {
         assert_eq!("semantic".parse::<RouterKind>().unwrap(), RouterKind::Semantic);
         assert_eq!("agent".parse::<RouterKind>().unwrap(), RouterKind::Agent);
+        assert_eq!("afm-d".parse::<RouterKind>().unwrap(), RouterKind::AfmD);
         assert_eq!(RouterKind::Semantic.as_str(), "semantic");
+        assert_eq!(RouterKind::AfmD.as_str(), "afm-d");
+        let afm_json = serde_json::to_string(&RouterKind::AfmD).unwrap();
+        assert_eq!(afm_json, "\"afm-d\"");
+        assert_eq!(
+            serde_json::from_str::<RouterKind>("\"afm-d\"").unwrap(),
+            RouterKind::AfmD
+        );
         assert!(matches!(
             "other".parse::<RouterKind>(),
             Err(RouterError::Config(_))

@@ -12,6 +12,7 @@ mod semantic_cache;
 mod ratelimit;
 mod replay;
 
+use aria_router_afm_d::{task_from as afm_d_task_from, AfmDDecisioner};
 use aria_router_agent::{request_view, task_from, BuiltinAgent, ToolRuntime};
 use aria_router_algorithm::{global_elo, hard_filter, select, RuntimeStats};
 use aria_router_config::{resolve_keys_path, resolve_users_path, Recipe, RouterDocument};
@@ -1247,6 +1248,7 @@ pub async fn route_request(
     match ep.router {
         RouterKind::Semantic => route_semantic(st, &doc, &recipe, req, metadata).await,
         RouterKind::Agent => route_agent(st, &doc, &recipe, req, metadata).await,
+        RouterKind::AfmD => route_afm_d(st, &doc, &recipe, req, metadata).await,
     }
 }
 
@@ -1464,6 +1466,48 @@ fn push_rich_replay(
         },
         cfg,
     );
+}
+
+async fn route_afm_d(
+    _st: &AppState,
+    doc: &RouterDocument,
+    recipe: &Recipe,
+    req: ChatRequest,
+    _metadata: &HashMap<String, String>,
+) -> Result<(RouteDecision, ChatRequest, Option<Value>, Vec<(String, String)>), RouterError> {
+    let afm = recipe
+        .afm_d
+        .as_ref()
+        .ok_or_else(|| RouterError::Config("missing afm-d".into()))?;
+    let all_names: Vec<String> = doc.providers.models.iter().map(|m| m.name.clone()).collect();
+    let eligible = hard_filter(doc, &all_names, None, Some("text"));
+    if eligible.is_empty() {
+        return Err(RouterError::FailClosed(
+            "no eligible models after hard constraints".into(),
+        ));
+    }
+    let task = afm_d_task_from(&req, eligible.clone(), afm);
+    let decisioner = AfmDDecisioner {
+        endpoint: afm.endpoint.clone(),
+    };
+    let mut decision = decisioner.route(task).await?;
+    decision.layer = "afm-d".into();
+    if let Some(fb) = &afm.fallback {
+        if !eligible.iter().any(|e| e.name == decision.model) {
+            decision.model = fb.clone();
+            decision.reason = format!("fallback:{fb}");
+        }
+    }
+    if !eligible.iter().any(|e| e.name == decision.model) && doc.provider(&decision.model).is_none()
+    {
+        return Err(RouterError::FailClosed(format!(
+            "afm-d model {} not eligible",
+            decision.model
+        )));
+    }
+    let mut fwd = req;
+    fwd.model = decision.model.clone();
+    Ok((decision, fwd, None, vec![]))
 }
 
 async fn route_agent(

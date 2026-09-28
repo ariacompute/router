@@ -332,6 +332,7 @@ mod tests {
                 plugins: serde_json::Value::Null,
             }),
             agent: None,
+            afm_d: None,
         };
         let mut signals = SignalSet::default();
         signals.hits.push(SignalHit {
