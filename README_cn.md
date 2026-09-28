@@ -574,7 +574,9 @@ routing / research 的质量模式（`--quality`）：`label`、`overlap`、`jud
 | 上游仅 pool | **直接** chat TokenHub（与 Track B 同一三档） | `--pool` + `--model-id` + `--api-key` + `--prices`；**无** `--router` | `qwen3.5-flash` / `glm-5.3` / `deepseek-v4-pro` 后端质量 / 成本阶梯（不启本地 router） |
 | 多 router ladder | 经 **live router** chat，再（可选）共享 pool | `--router` + `--entrypoint` / `--pick-header`，外加 `--pool` 做 always/oracle 基线 | 选路质量（aria-router vs vLLM SR 等）在 ADR-040 / MCQ 上的表现 |
 
-可选中间步：本地 serve `semantic-gateway` / `agent-gateway`，在仅 pool track 上追加 `--router aria_router=…`（及 `--pick-map`），使选路经 router 再进同一上游 pool。
+可选中间步：本地 serve `semantic-gateway` / `agent-gateway` / `afm-d-gateway`，在仅 pool track 上追加 `--router aria_router=…`（及 `--pick-map`），使选路经 router 再进同一上游 pool。
+
+下方片段：**A** = 上游仅 pool；**B** = semantic-auto vs vLLM SR；**C** = agent-auto vs vLLM SR；**D** = afm-d-auto vs vLLM SR。
 
 ```bash
 python -m unittest discover -s bench/tests -t .
@@ -610,10 +612,10 @@ python -m bench compare \
 ```
 
 ```bash
-# --- Track B：多 router ADR-040 ladder（aria-router vs vLLM Semantic Router）---
+# --- Track B: semantic ladder (aria-router vs vLLM Semantic Router) ---
 # 需本地 aria-router（:8899）、vLLM SR（:8890）以及 pool 后端（:9001+ / :8000）。
-# 自行启动 router（见 bench/vllm-sr/README.md）。下方 aria-router 配置二选一
-#（semantic XOR agent，同一 --bind）。--router = live 选路质量；--pool = always/oracle 基线。
+# 自行启动 router（见 bench/vllm-sr/README.md）。下方 aria-router 配置三选一
+#（semantic XOR agent XOR afm-d，同一 --bind）。--router = live 选路质量；--pool = always/oracle 基线。
 export GATEWAY_BASE=https://tokenhub.tencentmaas.com
 export GATEWAY_API_KEY=your-api-key
 
@@ -747,6 +749,68 @@ python -m bench compare \
   --corpus bench/corpus/mmlu_tiny.jsonl \
   --timeout 300 \
   --report ./out/agent_vs_vsr_compare.json
+```
+
+```bash
+# --- Track D：AFM-D ladder（aria-router vs vLLM Semantic Router）---
+# aria = System One Choice（afm-d-auto）；vllm_sr = keyword 基线（auto）。
+export GATEWAY_BASE=https://tokenhub.tencentmaas.com
+export GATEWAY_API_KEY=your-api-key
+# afm-d 所需 Encoder System One（afm-d-gateway 默认 endpoint :8011）：
+#   aria-engine serve --track encoder --bind 127.0.0.1:8011
+export DECISION_MODEL_URL=http://127.0.0.1:8011
+
+# 若 :8899 上已有 semantic/agent gateway，先停掉，再：
+aria-router serve \
+  --config config/examples/afm-d-gateway.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+# vllm-sr keyword 基线仍在 :8890（config-gateway.yaml）。
+
+python -m bench routing \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=ariacompute/afm-d-auto \
+  --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
+  --pick-header vllm_sr=x-vsr-selected-model \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --pool small=https://tokenhub.tencentmaas.com \
+  --pool mid=https://tokenhub.tencentmaas.com \
+  --pool large=https://tokenhub.tencentmaas.com \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
+  --quality label \
+  --corpus bench/corpus/routing_gateway_hard.json \
+  --timeout 300 \
+  --report ./out/afmd_vs_vsr_routing.json
+
+python -m bench compare \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=ariacompute/afm-d-auto \
+  --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
+  --pick-header vllm_sr=x-vsr-selected-model \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --pool small=https://tokenhub.tencentmaas.com \
+  --pool mid=https://tokenhub.tencentmaas.com \
+  --pool large=https://tokenhub.tencentmaas.com \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
+  --corpus bench/corpus/mmlu_tiny.jsonl \
+  --timeout 300 \
+  --report ./out/afmd_vs_vsr_compare.json
 ```
 详见 [`bench/corpus/README.md`](bench/corpus/README.md) 与 [`bench/vllm-sr/`](bench/vllm-sr/)（外部 `vllm-sr` 配置与 validate/serve）。
 

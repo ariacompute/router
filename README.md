@@ -579,7 +579,9 @@ Two common tracks (same `routing` / `compare` CLIs; different what you measure):
 | Upstream pool-only | Chat **directly** at TokenHub (same triad as Track B) | `--pool` + `--model-id` + `--api-key` + `--prices`; **no** `--router` | Backend quality / cost ladder among `qwen3.5-flash` / `glm-5.3` / `deepseek-v4-pro` (no local router process) |
 | Multi-router ladder | Chat via **live routers**, then (optionally) shared pools | `--router` + `--entrypoint` / `--pick-header`, plus `--pool` for always/oracle baselines | Router pick quality (aria-router vs vLLM SR, etc.) on ADR-040 / MCQ |
 
-Optional middle step: serve `semantic-gateway` / `agent-gateway` locally and add `--router aria_router=…` (+ `--pick-map`) to the pool-only track so picks go through the router into the same upstream pool.
+Optional middle step: serve `semantic-gateway` / `agent-gateway` / `afm-d-gateway` locally and add `--router aria_router=…` (+ `--pick-map`) to the pool-only track so picks go through the router into the same upstream pool.
+
+Tracks in the snippets below: **A** = upstream pool-only; **B** = semantic-auto vs vLLM SR; **C** = agent-auto vs vLLM SR; **D** = afm-d-auto vs vLLM SR.
 
 ```bash
 python -m unittest discover -s bench/tests -t .
@@ -615,10 +617,10 @@ python -m bench compare \
 ```
 
 ```bash
-# --- Track B: multi-router ADR-040 ladder (aria-router vs vLLM Semantic Router) ---
+# --- Track B: semantic ladder (aria-router vs vLLM Semantic Router) ---
 # Requires local aria-router (:8899), vLLM SR (:8890), and pool backends (:9001+ / :8000).
-# Start routers yourself (see bench/vllm-sr/README.md). Pick ONE aria-router config below
-# (semantic XOR agent — same --bind). --router = live pick quality; --pool = always/oracle baselines.
+# Start routers yourself (see bench/vllm-sr/README.md). Pick ONE aria-router config
+# (semantic XOR agent XOR afm-d — same --bind). --router = live pick quality; --pool = always/oracle baselines.
 export GATEWAY_BASE=https://tokenhub.tencentmaas.com
 export GATEWAY_API_KEY=your-api-key
 
@@ -752,6 +754,68 @@ python -m bench compare \
   --corpus bench/corpus/mmlu_tiny.jsonl \
   --timeout 300 \
   --report ./out/agent_vs_vsr_compare.json
+```
+
+```bash
+# --- Track D: AFM-D ladder (aria-router vs vLLM Semantic Router) ---
+# aria = System One Choice (afm-d-auto); vllm_sr = keyword baseline (auto).
+export GATEWAY_BASE=https://tokenhub.tencentmaas.com
+export GATEWAY_API_KEY=your-api-key
+# Encoder System One for afm-d (default afm-d-gateway endpoint :8011):
+#   aria-engine serve --track encoder --bind 127.0.0.1:8011
+export DECISION_MODEL_URL=http://127.0.0.1:8011
+
+# Stop semantic/agent gateway if running on :8899, then:
+aria-router serve \
+  --config config/examples/afm-d-gateway.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+# vllm-sr keyword baseline remains on :8890 (config-gateway.yaml).
+
+python -m bench routing \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=ariacompute/afm-d-auto \
+  --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
+  --pick-header vllm_sr=x-vsr-selected-model \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --pool small=https://tokenhub.tencentmaas.com \
+  --pool mid=https://tokenhub.tencentmaas.com \
+  --pool large=https://tokenhub.tencentmaas.com \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
+  --quality label \
+  --corpus bench/corpus/routing_gateway_hard.json \
+  --timeout 300 \
+  --report ./out/afmd_vs_vsr_routing.json
+
+python -m bench compare \
+  --router aria_router=http://127.0.0.1:8899 \
+  --router vllm_sr=http://127.0.0.1:8890 \
+  --entrypoint aria_router=ariacompute/afm-d-auto \
+  --entrypoint vllm_sr=auto \
+  --pick-header aria_router=x-aria-router-model \
+  --pick-header vllm_sr=x-vsr-selected-model \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --pool small=https://tokenhub.tencentmaas.com \
+  --pool mid=https://tokenhub.tencentmaas.com \
+  --pool large=https://tokenhub.tencentmaas.com \
+  --model-id small=qwen3.5-flash \
+  --model-id mid=glm-5.3 \
+  --model-id large=deepseek-v4-pro \
+  --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
+  --prices bench/prices/ariamodel.json \
+  --corpus bench/corpus/mmlu_tiny.jsonl \
+  --timeout 300 \
+  --report ./out/afmd_vs_vsr_compare.json
 ```
 See [`bench/corpus/README.md`](bench/corpus/README.md) and [`bench/vllm-sr/`](bench/vllm-sr/) (external `vllm-sr` config + validate/serve). 
 
