@@ -101,6 +101,9 @@ recipes:
           - name: needs_explain
             operator: OR
             keywords: ["explain", "walk me through"]
+          - name: needs_intro
+            operator: OR
+            keywords: ["introduce", "introduction to", "what is", "what are", "how to", "how does", "overview of", "teach"]
         language:
           - name: english
             code: en
@@ -164,6 +167,23 @@ recipes:
                 x-aria-route: explanatory
             - name: request-params
               max_tokens: 64
+        - name: intro_teach
+          description: Intro / teaching asks (introduce X, what is X, how to) -> general
+          priority: 95
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_intro
+          modelRefs:
+            - model: local/general
+          algorithm: static
+          plugins:
+            - name: system-prompt
+              content: Answer thoroughly and teach the concept; cite the routed model.
+            - name: header-mutation
+              set:
+                x-aria-route: intro_teach
         - name: long_context
           description: Long prompt → latency-aware ranking
           priority: 80

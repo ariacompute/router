@@ -77,6 +77,9 @@ recipes:
           - name: needs_explain
             operator: OR
             keywords: ["explain", "walk me through"]
+          - name: needs_intro
+            operator: OR
+            keywords: ["introduce", "introduction to", "what is", "what are", "how to", "how does", "overview of", "teach"]
           - name: factoid_small
             operator: OR
             keywords:
@@ -153,6 +156,23 @@ recipes:
             - name: header-mutation
               set:
                 x-aria-route: explanatory
+        - name: intro_teach
+          description: Intro / teaching asks (introduce X, what is X, how to) -> large
+          priority: 95
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_intro
+          modelRefs:
+            - model: ariacompute/ariamodel-large
+          algorithm: static
+          plugins:
+            - name: system-prompt
+              content: Answer thoroughly and teach the concept; cite the routed model.
+            - name: header-mutation
+              set:
+                x-aria-route: intro_teach
         - name: factoid
           description: Short factual prompts → small (beats systems_mid traps)
           priority: 90

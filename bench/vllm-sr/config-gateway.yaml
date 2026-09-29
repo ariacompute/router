@@ -74,6 +74,9 @@ routing:
       - name: needs_explain
         operator: OR
         keywords: ["explain", "walk me through"]
+      - name: needs_intro
+        operator: OR
+        keywords: ["introduce", "introduction to", "what is", "what are", "how to", "how does", "overview of", "teach"]
       # Systems / design questions (bench tech-q1 / tech-q3) → mid tier.
       - name: needs_mid
         operator: OR
@@ -151,6 +154,29 @@ routing:
             add:
               - name: x-aria-route
                 value: explanatory
+    - name: intro_teach
+      description: Intro / teaching asks (introduce X, what is X, how to) -> large
+      priority: 95
+      rules:
+        operator: AND
+        conditions:
+          - type: keyword
+            name: needs_intro
+      modelRefs:
+        - model: ariacompute/ariamodel-large
+      algorithm:
+        type: static
+      plugins:
+        - type: system_prompt
+          configuration:
+            enabled: true
+            mode: insert
+            system_prompt: Answer thoroughly and teach the concept; cite the routed model.
+        - type: header_mutation
+          configuration:
+            add:
+              - name: x-aria-route
+                value: intro_teach
         # No request_params max_tokens_limit — Gateway large models use reasoning
         # tokens first; a low cap yields empty Playground content.
     - name: long_context
