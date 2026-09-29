@@ -4,10 +4,10 @@
 # Listener :8890 (aria-router stays on :8899).
 # Schema: https://vllm-sr.ai/docs/installation/configuration/
 # Requires: export GATEWAY_API_KEY=…  (never commit secrets).
-# Do not enable semantic-cache here unless embedding models are ready
+# Do not enable semantic/response-cache here unless embedding models are ready
 # (mmbert missing → Playground 500 on cache lookup).
-# HTTPS Gateway backends need provider+type (openai) or auth resolves to
-# "provider profile has empty type" → ExtProc 500 after a successful route.
+# HTTPS Gateway backends need provider: openai (canonical; do not set
+# backend_refs[].type — Go runtime rejects that deprecated field).
 # base_url must include /v1 (Envoy uses chat_path=/chat/completions relative to it).
 
 version: v0.3
@@ -20,7 +20,8 @@ listeners:
 
 providers:
   defaults:
-    default_model: ariacompute/ariamodel-mid
+    # Canonical v0.3 key is `model` (not deprecated `default_model`).
+    model: ariacompute/ariamodel-mid
   models:
     - name: ariacompute/ariamodel-small
       provider_model_id: qwen3.5-flash
@@ -30,7 +31,6 @@ providers:
           protocol: https
           weight: 100
           provider: openai
-          type: openai
           auth_header: Authorization
           auth_prefix: Bearer
           api_key_env: GATEWAY_API_KEY
@@ -42,7 +42,6 @@ providers:
           protocol: https
           weight: 100
           provider: openai
-          type: openai
           auth_header: Authorization
           auth_prefix: Bearer
           api_key_env: GATEWAY_API_KEY
@@ -54,7 +53,6 @@ providers:
           protocol: https
           weight: 100
           provider: openai
-          type: openai
           auth_header: Authorization
           auth_prefix: Bearer
           api_key_env: GATEWAY_API_KEY
@@ -232,7 +230,10 @@ global:
       metrics:
         enabled: true
   stores:
-    # Default install enables semantic_cache; without mmbert embeddings
-    # cache lookups fail closed as Playground 500.
+    # Keep the deprecated alias key: `vllm-sr serve` injects
+    # global.stores.semantic_cache defaults into runtime-config.yaml. Setting
+    # response_cache alongside that injection fatals with
+    # "response_cache conflicts with deprecated … semantic_cache".
+    # Without mmbert embeddings, leave enabled: false (else Playground 500).
     semantic_cache:
       enabled: false

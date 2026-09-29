@@ -31,9 +31,9 @@ vllm-sr serve --config bench/vllm-sr/config-gateway.yaml
 
 Data plane for clients / bench: `http://127.0.0.1:8890`.
 
-`config-gateway.yaml` routing (**baseline frozen**): keyword explain → large; systems/trade-off (`needs_mid` incl. `architecture` → `systems_mid`) → mid; multi-turn / multi-question → mid; else static → small. `default_model` = mid. No projection conditions / factoid_small / pricing — those stay on aria only. Bench hard corpus: [`../corpus/routing_gateway_hard.json`](../corpus/routing_gateway_hard.json) + [`../prices/ariamodel.json`](../prices/ariamodel.json).
+`config-gateway.yaml` routing (**baseline frozen**): keyword explain → large; systems/trade-off (`needs_mid` incl. `architecture` → `systems_mid`) → mid; multi-turn / multi-question → mid; else static → small. `providers.defaults.model` = mid. No projection conditions / factoid_small / pricing — those stay on aria only. Bench hard corpus: [`../corpus/routing_gateway_hard.json`](../corpus/routing_gateway_hard.json) + [`../prices/ariamodel.json`](../prices/ariamodel.json).
 
-Gateway `backend_refs` must set `provider`/`type: openai` (+ Bearer `api_key_env`); missing `type` → auth 500 after route. Use `base_url: https://gateway.ariacompute.com/v1` (without `/v1`, Envoy posts `/chat/completions` → Gateway 405). Keep `global.stores.semantic_cache.enabled: false` unless mmbert embeddings are ready.
+Gateway `backend_refs` must set `provider: openai` (+ Bearer `api_key_env`). Do **not** set deprecated `backend_refs[].type` or `providers.defaults.default_model` — the Go runtime in `vllm-sr serve` rejects them (`runtime_config_load_failed`). Use `base_url: …/v1` (without `/v1`, Envoy posts `/chat/completions` → Gateway 405). Disable cache via `global.stores.semantic_cache.enabled: false` (CLI still injects that key into runtime-config; do not also set `response_cache` or serve fatals on a key conflict).
 
 ## Point bench at it
 

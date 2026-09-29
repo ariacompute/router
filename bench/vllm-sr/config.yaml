@@ -14,7 +14,8 @@ listeners:
 
 providers:
   defaults:
-    default_model: local/general
+    # Canonical v0.3 key is `model` (not deprecated `default_model`).
+    model: local/general
   models:
     - name: local/general
       provider_model_id: my-served-model
