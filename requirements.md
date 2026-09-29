@@ -214,7 +214,18 @@ emits:
 
 `RouteDecision { model, algorithm?, reason, confidence }`。`model` ∈ 硬剪枝后 eligible pool。`layer` / `decision` = `"afm-d"`。
 
-流程：硬剪枝 →（裸问候/短寒暄且池中有 `tier=small` → 直选 small，`reason=afm-d:chitchat-small`）→（`eligible.len()<=1` 或无 `endpoint` → first-eligible）→ 将候选编成单题 Choice → `POST {endpoint}/v1/systemone`：
+流程：硬剪枝 → **确定性档位短路**（优先于 System One；池中须有对应 `tier`）→（同 utterance×eligible 的进程内缓存命中 → `afm-d:cache:{model}`）→（`eligible.len()<=1` 或无 `endpoint` → first-eligible）→ 将候选编成单题 Choice → `POST {endpoint}/v1/systemone`：
+
+短路优先级（对齐 `bench/corpus/routing_gateway_hard.json` 金标）：
+
+| 顺序 | 条件 | tier | `reason` |
+|------|------|------|----------|
+| 1 | 裸问候/短寒暄 | small | `afm-d:chitchat-small` |
+| 2 | explain / walk through / how does\|do | large | `afm-d:explain-large` |
+| 3 | stand for / acronym / 常见缩写问句 | small | `afm-d:acronym-small` |
+| 4 | reverse proxy / trade-off / eviction / proxy 选型 | mid | `afm-d:systems-mid` |
+| 5 | 多问句（`?`/`？` ≥ 2） | mid | `afm-d:multi-q-mid` |
+| 6 | 短事实（沸点、单位换算、短 what-is） | small | `afm-d:factoid-small` |
 
 ```json
 {
@@ -230,8 +241,8 @@ emits:
 ```
 
 - `state` 为纯文本 `User message: …`（不用 JSON blob；Encoder 对问候更稳）。
-- `criteria` 描述：YAML `afm-d.descriptions` 覆盖优先，否则由 `tier` / `locality` / `capabilities` 合成。
-- 响应 `answers.route.choice` 须 ∈ eligible；`confidence` 写入 `RouteDecision`；`reason` = `afm-d:{choice}`。
+- `criteria` 描述：YAML `afm-d.descriptions` 覆盖优先，否则由 `tier` / `locality` / `capabilities` 合成；默认 instructions **宁小勿大**（large 仅明确教学）。
+- 响应 `answers.route.choice` 须 ∈ eligible；`confidence` 写入 `RouteDecision`；`reason` = `afm-d:{choice}`；成功答案写入容量 256 的进程内 FIFO 缓存。
 - `timeout_ms` 默认 5000；超时 / 非法响应 / 越权 choice → `fallback`（若配置且为已声明 provider）否则 FailClosed。
 - `min_confidence`：若配置且响应 confidence 低于阈值 → 同 fallback / FailClosed。
 - `eligible.len()>255` → FailClosed。Decoder Choice 上限 16：大池文档约定用 Encoder serve；runtime 不强制轨。

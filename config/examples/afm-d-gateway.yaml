@@ -75,15 +75,15 @@ recipes:
       timeout_ms: 5000
       fallback: ariacompute/ariamodel-mid
       instructions: |
-        Pick the cheapest sufficient model tier for the user message.
-        small = greetings/thanks/short chitchat/factoids/acronyms
-        mid = systems judgment and trade-offs
-        large = teaching and how-it-works explanations
-        Greetings (hi/hello/hey) are always small.
+        Pick the cheapest sufficient model tier for the user message. Prefer smaller tiers.
+        small = greetings/thanks/chitchat, factoids, acronyms/stand-for, unit conversions, one-line definitions
+        mid = systems judgment, trade-offs, reverse-proxy/placement, multi-question comparisons
+        large = ONLY explicit teaching / how-it-works / walkthrough (explain, walk me through, how does X work)
+        Never pick large for "What does X stand for?", boiling points, unit conversion, or short facts.
       descriptions:
-        ariacompute/ariamodel-small: small — greetings (hi/hello/hey), thanks, short chitchat, factoids, acronyms
-        ariacompute/ariamodel-mid: mid — systems judgment and trade-offs
-        ariacompute/ariamodel-large: large — teaching and how-it-works explanations
+        ariacompute/ariamodel-small: small — greetings, factoids, acronyms/stand-for, unit conversion, one-line definitions (never teaching)
+        ariacompute/ariamodel-mid: mid — systems judgment, trade-offs, reverse-proxy placement, multi-question comparisons
+        ariacompute/ariamodel-large: large — only explain / walk-through / how-it-works teaching (not acronyms or short facts)
 
 global:
   require_api_key: false
