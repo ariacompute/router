@@ -224,8 +224,9 @@ emits:
 | 2 | explain / walk through / how does\|do | large | `afm-d:explain-large` |
 | 3 | stand for / acronym / 常见缩写问句 | small | `afm-d:acronym-small` |
 | 4 | reverse proxy / trade-off / eviction / proxy 选型 | mid | `afm-d:systems-mid` |
-| 5 | 多问句（`?`/`？` ≥ 2） | mid | `afm-d:multi-q-mid` |
-| 6 | 短事实（沸点、单位换算、短 what-is） | small | `afm-d:factoid-small` |
+| 5 | 多问句（题干 `?`/`？` ≥ 2） | mid | `afm-d:multi-q-mid` |
+| 6 | 封闭题（MCQ `A.`/`B.` 或 “Answer with the letter…” / “Answer concisely.”） | small | `afm-d:mcq-small` |
+| 7 | 短事实（沸点、单位换算、短 what-is/which/is/name；按**题干首行**计词，忽略选项块） | small | `afm-d:factoid-small` |
 
 ```json
 {

@@ -15,10 +15,10 @@ const MAX_CHOICE_OPTIONS: usize = 255;
 const DECISION_CACHE_CAP: usize = 256;
 const DEFAULT_INSTRUCTIONS: &str = "\
 Pick the cheapest sufficient model tier for the user message. Prefer smaller tiers.
-small = greetings/thanks/chitchat, factoids, acronyms/stand-for, unit conversions, one-line definitions
+small = greetings/chitchat, factoids, acronyms/stand-for, unit conversions, MCQ letter answers, yes/no, one-line definitions
 mid = systems judgment, trade-offs, reverse-proxy/placement, multi-question comparisons
-large = ONLY explicit teaching / how-it-works / walkthrough (explain, walk me through, how does X work)
-Never pick large for \"What does X stand for?\", boiling points, unit conversion, or short facts.";
+large = ONLY explicit teaching / how-it-works / walkthrough (explain, walk me through, how does X work) — never MCQ letter-only prompts
+Never pick large for \"What does X stand for?\", boiling points, unit conversion, short facts, or multiple-choice letter answers.";
 
 /// Normalize user text for shortcut matching (lowercase, strip punctuation).
 fn normalize_utterance(text: &str) -> String {
@@ -33,6 +33,36 @@ fn normalize_utterance(text: &str) -> String {
         }
     }
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// First substantive question line (before MCQ options / grading instructions).
+/// Compare benches send `format_mcq_prompt` blobs; factoid checks must use the head,
+/// not the option list word count.
+fn question_head(raw: &str) -> String {
+    for line in raw.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let lower = t.to_ascii_lowercase();
+        if lower.starts_with("answer with") || lower.starts_with("answer concisely") {
+            break;
+        }
+        // Option lines: "A. …", "B) …", "(A) …"
+        let bytes = t.as_bytes();
+        if bytes.len() >= 2 {
+            let c0 = bytes[0].to_ascii_uppercase();
+            if (b'A'..=b'J').contains(&c0) && matches!(bytes[1], b'.' | b')' | b':' | b' ') {
+                break;
+            }
+        }
+        return t.to_string();
+    }
+    raw.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or(raw)
+        .to_string()
 }
 
 /// Exact phrases that must route to the small tier without calling System One.
@@ -83,50 +113,93 @@ fn question_mark_count(raw: &str) -> usize {
     raw.chars().filter(|c| *c == '?' || *c == '？').count()
 }
 
-fn is_short_factoid(normalized: &str, raw: &str) -> bool {
-    if is_explain_intent(normalized) || is_systems_mid(normalized) {
+/// Closed-form MCQ / short-answer grading prompts (bench compare style).
+/// Large/reasoning models often waste low max_tokens on hidden thinking and return
+/// empty letters — prefer small.
+fn is_closed_form_prompt(raw: &str, normalized: &str) -> bool {
+    if normalized.contains("answer with the letter")
+        || normalized.contains("correct option only")
+        || normalized.contains("answer concisely")
+    {
+        return true;
+    }
+    // Numbered/lettered option block present in the user message.
+    let mut saw_a = false;
+    let mut saw_b = false;
+    for line in raw.lines() {
+        let t = line.trim().as_bytes();
+        if t.len() < 2 {
+            continue;
+        }
+        let c0 = t[0].to_ascii_uppercase();
+        if !(b'A'..=b'J').contains(&c0) || !matches!(t[1], b'.' | b')' | b':') {
+            continue;
+        }
+        if c0 == b'A' {
+            saw_a = true;
+        }
+        if c0 == b'B' {
+            saw_b = true;
+        }
+    }
+    saw_a && saw_b
+}
+
+fn is_short_factoid(head_normalized: &str, raw_head: &str) -> bool {
+    if is_explain_intent(head_normalized) || is_systems_mid(head_normalized) {
         return false;
     }
-    // Multi-question comparisons belong to mid, not factoid-small.
-    if question_mark_count(raw) >= 2 {
+    if question_mark_count(raw_head) >= 2 {
         return false;
     }
-    let words = normalized.split_whitespace().count();
+    let words = head_normalized.split_whitespace().count();
     if words > 24 {
         return false;
     }
-    normalized.contains("boiling point")
-        || normalized.contains("convert ")
-        || normalized.contains("celsius")
-        || normalized.contains("fahrenheit")
-        || normalized.contains("sea level")
-        || (normalized.starts_with("what is the ") && words <= 16)
-        || (normalized.starts_with("what is ") && words <= 10 && !normalized.contains("trade"))
+    head_normalized.contains("boiling point")
+        || head_normalized.contains("convert ")
+        || head_normalized.contains("celsius")
+        || head_normalized.contains("fahrenheit")
+        || head_normalized.contains("sea level")
+        || (head_normalized.starts_with("what is the ") && words <= 16)
+        || (head_normalized.starts_with("what is ") && words <= 12 && !head_normalized.contains("trade"))
+        || (head_normalized.starts_with("which ") && words <= 16)
+        || (head_normalized.starts_with("in which ") && words <= 16)
+        || (head_normalized.starts_with("is ") && words <= 12)
+        || (head_normalized.starts_with("name ") && words <= 12)
 }
 
 /// Deterministic tier before System One. Priority:
-/// chitchat → small; explain → large; acronym → small; systems/multi-q → mid; factoid → small.
+/// chitchat → small; explain → large; acronym → small; systems/multi-q → mid;
+/// closed-form MCQ → small; factoid (question head) → small.
 fn shortcut_tier(raw: &str) -> Option<(&'static str, &'static str)> {
     let n = normalize_utterance(raw);
     if n.is_empty() {
         return None;
     }
-    if is_trivial_chitchat(&n) {
+    let head = question_head(raw);
+    let head_n = normalize_utterance(&head);
+
+    if is_trivial_chitchat(&n) || is_trivial_chitchat(&head_n) {
         return Some(("small", "afm-d:chitchat-small"));
     }
-    if is_explain_intent(&n) {
+    // Explain on the question head only — ignore "Answer with…" boilerplate.
+    if is_explain_intent(&head_n) {
         return Some(("large", "afm-d:explain-large"));
     }
-    if is_acronym_or_stand_for(&n) {
+    if is_acronym_or_stand_for(&n) || is_acronym_or_stand_for(&head_n) {
         return Some(("small", "afm-d:acronym-small"));
     }
-    if is_systems_mid(&n) {
+    if is_systems_mid(&n) || is_systems_mid(&head_n) {
         return Some(("mid", "afm-d:systems-mid"));
     }
-    if question_mark_count(raw) >= 2 {
+    if question_mark_count(&head) >= 2 {
         return Some(("mid", "afm-d:multi-q-mid"));
     }
-    if is_short_factoid(&n, raw) {
+    if is_closed_form_prompt(raw, &n) {
+        return Some(("small", "afm-d:mcq-small"));
+    }
+    if is_short_factoid(&head_n, &head) {
         return Some(("small", "afm-d:factoid-small"));
     }
     None
@@ -906,6 +979,91 @@ mod tests {
         assert_eq!(hits, 12);
         // Offline label quality lower bound when all corpus rows shortcut correctly.
         assert!((hits as f64) / 12.0 >= 0.83);
+    }
+
+    /// Mirror of `bench.compare.grade.format_mcq_prompt` for compare corpus rows.
+    fn format_mcq_prompt(question: &str, choices: Option<&[&str]>) -> String {
+        let mut lines = vec![question.trim().to_string(), String::new()];
+        if let Some(choices) = choices {
+            for (i, c) in choices.iter().enumerate() {
+                let letter = (b'A' + i as u8) as char;
+                lines.push(format!("{letter}. {c}"));
+            }
+            lines.push(String::new());
+            lines.push("Answer with the letter of the correct option only.".into());
+        } else {
+            lines.push("Answer concisely.".into());
+        }
+        lines.join("\n")
+    }
+
+    #[test]
+    fn shortcut_tier_covers_mmlu_tiny_compare_prompts() {
+        // Compare corpus prompts are MCQ/closed-form — must NOT escalate to large
+        // (deepseek + low max_tokens often returns empty letters).
+        let cases: &[(&str, Option<&[&str]>, &str, &str)] = &[
+            (
+                "What is the primary pigment used in photosynthesis?",
+                Some(&["Chlorophyll", "Hemoglobin", "Melanin", "Keratin"]),
+                "small",
+                "afm-d:mcq-small",
+            ),
+            (
+                "What is the SI unit of electric current?",
+                Some(&["Volt", "Ampere", "Ohm", "Watt"]),
+                "small",
+                "afm-d:mcq-small",
+            ),
+            (
+                "In which year did the first Moon landing occur?",
+                Some(&["1965", "1969", "1972", "1959"]),
+                "small",
+                "afm-d:mcq-small",
+            ),
+            (
+                "Which data structure uses FIFO ordering?",
+                Some(&["Stack", "Queue", "Tree", "Graph"]),
+                "small",
+                "afm-d:mcq-small",
+            ),
+            ("Is 2 a prime number?", None, "small", "afm-d:mcq-small"),
+            ("Is the sun a planet?", None, "small", "afm-d:mcq-small"),
+            (
+                "Name the Linux kernel creator (surname).",
+                None,
+                "small",
+                "afm-d:mcq-small",
+            ),
+            (
+                "What does the term architecture stand for as a CS acronym quiz?",
+                Some(&[
+                    "A fixed ISO standard code",
+                    "It is not a fixed acronym",
+                    "Only means CPU microarchitecture",
+                    "Only means cloud region layout",
+                ]),
+                "small",
+                "afm-d:acronym-small",
+            ),
+            (
+                "What does HTTP stand for?",
+                Some(&[
+                    "HyperText Transfer Protocol",
+                    "High Transfer Text Pipe",
+                    "Host Tunnel Transport Path",
+                    "Hybrid Transport Type Protocol",
+                ]),
+                "small",
+                "afm-d:acronym-small",
+            ),
+        ];
+        for (q, choices, tier, reason) in cases {
+            let prompt = format_mcq_prompt(q, *choices);
+            let got = shortcut_tier(&prompt).unwrap_or_else(|| panic!("no shortcut for {q}"));
+            assert_eq!(got.0, *tier, "tier mismatch for {q}");
+            assert_eq!(got.1, *reason, "reason mismatch for {q}");
+            assert_ne!(got.0, "large", "compare closed-form must not pick large: {q}");
+        }
     }
 
     #[tokio::test]
