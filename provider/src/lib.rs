@@ -59,7 +59,10 @@ impl PoolState {
     }
 
     pub fn latency_map(&self) -> HashMap<String, f32> {
-        self.latency_ms.lock().map(|g| g.clone()).unwrap_or_default()
+        self.latency_ms
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
     }
 
     pub fn failures_map(&self) -> HashMap<String, u32> {
@@ -74,12 +77,13 @@ pub async fn forward(
     extra_headers: &[(String, String)],
     pool: &PoolState,
 ) -> Result<Value, RouterError> {
-    let provider = doc.provider(model).ok_or_else(|| {
-        RouterError::FailClosed(format!("unknown provider model {model}"))
-    })?;
+    let provider = doc
+        .provider(model)
+        .ok_or_else(|| RouterError::FailClosed(format!("unknown provider model {model}")))?;
     let backend = pick_backend(provider)?;
     let url = format!("{}/v1/chat/completions", backend.url());
-    let mut body = serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
+    let mut body =
+        serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
     if let Some(obj) = body.as_object_mut() {
         obj.insert(
             "model".into(),
@@ -103,7 +107,10 @@ pub async fn forward(
         RouterError::Upstream(e.to_string())
     })?;
     let status = resp.status();
-    let text = resp.text().await.map_err(|e| RouterError::Upstream(e.to_string()))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| RouterError::Upstream(e.to_string()))?;
     let ms = t0.elapsed().as_millis() as f32;
     if !status.is_success() {
         pool.record(model, ms, false);
@@ -140,12 +147,13 @@ pub async fn forward_sse_stream(
     extra_headers: &[(String, String)],
     pool: &PoolState,
 ) -> Result<SseByteStream, RouterError> {
-    let provider = doc.provider(model).ok_or_else(|| {
-        RouterError::FailClosed(format!("unknown provider model {model}"))
-    })?;
+    let provider = doc
+        .provider(model)
+        .ok_or_else(|| RouterError::FailClosed(format!("unknown provider model {model}")))?;
     let backend = pick_backend(provider)?;
     let url = format!("{}/v1/chat/completions", backend.url());
-    let mut body = serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
+    let mut body =
+        serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
     if let Some(obj) = body.as_object_mut() {
         obj.insert(
             "model".into(),
@@ -171,7 +179,10 @@ pub async fn forward_sse_stream(
     })?;
     let status = resp.status();
     if !status.is_success() {
-        let text = resp.text().await.map_err(|e| RouterError::Upstream(e.to_string()))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| RouterError::Upstream(e.to_string()))?;
         pool.record(model, t0.elapsed().as_millis() as f32, false);
         return Err(RouterError::Upstream(format!("{status}: {text}")));
     }
@@ -180,9 +191,10 @@ pub async fn forward_sse_stream(
     // (it holds `&PoolState` for the request). Here we only expose bytes + accumulation.
     let _ = t0;
     let _ = pool;
-    let inner: BoxByteStream = Box::pin(resp.bytes_stream().map(|item| {
-        item.map_err(|e| RouterError::Upstream(e.to_string()))
-    }));
+    let inner: BoxByteStream = Box::pin(
+        resp.bytes_stream()
+            .map(|item| item.map_err(|e| RouterError::Upstream(e.to_string()))),
+    );
     Ok(SseByteStream {
         inner,
         buf: Vec::new(),

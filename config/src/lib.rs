@@ -584,12 +584,47 @@ pub struct AgentRecipe {
     pub endpoint: Option<String>,
 }
 
+/// System One backend track for AFM-D (`afm-d.track`).
+///
+/// - [`AfmDTrack::Encoder`]: aria-engine `--track encoder` (default port **8010**); Choice pool up to 255.
+/// - [`AfmDTrack::Decoder`]: aria-engine `--track decoder` / `afm_d.dd.serve` (default port **8011**); Choice pool **2–16**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AfmDTrack {
+    Encoder,
+    Decoder,
+}
+
+impl AfmDTrack {
+    /// Max eligible models allowed when calling System One for this track.
+    pub fn max_choice_options(self) -> usize {
+        match self {
+            Self::Encoder => 255,
+            Self::Decoder => 16,
+        }
+    }
+}
+
+impl std::fmt::Display for AfmDTrack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Encoder => write!(f, "encoder"),
+            Self::Decoder => write!(f, "decoder"),
+        }
+    }
+}
+
 /// AFM-D System One decisioner recipe (`router: afm-d`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AfmDRecipe {
     #[serde(default)]
     pub endpoint: Option<String>,
+    /// Optional `encoder` | `decoder`. When set, eligible-pool size is checked
+    /// against the track contract (decoder: ≤16; encoder: ≤255).
+    /// Unset → encoder pool ceiling (255). Gateway starter defaults to `encoder` @ :8010.
+    #[serde(default)]
+    pub track: Option<AfmDTrack>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
     #[serde(default)]
@@ -671,8 +706,8 @@ impl RouterDocument {
     }
 
     pub fn from_json_str(raw: &str) -> Result<Self, RouterError> {
-        let doc: Self = serde_json::from_str(raw)
-            .map_err(|e| RouterError::Config(format!("json: {e}")))?;
+        let doc: Self =
+            serde_json::from_str(raw).map_err(|e| RouterError::Config(format!("json: {e}")))?;
         doc.validate()?;
         Ok(doc)
     }
@@ -682,9 +717,8 @@ impl RouterDocument {
     }
 
     pub fn load_path(path: impl AsRef<Path>) -> Result<Self, RouterError> {
-        let raw = std::fs::read_to_string(path.as_ref()).map_err(|e| {
-            RouterError::Io(format!("read {}: {e}", path.as_ref().display()))
-        })?;
+        let raw = std::fs::read_to_string(path.as_ref())
+            .map_err(|e| RouterError::Io(format!("read {}: {e}", path.as_ref().display())))?;
         Self::from_yaml_str(&raw)
     }
 
@@ -726,7 +760,10 @@ impl RouterDocument {
                         )));
                     }
                     let routing = recipe.routing.as_ref().ok_or_else(|| {
-                        RouterError::Config(format!("semantic recipe {} missing routing", recipe.name))
+                        RouterError::Config(format!(
+                            "semantic recipe {} missing routing",
+                            recipe.name
+                        ))
                     })?;
                     self.validate_routing(routing)?;
                 }
@@ -737,19 +774,18 @@ impl RouterDocument {
                             recipe.name
                         )));
                     }
-                    if recipe.routing.as_ref().is_some_and(|r| {
-                        !r.signals.keywords.is_empty() || !r.decisions.is_empty()
-                    }) {
+                    if recipe
+                        .routing
+                        .as_ref()
+                        .is_some_and(|r| !r.signals.keywords.is_empty() || !r.decisions.is_empty())
+                    {
                         return Err(RouterError::Config(format!(
                             "agent recipe {} must not contain signals/decisions",
                             recipe.name
                         )));
                     }
                     let agent = recipe.agent.as_ref().ok_or_else(|| {
-                        RouterError::Config(format!(
-                            "agent recipe {} missing agent:",
-                            recipe.name
-                        ))
+                        RouterError::Config(format!("agent recipe {} missing agent:", recipe.name))
                     })?;
                     if let Some(fb) = &agent.fallback {
                         if self.provider(fb).is_none() {
@@ -775,19 +811,18 @@ impl RouterDocument {
                             recipe.name
                         )));
                     }
-                    if recipe.routing.as_ref().is_some_and(|r| {
-                        !r.signals.keywords.is_empty() || !r.decisions.is_empty()
-                    }) {
+                    if recipe
+                        .routing
+                        .as_ref()
+                        .is_some_and(|r| !r.signals.keywords.is_empty() || !r.decisions.is_empty())
+                    {
                         return Err(RouterError::Config(format!(
                             "afm-d recipe {} must not contain signals/decisions",
                             recipe.name
                         )));
                     }
                     let afm = recipe.afm_d.as_ref().ok_or_else(|| {
-                        RouterError::Config(format!(
-                            "afm-d recipe {} missing afm-d:",
-                            recipe.name
-                        ))
+                        RouterError::Config(format!("afm-d recipe {} missing afm-d:", recipe.name))
                     })?;
                     if let Some(fb) = &afm.fallback {
                         if self.provider(fb).is_none() {
@@ -801,6 +836,26 @@ impl RouterDocument {
                         if !(0.0..=1.0).contains(&c) {
                             return Err(RouterError::Config(format!(
                                 "afm-d recipe {} min_confidence must be 0..=1, got {c}",
+                                recipe.name
+                            )));
+                        }
+                    }
+                    if let Some(track) = afm.track {
+                        // Eligible pool starts from text-capable providers; fail closed
+                        // early when the catalog already exceeds the track Choice limit.
+                        let text_n = self
+                            .providers
+                            .models
+                            .iter()
+                            .filter(|m| {
+                                let mod_ = m.modality.trim();
+                                mod_.is_empty() || mod_.eq_ignore_ascii_case("text")
+                            })
+                            .count();
+                        let max = track.max_choice_options();
+                        if text_n > max {
+                            return Err(RouterError::Config(format!(
+                                "afm-d recipe {} track={track} allows at most {max} text providers, got {text_n}",
                                 recipe.name
                             )));
                         }
@@ -833,7 +888,9 @@ impl RouterDocument {
         for d in &routing.decisions {
             if let Some(algo) = &d.algorithm {
                 if !KNOWN_ALGOS.contains(&algo.as_str()) {
-                    return Err(RouterError::Unsupported(format!("unknown algorithm {algo}")));
+                    return Err(RouterError::Unsupported(format!(
+                        "unknown algorithm {algo}"
+                    )));
                 }
             }
             let mut retention_count = 0usize;
@@ -942,9 +999,8 @@ pub fn aria_home() -> Result<PathBuf, RouterError> {
             return Ok(PathBuf::from(override_home));
         }
     }
-    let home = dirs::home_dir().ok_or_else(|| {
-        RouterError::Io("could not resolve home directory".into())
-    })?;
+    let home = dirs::home_dir()
+        .ok_or_else(|| RouterError::Io("could not resolve home directory".into()))?;
     Ok(home.join(".ariacompute"))
 }
 
@@ -1026,15 +1082,17 @@ pub fn clear_cli_config() -> Result<Option<PathBuf>, RouterError> {
 }
 
 /// Expand `~/` or leave absolute/relative paths as-is under aria home resolution.
-pub fn resolve_home_path(raw: &str, default: fn() -> Result<PathBuf, RouterError>) -> Result<PathBuf, RouterError> {
+pub fn resolve_home_path(
+    raw: &str,
+    default: fn() -> Result<PathBuf, RouterError>,
+) -> Result<PathBuf, RouterError> {
     let t = raw.trim();
     if t.is_empty() {
         return default();
     }
     if let Some(rest) = t.strip_prefix("~/") {
-        let home = dirs::home_dir().ok_or_else(|| {
-            RouterError::Io("could not resolve home directory".into())
-        })?;
+        let home = dirs::home_dir()
+            .ok_or_else(|| RouterError::Io("could not resolve home directory".into()))?;
         return Ok(home.join(rest));
     }
     if t.starts_with('/') {
@@ -1121,10 +1179,7 @@ fn patch_setup_models(doc: &mut serde_yaml::Value, opts: &SetupModelOpts) {
                             continue;
                         };
                         if let Some(url) = opts.base_url.as_deref() {
-                            rm.insert(
-                                serde_yaml::Value::String("base_url".into()),
-                                yaml_str(url),
-                            );
+                            rm.insert(serde_yaml::Value::String("base_url".into()), yaml_str(url));
                         }
                         if let Some(env) = opts.api_key_env.as_deref() {
                             rm.insert(
@@ -1133,10 +1188,7 @@ fn patch_setup_models(doc: &mut serde_yaml::Value, opts: &SetupModelOpts) {
                             );
                         }
                         if let Some(key) = opts.api_key.as_deref() {
-                            rm.insert(
-                                serde_yaml::Value::String("api_key".into()),
-                                yaml_str(key),
-                            );
+                            rm.insert(serde_yaml::Value::String("api_key".into()), yaml_str(key));
                         }
                     }
                 }
@@ -1149,9 +1201,8 @@ fn patch_setup_models(doc: &mut serde_yaml::Value, opts: &SetupModelOpts) {
         .clone()
         .or_else(|| opts.base_url.clone());
     let afm_d_endpoint = opts.afm_d_endpoint.clone();
-    let patch_agent = agent_endpoint.is_some()
-        || opts.agent_model.is_some()
-        || opts.agent_fallback.is_some();
+    let patch_agent =
+        agent_endpoint.is_some() || opts.agent_model.is_some() || opts.agent_fallback.is_some();
     let patch_afm_d = afm_d_endpoint.is_some() || opts.afm_d_fallback.is_some();
     if !patch_agent && !patch_afm_d {
         return;
@@ -1263,9 +1314,8 @@ pub fn write_default_config_with_opts(
             p.file_name().and_then(|s| s.to_str()).unwrap_or("file")
         )
     };
-    let mut doc: serde_yaml::Value = serde_yaml::from_str(body).map_err(|e| {
-        RouterError::Config(format!("embedded template: {e}"))
-    })?;
+    let mut doc: serde_yaml::Value = serde_yaml::from_str(body)
+        .map_err(|e| RouterError::Config(format!("embedded template: {e}")))?;
     patch_setup_models(&mut doc, models);
     if let Some(map) = doc.as_mapping_mut() {
         let mut g = serde_yaml::Mapping::new();
@@ -1489,8 +1539,7 @@ recipes:
                 afm_d_endpoint: None,
                 afm_d_fallback: None,
             };
-            let path =
-                write_default_config_with_opts("agent", true, true, true, &opts).unwrap();
+            let path = write_default_config_with_opts("agent", true, true, true, &opts).unwrap();
             let doc = RouterDocument::load_path(&path).unwrap();
             assert_eq!(
                 doc.provider("ariacompute/ariamodel-small")
@@ -1562,20 +1611,74 @@ recipes:
         std::env::remove_var("DECISION_MODEL_URL");
         let doc =
             RouterDocument::from_yaml_str(include_str!("../examples/afm-d-gateway.yaml")).unwrap();
-        let ep = doc.recipes[0]
-            .afm_d
-            .as_ref()
-            .unwrap()
-            .endpoint
-            .as_deref();
-        assert_eq!(ep, Some("http://127.0.0.1:8011"));
+        let afm = doc.recipes[0].afm_d.as_ref().unwrap();
+        assert_eq!(afm.endpoint.as_deref(), Some("http://127.0.0.1:8010"));
+        assert_eq!(afm.track, Some(AfmDTrack::Encoder));
+    }
+
+    #[test]
+    fn afm_d_track_decoder_rejects_too_many_text_providers() {
+        let mut models = String::new();
+        for i in 0..17 {
+            models.push_str(&format!(
+                "    - name: local/m{i}\n      modality: text\n      backend_refs: [{{name: p, endpoint: 127.0.0.1:1}}]\n"
+            ));
+        }
+        let raw = format!(
+            r#"
+version: v0.3
+providers:
+  models:
+{models}
+entrypoints:
+  - model_names: [ariacompute/afm-d-auto]
+    router: afm-d
+    recipe: afm-d-default
+recipes:
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      track: decoder
+      endpoint: http://127.0.0.1:8011
+"#
+        );
+        let err = RouterDocument::from_yaml_str(&raw).unwrap_err().to_string();
+        assert!(err.contains("track=decoder"), "{err}");
+        assert!(err.contains("at most 16"), "{err}");
+    }
+
+    #[test]
+    fn afm_d_track_invalid_value_rejected() {
+        let raw = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/a
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+    - name: local/b
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [ariacompute/afm-d-auto]
+    router: afm-d
+    recipe: afm-d-default
+recipes:
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      track: weird
+      endpoint: http://127.0.0.1:8011
+"#;
+        assert!(RouterDocument::from_yaml_str(raw).is_err());
     }
 
     #[test]
     fn afm_d_catalog_example() {
         let doc = RouterDocument::from_yaml_str(include_str!("../examples/afm-d.yaml")).unwrap();
         assert_eq!(doc.entrypoints[0].router, RouterKind::AfmD);
-        assert_eq!(doc.entrypoints[1].model_names, vec!["ariacompute/afm-d-catalog"]);
+        assert_eq!(
+            doc.entrypoints[1].model_names,
+            vec!["ariacompute/afm-d-catalog"]
+        );
         assert_eq!(
             doc.recipe("afm-d-catalog")
                 .unwrap()
@@ -1590,16 +1693,24 @@ recipes:
 
     #[test]
     fn catalog_examples_reference_learned_signals() {
-        let semantic = RouterDocument::from_yaml_str(include_str!("../examples/semantic.yaml")).unwrap();
+        let semantic =
+            RouterDocument::from_yaml_str(include_str!("../examples/semantic.yaml")).unwrap();
         let catalog = semantic.recipe("mom-catalog").unwrap();
         assert!(!semantic.learned_signal_referenced(catalog).is_empty());
         let mom = semantic.recipe("mom").unwrap();
         assert!(semantic.learned_signal_referenced(mom).is_empty());
 
-        let agent = RouterDocument::from_yaml_str(include_str!("../examples/agent-tiny.yaml")).unwrap();
+        let agent =
+            RouterDocument::from_yaml_str(include_str!("../examples/agent-tiny.yaml")).unwrap();
         assert_eq!(agent.entrypoints[0].router, RouterKind::Agent);
         assert_eq!(
-            agent.recipe("agent-default").unwrap().agent.as_ref().unwrap().max_turns,
+            agent
+                .recipe("agent-default")
+                .unwrap()
+                .agent
+                .as_ref()
+                .unwrap()
+                .max_turns,
             Some(3)
         );
     }
@@ -1646,7 +1757,13 @@ recipes:
         let doc = RouterDocument::from_yaml_str(include_str!("../examples/semantic-stateful.yaml"))
             .unwrap();
         assert!(doc.global.stores.memory.enabled);
-        let d = &doc.recipe("mom").unwrap().routing.as_ref().unwrap().decisions[0];
+        let d = &doc
+            .recipe("mom")
+            .unwrap()
+            .routing
+            .as_ref()
+            .unwrap()
+            .decisions[0];
         assert!(d.retention().is_some());
     }
 

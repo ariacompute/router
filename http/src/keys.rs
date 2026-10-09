@@ -169,12 +169,10 @@ pub enum AuthIdentity {
 impl KeyStore {
     pub fn load(path: &Path) -> Result<Self, RouterError> {
         let keys = if path.exists() {
-            let raw = std::fs::read_to_string(path).map_err(|e| {
-                RouterError::Io(format!("read {}: {e}", path.display()))
-            })?;
-            let file: KeyFile = serde_json::from_str(&raw).map_err(|e| {
-                RouterError::Config(format!("keys file {}: {e}", path.display()))
-            })?;
+            let raw = std::fs::read_to_string(path)
+                .map_err(|e| RouterError::Io(format!("read {}: {e}", path.display())))?;
+            let file: KeyFile = serde_json::from_str(&raw)
+                .map_err(|e| RouterError::Config(format!("keys file {}: {e}", path.display())))?;
             file.keys
         } else {
             Vec::new()
@@ -211,9 +209,8 @@ impl KeyStore {
         if !legacy.exists() {
             return Ok(());
         }
-        let raw = std::fs::read_to_string(&legacy).map_err(|e| {
-            RouterError::Io(format!("read {}: {e}", legacy.display()))
-        })?;
+        let raw = std::fs::read_to_string(&legacy)
+            .map_err(|e| RouterError::Io(format!("read {}: {e}", legacy.display())))?;
         #[derive(Deserialize)]
         struct LegacyServe {
             #[serde(default)]
@@ -237,28 +234,39 @@ impl KeyStore {
             #[serde(default)]
             api_key: Option<String>,
         }
-        let data: LegacyServe = serde_json::from_str(&raw).map_err(|e| {
-            RouterError::Config(format!("legacy serve {}: {e}", legacy.display()))
-        })?;
-        let has_anything = data.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+        let data: LegacyServe = serde_json::from_str(&raw)
+            .map_err(|e| RouterError::Config(format!("legacy serve {}: {e}", legacy.display())))?;
+        let has_anything = data
+            .api_key
+            .as_ref()
+            .map(|k| !k.is_empty())
+            .unwrap_or(false)
             || data.user.is_some()
             || data.site.is_some();
         if has_anything {
             let api_key = data.api_key.clone().unwrap_or_default();
-            let prefix = data.api_key_prefix.clone().unwrap_or_else(|| {
-                api_key.chars().take(16).collect()
-            });
+            let prefix = data
+                .api_key_prefix
+                .clone()
+                .unwrap_or_else(|| api_key.chars().take(16).collect());
             let rec = KeyRecord {
                 kind: KeyKind::Oauth,
-                id: format!("oauth_{}", hex::encode({
-                    let mut r = [0u8; 8];
-                    rand::thread_rng().fill_bytes(&mut r);
-                    r
-                })),
+                id: format!(
+                    "oauth_{}",
+                    hex::encode({
+                        let mut r = [0u8; 8];
+                        rand::thread_rng().fill_bytes(&mut r);
+                        r
+                    })
+                ),
                 name: data.api_key_name.unwrap_or_else(|| "aria-router".into()),
                 prefix,
                 secret_sha256: String::new(),
-                api_key: if api_key.is_empty() { None } else { Some(api_key) },
+                api_key: if api_key.is_empty() {
+                    None
+                } else {
+                    Some(api_key)
+                },
                 created_at: data.linked_at.clone().unwrap_or_else(now_rfc3339),
                 last_used_at: None,
                 revoked: false,
@@ -281,19 +289,16 @@ impl KeyStore {
 
     fn persist(&self) -> Result<(), RouterError> {
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                RouterError::Io(format!("mkdir {}: {e}", parent.display()))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| RouterError::Io(format!("mkdir {}: {e}", parent.display())))?;
         }
         let file = KeyFile {
             keys: self.keys.clone(),
         };
-        let raw = serde_json::to_string_pretty(&file).map_err(|e| {
-            RouterError::Io(e.to_string())
-        })?;
-        std::fs::write(&self.path, raw).map_err(|e| {
-            RouterError::Io(format!("write {}: {e}", self.path.display()))
-        })?;
+        let raw =
+            serde_json::to_string_pretty(&file).map_err(|e| RouterError::Io(e.to_string()))?;
+        std::fs::write(&self.path, raw)
+            .map_err(|e| RouterError::Io(format!("write {}: {e}", self.path.display())))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -438,12 +443,14 @@ impl KeyStore {
         let Some(idx) = self.keys.iter().position(|k| {
             Self::is_oauth(k)
                 && !k.revoked
-                && k.api_key.as_deref().map(|s| {
-                    let a = secret.as_bytes();
-                    let b = s.as_bytes();
-                    a.len() == b.len() && bool::from(a.ct_eq(b))
-                })
-                .unwrap_or(false)
+                && k.api_key
+                    .as_deref()
+                    .map(|s| {
+                        let a = secret.as_bytes();
+                        let b = s.as_bytes();
+                        a.len() == b.len() && bool::from(a.ct_eq(b))
+                    })
+                    .unwrap_or(false)
         }) else {
             return Err(RouterError::Unauthorized(
                 "OAuth key not linked; configure Dashboard Account or aria-router setup".into(),
@@ -487,9 +494,7 @@ impl KeyStore {
     }
 
     fn active_oauth(&self) -> Option<&KeyRecord> {
-        self.keys
-            .iter()
-            .find(|k| Self::is_oauth(k) && !k.revoked)
+        self.keys.iter().find(|k| Self::is_oauth(k) && !k.revoked)
     }
 
     fn active_oauth_mut(&mut self) -> Option<&mut KeyRecord> {
@@ -737,28 +742,28 @@ impl KeyStore {
         Ok((p.site, p.site_url, p.owner_user_id, p.owner_email))
     }
 
-pub fn apply_exchange(&mut self, inp: ExchangeInput) -> Result<(), RouterError> {
-    let ExchangeInput {
-        site,
-        site_url,
-        user,
-        link_token,
-        expires_at,
-        api_key,
-        owner_user_id,
-    } = inp;
-    let (site_id, site_url_n, gateway_url) = match normalize_site(&site) {
-        Ok(v) => v,
-        Err(_) => (
-            if site.contains("cn") {
-                "cn".into()
-            } else {
-                "intl".into()
-            },
+    pub fn apply_exchange(&mut self, inp: ExchangeInput) -> Result<(), RouterError> {
+        let ExchangeInput {
+            site,
             site_url,
-            gateway_for_site(&site),
-        ),
-    };
+            user,
+            link_token,
+            expires_at,
+            api_key,
+            owner_user_id,
+        } = inp;
+        let (site_id, site_url_n, gateway_url) = match normalize_site(&site) {
+            Ok(v) => v,
+            Err(_) => (
+                if site.contains("cn") {
+                    "cn".into()
+                } else {
+                    "intl".into()
+                },
+                site_url,
+                gateway_for_site(&site),
+            ),
+        };
         if self.active_oauth().is_none() {
             self.keys.push(KeyRecord {
                 kind: KeyKind::Oauth,
@@ -1078,7 +1083,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("keys.json");
         let mut store = KeyStore::empty(path);
-        assert!(store.oauth_set_api_key_meta("x".into(), "y".into()).is_err());
+        assert!(store
+            .oauth_set_api_key_meta("x".into(), "y".into())
+            .is_err());
     }
 
     #[test]

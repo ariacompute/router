@@ -26,9 +26,9 @@ pub fn project(cfgs: &[ProjectionCfg], signals: &SignalSet) -> Result<Projection
                             .collect()
                     })
                     .unwrap_or_default();
-                let winner = inputs.into_iter().find(|name| {
-                    signals.hits.iter().any(|h| h.name == *name && h.matched)
-                });
+                let winner = inputs
+                    .into_iter()
+                    .find(|name| signals.hits.iter().any(|h| h.name == *name && h.matched));
                 values.insert(
                     p.name.clone(),
                     winner.map(Value::String).unwrap_or(Value::Null),

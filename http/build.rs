@@ -96,9 +96,7 @@ fn main() {
     files.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut out = String::new();
-    out.push_str(
-        "pub struct EmbeddedFile { pub path: &'static str, pub data: &'static [u8] }\n",
-    );
+    out.push_str("pub struct EmbeddedFile { pub path: &'static str, pub data: &'static [u8] }\n");
     out.push_str("pub static DASHBOARD_FILES: &[EmbeddedFile] = &[\n");
     for (rel, abs) in &files {
         out.push_str(&format!(
@@ -117,7 +115,10 @@ fn main() {
     } else {
         out.push_str("pub static DASHBOARD_INDEX: &[u8] = &[];\n");
     }
-    out.push_str(&format!("pub static DASHBOARD_HAS: bool = {};\n", !files.is_empty()));
+    out.push_str(&format!(
+        "pub static DASHBOARD_HAS: bool = {};\n",
+        !files.is_empty()
+    ));
 
     write_embed(&out_path, &out);
 }
@@ -211,7 +212,6 @@ fn git_dir() -> Option<String> {
         Some(s)
     }
 }
-
 
 fn write_embed(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {

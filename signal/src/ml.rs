@@ -85,7 +85,11 @@ pub fn embed_match(
 }
 
 /// Classifier-like: similarity of text to description / patterns / examples.
-pub fn classify_match(text: &str, extra: &serde_json::Map<String, Value>, dim: usize) -> (bool, f32) {
+pub fn classify_match(
+    text: &str,
+    extra: &serde_json::Map<String, Value>,
+    dim: usize,
+) -> (bool, f32) {
     let threshold = extra
         .get("threshold")
         .and_then(|v| v.as_f64())
@@ -94,7 +98,14 @@ pub fn classify_match(text: &str, extra: &serde_json::Map<String, Value>, dim: u
     if let Some(d) = extra.get("description").and_then(|v| v.as_str()) {
         candidates.push(d.to_string());
     }
-    for key in ["examples", "candidates", "hard", "easy", "jailbreak_patterns", "benign_patterns"] {
+    for key in [
+        "examples",
+        "candidates",
+        "hard",
+        "easy",
+        "jailbreak_patterns",
+        "benign_patterns",
+    ] {
         if let Some(arr) = extra.get(key).and_then(|v| v.as_array()) {
             for v in arr {
                 if let Some(s) = v.as_str() {

@@ -4,14 +4,15 @@
 //! run before System One so Encoder Choice cannot over-promote teaching/large.
 //! Successful System One answers are cached by (normalized text × eligible set).
 
-use aria_router_config::AfmDRecipe;
+use aria_router_config::{AfmDRecipe, AfmDTrack};
 use aria_router_core::{ChatRequest, ModelCard, RouteDecision, RouterError};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 
 const DEFAULT_TIMEOUT_MS: u64 = 5000;
-const MAX_CHOICE_OPTIONS: usize = 255;
+/// Encoder Choice ceiling when `afm-d.track` is unset or `encoder`.
+const MAX_CHOICE_OPTIONS_ENCODER: usize = 255;
 const DECISION_CACHE_CAP: usize = 256;
 const DEFAULT_INSTRUCTIONS: &str = "\
 Pick the cheapest sufficient model tier for the user message. Prefer smaller tiers.
@@ -69,10 +70,29 @@ fn question_head(raw: &str) -> String {
 fn is_trivial_chitchat(normalized: &str) -> bool {
     matches!(
         normalized,
-        "hi" | "hello" | "hey" | "hiya" | "yo" | "sup" | "howdy"
-            | "thanks" | "thank you" | "thx" | "ty"
-            | "good morning" | "good afternoon" | "good evening" | "good night"
-            | "bye" | "goodbye" | "see you" | "ok" | "okay" | "yes" | "no" | "yep" | "nope"
+        "hi" | "hello"
+            | "hey"
+            | "hiya"
+            | "yo"
+            | "sup"
+            | "howdy"
+            | "thanks"
+            | "thank you"
+            | "thx"
+            | "ty"
+            | "good morning"
+            | "good afternoon"
+            | "good evening"
+            | "good night"
+            | "bye"
+            | "goodbye"
+            | "see you"
+            | "ok"
+            | "okay"
+            | "yes"
+            | "no"
+            | "yep"
+            | "nope"
     )
 }
 
@@ -162,7 +182,9 @@ fn is_short_factoid(head_normalized: &str, raw_head: &str) -> bool {
         || head_normalized.contains("fahrenheit")
         || head_normalized.contains("sea level")
         || (head_normalized.starts_with("what is the ") && words <= 16)
-        || (head_normalized.starts_with("what is ") && words <= 12 && !head_normalized.contains("trade"))
+        || (head_normalized.starts_with("what is ")
+            && words <= 12
+            && !head_normalized.contains("trade"))
         || (head_normalized.starts_with("which ") && words <= 16)
         || (head_normalized.starts_with("in which ") && words <= 16)
         || (head_normalized.starts_with("is ") && words <= 12)
@@ -217,7 +239,8 @@ fn tier_of(card: &ModelCard) -> &'static str {
     let lower = card.name.to_ascii_lowercase();
     if lower.contains("ariamodel-large") || lower.ends_with("-large") || lower.ends_with("/large") {
         "large"
-    } else if lower.contains("ariamodel-mid") || lower.ends_with("-mid") || lower.ends_with("/mid") {
+    } else if lower.contains("ariamodel-mid") || lower.ends_with("-mid") || lower.ends_with("/mid")
+    {
         "mid"
     } else if lower.contains("ariamodel-small")
         || lower.ends_with("-small")
@@ -302,9 +325,17 @@ pub struct AfmDTask {
     pub timeout_ms: u64,
     pub min_confidence: Option<f32>,
     pub fallback: Option<String>,
+    /// Optional System One track; drives eligible-pool size cap.
+    pub track: Option<AfmDTrack>,
 }
 
 impl AfmDTask {
+    fn max_choice_options(&self) -> usize {
+        self.track
+            .map(AfmDTrack::max_choice_options)
+            .unwrap_or(MAX_CHOICE_OPTIONS_ENCODER)
+    }
+
     /// Best-effort user utterance for shortcuts / logging.
     fn state_user_text(&self) -> Option<String> {
         if let Some(s) = self.state.as_str() {
@@ -337,9 +368,15 @@ impl AfmDDecisioner {
         if task.eligible.is_empty() {
             return Err(RouterError::FailClosed("no eligible models".into()));
         }
-        if task.eligible.len() > MAX_CHOICE_OPTIONS {
+        let max_opts = task.max_choice_options();
+        if task.eligible.len() > max_opts {
+            let track_note = match task.track {
+                Some(AfmDTrack::Decoder) => " (track=decoder)",
+                Some(AfmDTrack::Encoder) => " (track=encoder)",
+                None => "",
+            };
             return Err(RouterError::FailClosed(format!(
-                "afm-d eligible pool size {} exceeds Choice max {MAX_CHOICE_OPTIONS}",
+                "afm-d eligible pool size {} exceeds Choice max {max_opts}{track_note}",
                 task.eligible.len()
             )));
         }
@@ -491,10 +528,7 @@ fn tier_decision(model: &ModelCard, reason: &str) -> RouteDecision {
     }
 }
 
-fn apply_fallback_or_err(
-    task: &AfmDTask,
-    err: RouterError,
-) -> Result<RouteDecision, RouterError> {
+fn apply_fallback_or_err(task: &AfmDTask, err: RouterError) -> Result<RouteDecision, RouterError> {
     if let Some(fb) = &task.fallback {
         if task.eligible.iter().any(|m| m.name == *fb) {
             return Ok(RouteDecision {
@@ -628,6 +662,7 @@ pub fn task_from(req: &ChatRequest, eligible: Vec<ModelCard>, recipe: &AfmDRecip
         timeout_ms: recipe.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS),
         min_confidence: recipe.min_confidence,
         fallback: recipe.fallback.clone(),
+        track: recipe.track,
     }
 }
 
@@ -670,6 +705,7 @@ mod tests {
             timeout_ms: 2000,
             min_confidence: None,
             fallback: None,
+            track: None,
         }
     }
 
@@ -763,11 +799,17 @@ mod tests {
         descs.insert("a/small".into(), "small factoids".into());
         let task = AfmDTask {
             descriptions: descs,
-            ..base_task(vec![card_tier("a/small", "small"), card_tier("a/large", "large")])
+            ..base_task(vec![
+                card_tier("a/small", "small"),
+                card_tier("a/large", "large"),
+            ])
         };
         let body = build_systemone_body(&task);
         assert_eq!(body["questions"]["route"]["type"], "choice");
-        assert_eq!(body["questions"]["route"]["criteria"]["a/small"], "small factoids");
+        assert_eq!(
+            body["questions"]["route"]["criteria"]["a/small"],
+            "small factoids"
+        );
         let large = body["questions"]["route"]["criteria"]["a/large"]
             .as_str()
             .unwrap();
@@ -885,6 +927,7 @@ mod tests {
     fn task_from_builds_state() {
         let recipe = AfmDRecipe {
             endpoint: None,
+            track: Some(AfmDTrack::Encoder),
             timeout_ms: Some(1234),
             fallback: Some("local/general".into()),
             instructions: Some("pick".into()),
@@ -906,6 +949,36 @@ mod tests {
         assert_eq!(t.timeout_ms, 1234);
         assert_eq!(t.instructions, "pick");
         assert_eq!(t.state, "User message: hi there");
+        assert_eq!(t.track, Some(AfmDTrack::Encoder));
+    }
+
+    #[tokio::test]
+    async fn decoder_track_rejects_pool_over_16() {
+        let eligible: Vec<_> = (0..17).map(|i| card(&format!("local/m{i}"))).collect();
+        let err = AfmDDecisioner {
+            endpoint: Some("http://127.0.0.1:1".into()),
+        }
+        .route(AfmDTask {
+            track: Some(AfmDTrack::Decoder),
+            ..base_task(eligible)
+        })
+        .await
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("exceeds Choice max 16"), "{msg}");
+        assert!(msg.contains("track=decoder"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn unset_track_allows_pool_up_to_encoder_cap() {
+        // 17 models is fine without track (encoder ceiling 255); must not FailClosed on size.
+        // Use first-eligible path (no endpoint) so we never hit System One.
+        let eligible: Vec<_> = (0..17).map(|i| card(&format!("local/m{i}"))).collect();
+        let d = AfmDDecisioner { endpoint: None }
+            .route(base_task(eligible))
+            .await
+            .unwrap();
+        assert_eq!(d.model, "local/m0");
     }
 
     #[test]
@@ -1062,7 +1135,10 @@ mod tests {
             let got = shortcut_tier(&prompt).unwrap_or_else(|| panic!("no shortcut for {q}"));
             assert_eq!(got.0, *tier, "tier mismatch for {q}");
             assert_eq!(got.1, *reason, "reason mismatch for {q}");
-            assert_ne!(got.0, "large", "compare closed-form must not pick large: {q}");
+            assert_ne!(
+                got.0, "large",
+                "compare closed-form must not pick large: {q}"
+            );
         }
     }
 
@@ -1080,6 +1156,7 @@ mod tests {
             timeout_ms: 2000,
             min_confidence: None,
             fallback: None,
+            track: None,
         };
         let d = AfmDDecisioner {
             // Would fail if we actually called this endpoint.
@@ -1106,6 +1183,7 @@ mod tests {
             timeout_ms: 2000,
             min_confidence: None,
             fallback: None,
+            track: None,
         };
         let d = AfmDDecisioner {
             endpoint: Some("http://127.0.0.1:1".into()),
@@ -1120,9 +1198,9 @@ mod tests {
     #[tokio::test]
     async fn systemone_result_is_cached_on_repeat() {
         clear_decision_cache_for_tests();
+        use axum::extract::State;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
-        use axum::extract::State;
 
         let hits = Arc::new(AtomicUsize::new(0));
         let app = Router::new()
@@ -1151,8 +1229,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let prompt =
-            format!("Please classify this nuanced routing edge case carefully {nonce}");
+        let prompt = format!("Please classify this nuanced routing edge case carefully {nonce}");
         let make_task = || AfmDTask {
             state: json!(format!("User message: {prompt}")),
             eligible: vec![card("local/a"), card("local/b")],
@@ -1161,6 +1238,7 @@ mod tests {
             timeout_ms: 2000,
             min_confidence: None,
             fallback: None,
+            track: None,
         };
         let decisioner = AfmDDecisioner {
             endpoint: Some(format!("http://{addr}")),

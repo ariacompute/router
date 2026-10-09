@@ -1,24 +1,22 @@
 //! OpenAI data plane + management API + routing pipeline.
 
-mod topology;
-pub(crate) mod keys;
-mod cost;
-mod users;
-mod serve_account;
 mod auth_api;
+mod cost;
 mod embed;
+pub(crate) mod keys;
 mod memory;
-mod semantic_cache;
 mod ratelimit;
 mod replay;
+mod semantic_cache;
+mod serve_account;
+mod topology;
+mod users;
 
 use aria_router_afm_d::{task_from as afm_d_task_from, AfmDDecisioner};
 use aria_router_agent::{request_view, task_from, BuiltinAgent, ToolRuntime};
 use aria_router_algorithm::{global_elo, hard_filter, select, RuntimeStats};
 use aria_router_config::{resolve_keys_path, resolve_users_path, Recipe, RouterDocument};
-use aria_router_core::{
-    ChatRequest, RouteDecision, RouterError, RouterKind,
-};
+use aria_router_core::{ChatRequest, RouteDecision, RouterError, RouterKind};
 use aria_router_decision::select_decision;
 use aria_router_plugin::{
     apply_request, extra_headers, has_response_cache, remember_response, PluginHost, PluginOutcome,
@@ -37,15 +35,15 @@ use memory::{SessionMemory, SessionState};
 use ratelimit::RateLimiter;
 use replay::{ReplayLog, ReplayRecord};
 use semantic_cache::SemanticCache;
-use users::{UserRole, UserStore};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
+use users::{UserRole, UserStore};
 
-pub use users::UserStore as LocalUserStore;
 pub use embed::mgmt_router_serve_dashboard;
+pub use users::UserStore as LocalUserStore;
 
 pub struct AppState {
     pub doc: Mutex<RouterDocument>,
@@ -163,7 +161,10 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/v1/router/version", get(version_ep))
-        .route("/v1/router/auth/register-status", get(auth_api::register_status))
+        .route(
+            "/v1/router/auth/register-status",
+            get(auth_api::register_status),
+        )
         .route("/v1/router/auth/register", post(auth_api::register))
         .route("/v1/router/auth/login", post(auth_api::login))
         .route("/v1/router/auth/logout", post(auth_api::logout))
@@ -171,14 +172,20 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
         .route("/v1/router/auth/email", put(auth_api::set_my_email))
         .route("/v1/router/auth/password", post(auth_api::change_password))
         .route("/v1/router/users", get(auth_api::list_users))
-        .route("/v1/router/users/{id}/disabled", put(auth_api::set_user_disabled))
+        .route(
+            "/v1/router/users/{id}/disabled",
+            put(auth_api::set_user_disabled),
+        )
         .route("/v1/router/users/{id}/email", put(auth_api::set_user_email))
         .route(
             "/v1/router/settings/allow_register",
             put(auth_api::set_allow_register),
         )
         .route("/v1/router/auth/oauth/start", post(auth_api::oauth_start))
-        .route("/v1/router/auth/oauth/callback", get(auth_api::oauth_callback))
+        .route(
+            "/v1/router/auth/oauth/callback",
+            get(auth_api::oauth_callback),
+        )
         .route("/v1/router/serve/account", get(auth_api::serve_account_get))
         .route(
             "/v1/router/serve/account/sync",
@@ -187,7 +194,10 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
         .route("/v1/router/validate", post(validate_ep))
         .route("/v1/router/replay", get(replay_ep))
         .route("/v1/router/replay/{id}/reroute", post(replay_reroute_ep))
-        .route("/v1/router/providers", put(upsert_provider).get(list_providers))
+        .route(
+            "/v1/router/providers",
+            put(upsert_provider).get(list_providers),
+        )
         .route("/v1/router/config", get(get_config).put(put_config))
         .route("/v1/router/overview", get(overview_ep))
         .route("/v1/router/topology", get(topology_ep))
@@ -227,10 +237,7 @@ struct ReplayQ {
     n: Option<usize>,
 }
 
-async fn replay_ep(
-    State(st): State<Arc<AppState>>,
-    Query(q): Query<ReplayQ>,
-) -> Json<Value> {
+async fn replay_ep(State(st): State<Arc<AppState>>, Query(q): Query<ReplayQ>) -> Json<Value> {
     let n = q.n.unwrap_or(20).min(100);
     let items = replay_items(&st, n);
     let records = st.replay_log.recent(n);
@@ -293,12 +300,16 @@ async fn replay_reroute_ep(
         let _ = model;
         let doc = snapshot_doc(&st);
         if let Some(body) = extra {
-            return Ok(Json(json!({"decision": decision, "body": body, "forwarded": false})));
+            return Ok(Json(
+                json!({"decision": decision, "body": body, "forwarded": false}),
+            ));
         }
         let body = forward(&doc, &decision.model, &fwd, &[], &st.pool)
             .await
             .map_err(AppError)?;
-        return Ok(Json(json!({"decision": decision, "body": body, "forwarded": true})));
+        return Ok(Json(
+            json!({"decision": decision, "body": body, "forwarded": true}),
+        ));
     }
     Ok(Json(json!({
         "decision": decision,
@@ -341,7 +352,12 @@ fn auth_provider_upsert(st: &AppState, headers: &HeaderMap) -> Result<(), Router
 
 fn apply_upsert(st: &AppState, body: ProviderUpsert) -> Result<Json<Value>, RouterError> {
     let mut doc = st.doc.lock().unwrap();
-    if let Some(existing) = doc.providers.models.iter_mut().find(|m| m.name == body.name) {
+    if let Some(existing) = doc
+        .providers
+        .models
+        .iter_mut()
+        .find(|m| m.name == body.name)
+    {
         existing.backend_refs = vec![aria_router_config::BackendRef {
             name: "engine".into(),
             endpoint: body.endpoint.clone(),
@@ -355,28 +371,30 @@ fn apply_upsert(st: &AppState, body: ProviderUpsert) -> Result<Json<Value>, Rout
             existing.provider_model_id = body.provider_model_id;
         }
     } else {
-        doc.providers.models.push(aria_router_config::ProviderModel {
-            name: body.name.clone(),
-            provider_model_id: if body.provider_model_id.is_empty() {
-                body.name.clone()
-            } else {
-                body.provider_model_id
-            },
-            locality: body.locality.unwrap_or_else(|| "local".into()),
-            modality: "text".into(),
-            capabilities: vec!["chat".into()],
-            backend_refs: vec![aria_router_config::BackendRef {
-                name: "engine".into(),
-                endpoint: body.endpoint,
-                base_url: String::new(),
-                protocol: "http".into(),
-                weight: 100,
-                api_key: None,
-                api_key_env: None,
-            }],
-            pricing: None,
-            tier: None,
-        });
+        doc.providers
+            .models
+            .push(aria_router_config::ProviderModel {
+                name: body.name.clone(),
+                provider_model_id: if body.provider_model_id.is_empty() {
+                    body.name.clone()
+                } else {
+                    body.provider_model_id
+                },
+                locality: body.locality.unwrap_or_else(|| "local".into()),
+                modality: "text".into(),
+                capabilities: vec!["chat".into()],
+                backend_refs: vec![aria_router_config::BackendRef {
+                    name: "engine".into(),
+                    endpoint: body.endpoint,
+                    base_url: String::new(),
+                    protocol: "http".into(),
+                    weight: 100,
+                    api_key: None,
+                    api_key_env: None,
+                }],
+                pricing: None,
+                tier: None,
+            });
     }
     Ok(Json(json!({"ok": true, "name": body.name})))
 }
@@ -437,9 +455,8 @@ fn parse_config_body(raw: &str) -> Result<RouterDocument, RouterError> {
 
 fn replace_config(st: &AppState, doc: RouterDocument, raw: &str) -> Result<(), RouterError> {
     if !st.config_path.as_os_str().is_empty() {
-        std::fs::write(&st.config_path, raw).map_err(|e| {
-            RouterError::Io(format!("write {}: {e}", st.config_path.display()))
-        })?;
+        std::fs::write(&st.config_path, raw)
+            .map_err(|e| RouterError::Io(format!("write {}: {e}", st.config_path.display())))?;
     }
     let keys_path = doc
         .global
@@ -656,8 +673,8 @@ async fn chat_with_auth(
     body: Value,
     auth: ChatAuth,
 ) -> Result<Response, RouterError> {
-    let req: ChatRequest = serde_json::from_value(body)
-        .map_err(|e| RouterError::InvalidParam(e.to_string()))?;
+    let req: ChatRequest =
+        serde_json::from_value(body).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
     let session = session_id(&headers, &req);
     let mut metadata = metadata_from_headers(&headers);
     metadata.insert("session".into(), session.clone());
@@ -824,11 +841,7 @@ async fn route_and_forward(
         st.ratelimit
             .check(&bucket, &doc.global.services.ratelimit)?;
     }
-    let turns_in_request = req
-        .messages
-        .iter()
-        .filter(|m| m.role == "user")
-        .count() as u32;
+    let turns_in_request = req.messages.iter().filter(|m| m.role == "user").count() as u32;
     let prompt_est = estimate_tokens(&req.prompt_text());
     let last_user = req.last_user_text();
     let session = ctx.session.clone();
@@ -898,9 +911,15 @@ async fn route_and_forward(
             let doc = snapshot_doc(&st);
             if want_stream {
                 fwd.stream = true;
-                let sse =
-                    forward_sse_stream(&doc, &decision.model, &fwd, &hdrs, &st.pool).await?;
-                let body = sse_response_body(st.clone(), sse, decision.clone(), ctx, turns_in_request, prompt_est);
+                let sse = forward_sse_stream(&doc, &decision.model, &fwd, &hdrs, &st.pool).await?;
+                let body = sse_response_body(
+                    st.clone(),
+                    sse,
+                    decision.clone(),
+                    ctx,
+                    turns_in_request,
+                    prompt_est,
+                );
                 if !session.is_empty() {
                     st.memory.tick(&session);
                 }
@@ -959,10 +978,7 @@ fn maybe_store_semantic(st: &AppState, decision: &RouteDecision, text: &str, bod
     if !cfg.enabled {
         return;
     }
-    let ttl = decision
-        .retention_ttl_turns
-        .unwrap_or(cfg.ttl_turns)
-        .max(1);
+    let ttl = decision.retention_ttl_turns.unwrap_or(cfg.ttl_turns).max(1);
     st.semantic_cache.store(
         text,
         &decision.model,
@@ -992,9 +1008,7 @@ fn sse_response_body(
         prompt_est,
         recorded: false,
     };
-    Body::from_stream(stream.map(|item| {
-        item.map_err(|e| std::io::Error::other(e.to_string()))
-    }))
+    Body::from_stream(stream.map(|item| item.map_err(|e| std::io::Error::other(e.to_string()))))
 }
 
 struct SseCostStream {
@@ -1058,8 +1072,14 @@ impl futures_util::Stream for SseCostStream {
 
 fn parse_json_usage(body: &Value, prompt_est: u64) -> (u64, u64, &'static str) {
     if let Some(u) = body.get("usage") {
-        let pt = u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(prompt_est);
-        let ct = u.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let pt = u
+            .get("prompt_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(prompt_est);
+        let ct = u
+            .get("completion_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         return (pt, ct, "usage");
     }
     let ct = body
@@ -1081,8 +1101,14 @@ fn parse_sse_usage(text: &str, prompt_est: u64) -> (u64, u64, &'static str) {
         }
         if let Ok(v) = serde_json::from_str::<Value>(data) {
             if let Some(u) = v.get("usage") {
-                let pt = u.get("prompt_tokens").and_then(|x| x.as_u64()).unwrap_or(prompt_est);
-                let ct = u.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+                let pt = u
+                    .get("prompt_tokens")
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(prompt_est);
+                let ct = u
+                    .get("completion_tokens")
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0);
                 return (pt, ct, "usage");
             }
         }
@@ -1092,7 +1118,10 @@ fn parse_sse_usage(text: &str, prompt_est: u64) -> (u64, u64, &'static str) {
 
 fn record_cost(st: &AppState, ctx: &CostCtx, decision: &RouteDecision, usage: CostUsage<'_>) {
     let doc = snapshot_doc(st);
-    let (in_p, out_p, priced) = match doc.provider(&decision.model).and_then(|p| p.pricing.as_ref()) {
+    let (in_p, out_p, priced) = match doc
+        .provider(&decision.model)
+        .and_then(|p| p.pricing.as_ref())
+    {
         Some(p) if p.input_per_mtok > 0.0 || p.output_per_mtok > 0.0 => {
             (p.input_per_mtok, p.output_per_mtok, true)
         }
@@ -1128,10 +1157,15 @@ fn record_cost(st: &AppState, ctx: &CostCtx, decision: &RouteDecision, usage: Co
 }
 
 fn attach_route_headers(h: &mut HeaderMap, d: &RouteDecision) {
-    let _ = h.insert("x-aria-router-layer", d.layer.parse().unwrap_or_else(|_| "none".parse().unwrap()));
+    let _ = h.insert(
+        "x-aria-router-layer",
+        d.layer.parse().unwrap_or_else(|_| "none".parse().unwrap()),
+    );
     let _ = h.insert(
         "x-aria-router-decision",
-        d.decision.parse().unwrap_or_else(|_| "none".parse().unwrap()),
+        d.decision
+            .parse()
+            .unwrap_or_else(|_| "none".parse().unwrap()),
     );
     if let Ok(v) = d.model.parse() {
         h.insert("x-aria-router-model", v);
@@ -1145,7 +1179,13 @@ fn attach_route_headers(h: &mut HeaderMap, d: &RouteDecision) {
         let reason: String = d
             .reason
             .chars()
-            .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' })
+            .map(|c| {
+                if c.is_ascii_graphic() || c == ' ' {
+                    c
+                } else {
+                    '?'
+                }
+            })
             .take(200)
             .collect();
         if let Ok(v) = reason.parse() {
@@ -1232,18 +1272,28 @@ pub async fn route_request(
     st: &AppState,
     req: ChatRequest,
     metadata: &HashMap<String, String>,
-) -> Result<(RouteDecision, ChatRequest, Option<Value>, Vec<(String, String)>), RouterError> {
+) -> Result<
+    (
+        RouteDecision,
+        ChatRequest,
+        Option<Value>,
+        Vec<(String, String)>,
+    ),
+    RouterError,
+> {
     let doc = snapshot_doc(st);
     if doc.is_concrete_model(&req.model) {
         let d = RouteDecision::bypass(&req.model);
         return Ok((d, req, None, vec![]));
     }
-    let ep = doc.entrypoint_for(&req.model).ok_or_else(|| {
-        RouterError::FailClosed(format!("unknown model {}", req.model))
-    })?;
+    let ep = doc
+        .entrypoint_for(&req.model)
+        .ok_or_else(|| RouterError::FailClosed(format!("unknown model {}", req.model)))?;
     let recipe = doc.recipe(&ep.recipe)?.clone();
     if recipe.router != ep.router {
-        return Err(RouterError::Config("entrypoint/recipe router mismatch".into()));
+        return Err(RouterError::Config(
+            "entrypoint/recipe router mismatch".into(),
+        ));
     }
     match ep.router {
         RouterKind::Semantic => route_semantic(st, &doc, &recipe, req, metadata).await,
@@ -1258,7 +1308,15 @@ async fn route_semantic(
     recipe: &Recipe,
     req: ChatRequest,
     metadata: &HashMap<String, String>,
-) -> Result<(RouteDecision, ChatRequest, Option<Value>, Vec<(String, String)>), RouterError> {
+) -> Result<
+    (
+        RouteDecision,
+        ChatRequest,
+        Option<Value>,
+        Vec<(String, String)>,
+    ),
+    RouterError,
+> {
     #[cfg(not(feature = "ml"))]
     {
         let learned = doc.learned_signal_referenced(recipe);
@@ -1279,7 +1337,10 @@ async fn route_semantic(
     let retention = decision_cfg.as_ref().and_then(|d| d.retention().cloned());
     let (model_names, algo, plugins, dname, loc, emits) = if let Some(d) = &decision_cfg {
         (
-            d.model_refs.iter().map(|m| m.model.clone()).collect::<Vec<_>>(),
+            d.model_refs
+                .iter()
+                .map(|m| m.model.clone())
+                .collect::<Vec<_>>(),
             d.algorithm.clone(),
             d.plugins.clone(),
             d.name.clone(),
@@ -1289,22 +1350,35 @@ async fn route_semantic(
     } else {
         let def = doc.providers.defaults.default_model.clone();
         if def.is_empty() {
-            return Err(RouterError::FailClosed("no matching decision and no default_model".into()));
+            return Err(RouterError::FailClosed(
+                "no matching decision and no default_model".into(),
+            ));
         }
-        (vec![def], Some("static".into()), vec![], "default".into(), None, vec![])
+        (
+            vec![def],
+            Some("static".into()),
+            vec![],
+            "default".into(),
+            None,
+            vec![],
+        )
     };
     let eligible = hard_filter(doc, &model_names, loc.as_deref(), Some("text"));
     if eligible.is_empty() {
-        return Err(RouterError::FailClosed("no eligible models after hard constraints".into()));
+        return Err(RouterError::FailClosed(
+            "no eligible models after hard constraints".into(),
+        ));
     }
-    let session = metadata
-        .get("session")
-        .cloned()
-        .unwrap_or_default();
+    let session = metadata.get("session").cloned().unwrap_or_default();
     // Sticky model from prior retention (must still pass hard constraints).
     let sticky_override = if doc.global.stores.memory.enabled && !session.is_empty() {
         if let Some(st_mem) = st.memory.get(&session) {
-            let all = hard_filter(doc, std::slice::from_ref(&st_mem.sticky_model), None, Some("text"));
+            let all = hard_filter(
+                doc,
+                std::slice::from_ref(&st_mem.sticky_model),
+                None,
+                Some("text"),
+            );
             all.into_iter().next().map(|c| c.name)
         } else {
             None
@@ -1319,7 +1393,9 @@ async fn route_semantic(
         rules: Default::default(),
         model_refs: eligible
             .iter()
-            .map(|e| aria_router_config::ModelRef { model: e.name.clone() })
+            .map(|e| aria_router_config::ModelRef {
+                model: e.name.clone(),
+            })
             .collect(),
         algorithm: algo.clone(),
         plugins: plugins.clone(),
@@ -1377,8 +1453,8 @@ async fn route_semantic(
         .iter()
         .map(|h| json!({"kind": h.kind, "name": h.name, "matched": h.matched, "confidence": h.confidence}))
         .collect::<Vec<_>>());
-    let decision = |model: String, algo: Option<String>, dname: String, cache_response: bool| {
-        RouteDecision {
+    let decision =
+        |model: String, algo: Option<String>, dname: String, cache_response: bool| RouteDecision {
             model,
             algorithm: algo,
             reason: format!("semantic:{dname}"),
@@ -1391,9 +1467,7 @@ async fn route_semantic(
             retention_drop: retention.as_ref().and_then(|r| r.drop),
             retention_ttl_turns: retention.as_ref().and_then(|r| r.ttl_turns),
             retention_keep_current_model: retention.as_ref().and_then(|r| r.keep_current_model),
-            retention_prefer_prefix: retention
-                .as_ref()
-                .and_then(|r| r.prefer_prefix_retention),
+            retention_prefer_prefix: retention.as_ref().and_then(|r| r.prefer_prefix_retention),
             semantic_cache_hit: None,
             replay_id: None,
             session: if session.is_empty() {
@@ -1401,8 +1475,7 @@ async fn route_semantic(
             } else {
                 Some(session.clone())
             },
-        }
-    };
+        };
     // Enrich replay with signal/projection context on next record() via last fields —
     // stash on decision.session already; push detailed record here.
     let cfg = doc.global.services.router_replay.clone();
@@ -1474,12 +1547,25 @@ async fn route_afm_d(
     recipe: &Recipe,
     req: ChatRequest,
     _metadata: &HashMap<String, String>,
-) -> Result<(RouteDecision, ChatRequest, Option<Value>, Vec<(String, String)>), RouterError> {
+) -> Result<
+    (
+        RouteDecision,
+        ChatRequest,
+        Option<Value>,
+        Vec<(String, String)>,
+    ),
+    RouterError,
+> {
     let afm = recipe
         .afm_d
         .as_ref()
         .ok_or_else(|| RouterError::Config("missing afm-d".into()))?;
-    let all_names: Vec<String> = doc.providers.models.iter().map(|m| m.name.clone()).collect();
+    let all_names: Vec<String> = doc
+        .providers
+        .models
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
     let eligible = hard_filter(doc, &all_names, None, Some("text"));
     if eligible.is_empty() {
         return Err(RouterError::FailClosed(
@@ -1516,16 +1602,31 @@ async fn route_agent(
     recipe: &Recipe,
     req: ChatRequest,
     _metadata: &HashMap<String, String>,
-) -> Result<(RouteDecision, ChatRequest, Option<Value>, Vec<(String, String)>), RouterError> {
+) -> Result<
+    (
+        RouteDecision,
+        ChatRequest,
+        Option<Value>,
+        Vec<(String, String)>,
+    ),
+    RouterError,
+> {
     let agent = recipe
         .agent
         .as_ref()
         .ok_or_else(|| RouterError::Config("missing agent".into()))?;
-    let all_names: Vec<String> = doc.providers.models.iter().map(|m| m.name.clone()).collect();
+    let all_names: Vec<String> = doc
+        .providers
+        .models
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
     // Agent may route to cloud or local backends; do not hard-require locality=local.
     let eligible = hard_filter(doc, &all_names, None, Some("text"));
     if eligible.is_empty() {
-        return Err(RouterError::FailClosed("no eligible models after hard constraints".into()));
+        return Err(RouterError::FailClosed(
+            "no eligible models after hard constraints".into(),
+        ));
     }
     let task = task_from(&req, eligible.clone(), agent);
     let tools = ToolRuntime {
@@ -1609,7 +1710,8 @@ impl IntoResponse for AppError {
             RouterError::Config(_) | RouterError::InvalidParam(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::BAD_GATEWAY,
         };
-        let body = json!({"error": {"message": self.0.to_string(), "type": format!("{:?}", self.0)}});
+        let body =
+            json!({"error": {"message": self.0.to_string(), "type": format!("{:?}", self.0)}});
         (status, Json(body)).into_response()
     }
 }
@@ -1866,10 +1968,7 @@ global:
                         "total_tokens": 15
                     }
                 });
-                let body = format!(
-                    "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
-                    chunk, usage
-                );
+                let body = format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n", chunk, usage);
                 Response::builder()
                     .status(200)
                     .header(header::CONTENT_TYPE, "text/event-stream")
@@ -2070,10 +2169,7 @@ global:
             .await
             .unwrap();
         assert_eq!(res.status(), 200);
-        assert_eq!(
-            res.headers().get("x-aria-router-layer").unwrap(),
-            "bypass"
-        );
+        assert_eq!(res.headers().get("x-aria-router-layer").unwrap(), "bypass");
     }
 
     #[tokio::test]
@@ -2127,7 +2223,10 @@ global:
             )
             .await
             .unwrap();
-        assert_eq!(res.headers().get("x-aria-router-layer").unwrap(), "semantic");
+        assert_eq!(
+            res.headers().get("x-aria-router-layer").unwrap(),
+            "semantic"
+        );
     }
 
     #[tokio::test]
@@ -2217,9 +2316,11 @@ global:
             "text/event-stream"
         );
         assert!(res.headers().get("x-aria-router-model").is_some());
-        assert!(res.headers().get("x-aria-router-algorithm").is_some()
-            || res.headers().get("x-aria-router-reason").is_some()
-            || res.headers().get("x-aria-router-confidence").is_some());
+        assert!(
+            res.headers().get("x-aria-router-algorithm").is_some()
+                || res.headers().get("x-aria-router-reason").is_some()
+                || res.headers().get("x-aria-router-confidence").is_some()
+        );
         let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("data:"), "expected SSE chunks, got {text}");
@@ -2252,7 +2353,9 @@ global:
         let (st, _dir) = isolated_state(doc);
         let (status, body) = oneshot_json(
             mgmt_router(st),
-            Request::get("/v1/router/models").body(Body::empty()).unwrap(),
+            Request::get("/v1/router/models")
+                .body(Body::empty())
+                .unwrap(),
         )
         .await;
         assert_eq!(status, 200);
@@ -2307,7 +2410,8 @@ global:
         let v = if bytes.is_empty() {
             json!({})
         } else {
-            serde_json::from_slice(&bytes).unwrap_or(json!({"raw": String::from_utf8_lossy(&bytes)}))
+            serde_json::from_slice(&bytes)
+                .unwrap_or(json!({"raw": String::from_utf8_lossy(&bytes)}))
         };
         (status, v)
     }
@@ -2316,7 +2420,8 @@ global:
     async fn put_config_rejects_unknown_block() {
         let backend = mock_upstream().await;
         let yaml = tiny_yaml(&backend);
-        let path = std::env::temp_dir().join(format!("aria-router-put-bad-{}.yml", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("aria-router-put-bad-{}.yml", std::process::id()));
         std::fs::write(&path, &yaml).unwrap();
         let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
         let (st, _dir) = isolated_state_with_path(doc, path.clone());
@@ -2331,7 +2436,10 @@ global:
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(snapshot_doc(&st).entrypoints.len(), before.entrypoints.len());
+        assert_eq!(
+            snapshot_doc(&st).entrypoints.len(),
+            before.entrypoints.len()
+        );
         let _ = std::fs::remove_file(path);
     }
 
@@ -2339,7 +2447,8 @@ global:
     async fn put_config_reloads_tiny_yaml() {
         let backend = mock_upstream().await;
         let yaml = tiny_yaml(&backend);
-        let path = std::env::temp_dir().join(format!("aria-router-put-ok-{}.yml", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("aria-router-put-ok-{}.yml", std::process::id()));
         std::fs::write(&path, &yaml).unwrap();
         let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
         let (st, _dir) = isolated_state_with_path(doc, path.clone());
@@ -2357,7 +2466,9 @@ global:
         assert_eq!(body["ok"], true);
         let got = oneshot_json(
             mgmt_router(st),
-            Request::get("/v1/router/config").body(Body::empty()).unwrap(),
+            Request::get("/v1/router/config")
+                .body(Body::empty())
+                .unwrap(),
         )
         .await;
         assert_eq!(got.0, 200);
@@ -2373,7 +2484,9 @@ global:
         let (st, _dir) = isolated_state(doc);
         let (status, body) = oneshot_json(
             mgmt_router(st),
-            Request::get("/v1/router/topology").body(Body::empty()).unwrap(),
+            Request::get("/v1/router/topology")
+                .body(Body::empty())
+                .unwrap(),
         )
         .await;
         assert_eq!(status, 200);
@@ -2454,7 +2567,9 @@ global:
 
         let (status, body) = oneshot_json(
             mgmt_router(st),
-            Request::get("/v1/router/providers").body(Body::empty()).unwrap(),
+            Request::get("/v1/router/providers")
+                .body(Body::empty())
+                .unwrap(),
         )
         .await;
         assert_eq!(status, 200);
@@ -2956,7 +3071,10 @@ global:
         assert_eq!(body["api_key_configured"], true);
         assert_eq!(body["api_key_name"], "fresh");
         // The router adopted the newer key's secret.
-        assert_eq!(st.keys.lock().unwrap().oauth_api_key().as_deref(), Some(new_key));
+        assert_eq!(
+            st.keys.lock().unwrap().oauth_api_key().as_deref(),
+            Some(new_key)
+        );
     }
 
     #[tokio::test]
@@ -3050,11 +3168,7 @@ global:
         };
         let res1 = app.clone().oneshot(mk()).await.unwrap();
         assert_eq!(res1.status(), StatusCode::OK);
-        assert!(
-            res1.headers()
-                .get("x-aria-router-semantic-cache")
-                .is_none()
-        );
+        assert!(res1.headers().get("x-aria-router-semantic-cache").is_none());
 
         let res2 = app.oneshot(mk()).await.unwrap();
         assert_eq!(res2.status(), StatusCode::OK);

@@ -75,14 +75,11 @@ impl BuiltinAgent {
             });
         };
 
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_millis(task.timeout_ms.max(1));
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(task.timeout_ms.max(1));
         static AGENT_HTTP: OnceLock<reqwest::Client> = OnceLock::new();
         let client = AGENT_HTTP.get_or_init(reqwest::Client::new);
-        let url = format!(
-            "{}/v1/chat/completions",
-            endpoint.trim_end_matches('/')
-        );
+        let url = format!("{}/v1/chat/completions", endpoint.trim_end_matches('/'));
         let eligible_line = task
             .eligible
             .iter()
@@ -125,16 +122,13 @@ impl BuiltinAgent {
                 "tool_choice": "auto",
                 "temperature": 0
             });
-            let resp = tokio::time::timeout(
-                remaining,
-                {
-                    let mut req = client.post(&url).json(&body);
-                    if let Some(key) = &self.api_key {
-                        req = req.bearer_auth(key);
-                    }
-                    req.send()
-                },
-            )
+            let resp = tokio::time::timeout(remaining, {
+                let mut req = client.post(&url).json(&body);
+                if let Some(key) = &self.api_key {
+                    req = req.bearer_auth(key);
+                }
+                req.send()
+            })
             .await
             .map_err(|_| RouterError::Timeout("builtin agent".into()))?
             .map_err(|e| RouterError::Extension(e.to_string()))?;
@@ -293,9 +287,7 @@ fn tier_hint_from_name(name: &str) -> &'static str {
     if lower.ends_with("-large") || lower.contains("/ariamodel-large") || lower.ends_with("/large")
     {
         "large"
-    } else if lower.ends_with("-mid")
-        || lower.contains("/ariamodel-mid")
-        || lower.ends_with("/mid")
+    } else if lower.ends_with("-mid") || lower.contains("/ariamodel-mid") || lower.ends_with("/mid")
     {
         "mid"
     } else if lower.ends_with("-small")
@@ -362,7 +354,10 @@ fn run_tool(
     }
 }
 
-fn decision_from_submit(args: &Value, eligible: &[ModelCard]) -> Result<RouteDecision, RouterError> {
+fn decision_from_submit(
+    args: &Value,
+    eligible: &[ModelCard],
+) -> Result<RouteDecision, RouterError> {
     let model = args
         .get("model")
         .and_then(|m| m.as_str())
@@ -403,20 +398,25 @@ fn decision_from_submit(args: &Value, eligible: &[ModelCard]) -> Result<RouteDec
     })
 }
 
-pub fn parse_decision_json(raw: &str, eligible: &[ModelCard]) -> Result<RouteDecision, RouterError> {
+pub fn parse_decision_json(
+    raw: &str,
+    eligible: &[ModelCard],
+) -> Result<RouteDecision, RouterError> {
     let trimmed = raw
         .trim()
         .trim_start_matches("```json")
         .trim_start_matches("```")
         .trim_end_matches("```")
         .trim();
-    let v: Value = serde_json::from_str(trimmed).map_err(|_| {
-        RouterError::FailClosed(format!("agent output is not JSON: {trimmed}"))
-    })?;
+    let v: Value = serde_json::from_str(trimmed)
+        .map_err(|_| RouterError::FailClosed(format!("agent output is not JSON: {trimmed}")))?;
     decision_from_submit(&v, eligible)
 }
 
-fn validate_decision(d: RouteDecision, eligible: &[ModelCard]) -> Result<RouteDecision, RouterError> {
+fn validate_decision(
+    d: RouteDecision,
+    eligible: &[ModelCard],
+) -> Result<RouteDecision, RouterError> {
     if !eligible.iter().any(|m| m.name == d.model) {
         return Err(RouterError::FailClosed(format!(
             "agent chose {} not in eligible pool",
@@ -624,7 +624,10 @@ mod tests {
             timeout_ms: 1000,
             max_turns: 3,
         };
-        assert_eq!(canned.route(task.clone(), &tools).await.unwrap().reason, "canned");
+        assert_eq!(
+            canned.route(task.clone(), &tools).await.unwrap().reason,
+            "canned"
+        );
         let first = BuiltinAgent {
             endpoint: None,
             model: "router-llm".into(),

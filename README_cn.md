@@ -22,7 +22,7 @@ cargo build --release -p aria-router -p ariacompute-router-ffi
 | `listeners` | 数据面绑定（`address` + `port`；`--bind` 默认值） |
 | `providers` | `defaults.default_model` + 具名模型 / `backend_refs` |
 | `entrypoints` | 虚拟模型名 → `router: semantic\|agent\|afm-d` + `recipe` |
-| `recipes` | Semantic 的 `routing.*`、agent 的 `agent.*`、或 afm-d 的 `afm-d.*`（System One endpoint / timeout / fallback） |
+| `recipes` | Semantic 的 `routing.*`、agent 的 `agent.*`、或 afm-d 的 `afm-d.*`（System One endpoint / 可选 `track` / timeout / fallback） |
 | `global` | 鉴权 / keys / users 路径（可选） |
 
 示例（YAML 内注释为英文）：
@@ -134,7 +134,7 @@ cargo run -p aria-router -- serve \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# AFM-D gateway（另需 DECISION_MODEL_URL 上的 aria-engine，默认 :8011）
+# AFM-D gateway（另需 DECISION_MODEL_URL 上的 aria-engine，默认 :8010 encoder）
 export GATEWAY_API_KEY=…
 cargo run -p aria-router -- serve \
   --config config/examples/afm-d-gateway.yaml \
@@ -756,9 +756,10 @@ python -m bench compare \
 # aria = System One Choice（afm-d-auto）；vllm_sr = keyword 基线（auto）。
 export GATEWAY_BASE=https://tokenhub.tencentmaas.com
 export GATEWAY_API_KEY=your-api-key
-# afm-d 所需 Encoder System One（afm-d-gateway 默认 endpoint :8011）：
-#   aria-engine serve --track encoder --bind 127.0.0.1:8011
-export DECISION_MODEL_URL=http://127.0.0.1:8011
+# afm-d 所需 Encoder System One（afm-d-gateway 默认 track: encoder @ :8010）：
+#   aria-engine serve --track encoder --bind 127.0.0.1:8010
+# Decoder 轨用 :8011（`--track decoder`）；若指向 Decoder 则设 afm-d.track: decoder。
+export DECISION_MODEL_URL=http://127.0.0.1:8010
 
 # 若 :8899 上已有 semantic/agent gateway，先停掉，再：
 aria-router serve \

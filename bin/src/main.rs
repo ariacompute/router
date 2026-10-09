@@ -299,10 +299,9 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
                     Some(t.to_string())
                 }
             } else if prompt_models {
-                let ans = prompt_password(
-                    "gateway API key (saved in router.yml; Enter=env only): ",
-                )
-                .unwrap_or_default();
+                let ans =
+                    prompt_password("gateway API key (saved in router.yml; Enter=env only): ")
+                        .unwrap_or_default();
                 let t = ans.trim();
                 if t.is_empty() {
                     None
@@ -357,7 +356,7 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
         },
         afm_d_endpoint: if kind == "afm-d" {
             prompt_opt(
-                "afm-d.endpoint [http://127.0.0.1:8011]: ",
+                "afm-d.endpoint [http://127.0.0.1:8010]: ",
                 args.afm_d_endpoint,
                 prompt_models,
             )
@@ -457,9 +456,8 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Defaults: allow_register=true, require_api_key=true (edit YAML or Dashboard later).
-    let written = aria_router_config::write_default_config_with_opts(
-        &kind, true, true, true, &models,
-    )?;
+    let written =
+        aria_router_config::write_default_config_with_opts(&kind, true, true, true, &models)?;
     println!("wrote {}", written.display());
 
     let users_path = default_users_path()?;
@@ -610,11 +608,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 r = b => r?,
             }
         }
-        Command::Upgrade { version } => {
-            upgrade::run(version.as_deref(), ROUTER_VERSION)
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
-        }
+        Command::Upgrade { version } => upgrade::run(version.as_deref(), ROUTER_VERSION)
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?,
         Command::Version => {
             println!("aria-router {ROUTER_VERSION}");
         }

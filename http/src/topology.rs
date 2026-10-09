@@ -96,10 +96,7 @@ pub fn topology_graph(doc: &RouterDocument) -> Value {
                         "afm-d",
                         &[
                             ("timeout_ms", json!(afm.timeout_ms.unwrap_or(5000))),
-                            (
-                                "endpoint",
-                                json!(afm.endpoint.as_deref().unwrap_or("")),
-                            ),
+                            ("endpoint", json!(afm.endpoint.as_deref().unwrap_or(""))),
                         ],
                     );
                     edges.push(json!({"from": rid, "to": nid}));

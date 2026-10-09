@@ -83,11 +83,7 @@ impl CostLedger {
             ev,
         );
         if let Some(kid) = &ev.key_id {
-            let label = format!(
-                "{}|{}",
-                kid,
-                ev.key_name.as_deref().unwrap_or("")
-            );
+            let label = format!("{}|{}", kid, ev.key_name.as_deref().unwrap_or(""));
             Self::add_bucket(self.by_key.entry(label).or_default(), ev);
         }
         if ev.identity == "local_user" {
@@ -97,9 +93,7 @@ impl CostLedger {
             let label = format!(
                 "{}|{}",
                 ev.serve_site.as_deref().unwrap_or("unknown"),
-                ev.serve_email
-                    .as_deref()
-                    .unwrap_or(ev.user.as_str())
+                ev.serve_email.as_deref().unwrap_or(ev.user.as_str())
             );
             Self::add_bucket(self.by_serve_user.entry(label).or_default(), ev);
         }
@@ -160,14 +154,11 @@ impl CostLedger {
         } else {
             self.totals.cost_usd / (tokens / 1_000_000.0)
         };
-        let product = users * avg_s_per_u * avg_t_per_s * avg_r_per_t * avg_k_per_r * (avg_p / 1_000_000.0);
+        let product =
+            users * avg_s_per_u * avg_t_per_s * avg_r_per_t * avg_k_per_r * (avg_p / 1_000_000.0);
         // product uses $/token via avg_p as $/MTok → divide by 1e6 for $/token; residual vs attributed
-        let product_usd = users
-            * avg_s_per_u
-            * avg_t_per_s
-            * avg_r_per_t
-            * (avg_k_per_r / 1_000_000.0)
-            * avg_p;
+        let product_usd =
+            users * avg_s_per_u * avg_t_per_s * avg_r_per_t * (avg_k_per_r / 1_000_000.0) * avg_p;
 
         json!({
             "totals": {

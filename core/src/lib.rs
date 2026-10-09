@@ -276,7 +276,10 @@ mod tests {
 
     #[test]
     fn router_kind_and_bypass() {
-        assert_eq!("semantic".parse::<RouterKind>().unwrap(), RouterKind::Semantic);
+        assert_eq!(
+            "semantic".parse::<RouterKind>().unwrap(),
+            RouterKind::Semantic
+        );
         assert_eq!("agent".parse::<RouterKind>().unwrap(), RouterKind::Agent);
         assert_eq!("afm-d".parse::<RouterKind>().unwrap(), RouterKind::AfmD);
         assert_eq!(RouterKind::Semantic.as_str(), "semantic");
@@ -295,7 +298,10 @@ mod tests {
         assert!(d.bypass);
         assert_eq!(d.layer, "bypass");
         assert_eq!(d.model, "local/m");
-        assert_eq!(ConstraintCtx::open().require_modality.as_deref(), Some("text"));
+        assert_eq!(
+            ConstraintCtx::open().require_modality.as_deref(),
+            Some("text")
+        );
     }
 
     #[test]

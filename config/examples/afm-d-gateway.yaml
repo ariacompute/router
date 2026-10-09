@@ -2,7 +2,9 @@
 # Entrypoint: ariacompute/afm-d-auto. AFM-D System One chooses among ariamodel-{small,mid,large}.
 # Backends: TokenHub (aligned with semantic-gateway / agent-gateway).
 # XOR with other gateways on :8899. Requires: export GATEWAY_API_KEY=…
-# Also needs aria-engine System One at DECISION_MODEL_URL (default :8011).
+# Also needs aria-engine System One at DECISION_MODEL_URL (default :8010 encoder).
+#   aria-engine serve --track encoder --bind 127.0.0.1:8010
+# Decoder serve uses :8011 (`--track decoder`); set track: decoder if pointing there.
 # entrypoint.router must equal recipe.router.
 
 version: v0.3
@@ -71,7 +73,8 @@ recipes:
   - name: afm-d-default
     router: afm-d
     afm-d:
-      endpoint: "${DECISION_MODEL_URL:-http://127.0.0.1:8011}"
+      endpoint: "${DECISION_MODEL_URL:-http://127.0.0.1:8010}"
+      track: encoder
       timeout_ms: 5000
       fallback: ariacompute/ariamodel-mid
       instructions: |

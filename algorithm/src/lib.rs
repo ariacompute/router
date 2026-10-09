@@ -5,7 +5,7 @@ mod elo;
 pub use elo::{global_elo, EloTable};
 
 use aria_router_config::{DecisionCfg, RouterDocument};
-use aria_router_core::{RouterError, ModelCard};
+use aria_router_core::{ModelCard, RouterError};
 
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeStats {
@@ -27,7 +27,9 @@ pub fn select(
     }
     let algo = decision.algorithm.as_deref().unwrap_or("static");
     if RouterDocument::unimplemented_algorithm(algo) {
-        return Err(RouterError::Unsupported(format!("algorithm {algo} not implemented")));
+        return Err(RouterError::Unsupported(format!(
+            "algorithm {algo} not implemented"
+        )));
     }
     let names: Vec<String> = if decision.model_refs.is_empty() {
         eligible.iter().map(|m| m.name.clone()).collect()

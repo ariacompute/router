@@ -47,9 +47,7 @@ impl SemanticCache {
             // Prefer same decision; still allow cross-decision if similar enough.
             let bonus = if e.decision == decision { 0.02 } else { 0.0 };
             let sim = cosine(&q, &e.vec) + bonus;
-            if sim >= cfg.similarity_threshold
-                && best.as_ref().is_none_or(|(s, _)| sim > *s)
-            {
+            if sim >= cfg.similarity_threshold && best.as_ref().is_none_or(|(s, _)| sim > *s) {
                 best = Some((sim, e));
             }
         }
@@ -178,7 +176,9 @@ mod tests {
                 .unwrap()["cached"],
             true
         );
-        assert!(cache.lookup("explain rust ownership", "m2", "d1", &c).is_none());
+        assert!(cache
+            .lookup("explain rust ownership", "m2", "d1", &c)
+            .is_none());
         assert!(cache
             .lookup("totally unrelated zzzyx", "m1", "d1", &cfg(0.99, 64))
             .is_none());
@@ -207,8 +207,12 @@ mod tests {
         cache.store("yyyy unique beta", "m", "d", json!("b"), 4, &c);
         cache.store("xxxx unique gamma", "m", "d", json!("c"), 4, &c);
         // max_entries=2 → oldest trimmed; exact key for oldest misses.
-        assert!(cache.lookup("zzzz unique alpha", "m", "d", &cfg(0.99, 2)).is_none());
-        assert!(cache.lookup("xxxx unique gamma", "m", "d", &cfg(0.99, 2)).is_some());
+        assert!(cache
+            .lookup("zzzz unique alpha", "m", "d", &cfg(0.99, 2))
+            .is_none());
+        assert!(cache
+            .lookup("xxxx unique gamma", "m", "d", &cfg(0.99, 2))
+            .is_some());
     }
 
     #[test]

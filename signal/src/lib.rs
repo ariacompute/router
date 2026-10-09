@@ -23,9 +23,7 @@ pub struct SignalSet {
 
 impl SignalSet {
     pub fn get(&self, kind: &str, name: &str) -> Option<&SignalHit> {
-        self.hits
-            .iter()
-            .find(|h| h.kind == kind && h.name == name)
+        self.hits.iter().find(|h| h.kind == kind && h.name == name)
     }
 
     pub fn matched(&self, kind: &str, name: &str) -> bool {
@@ -113,27 +111,22 @@ fn eval_learned(
     text: &str,
 ) -> Result<Vec<SignalHit>, RouterError> {
     let mut hits = vec![];
-    let catalog_dim = doc
-        .global
-        .model_catalog
-        .values()
-        .find_map(|e| e.dim);
+    let catalog_dim = doc.global.model_catalog.values().find_map(|e| e.dim);
     for kind in LEARNED {
-        if !needed.iter().any(|k| k == kind || k.replace('_', "-") == *kind) {
+        if !needed
+            .iter()
+            .any(|k| k == kind || k.replace('_', "-") == *kind)
+        {
             continue;
         }
-        let Some(raw) = s
-            .extra
-            .get(*kind)
-            .or_else(|| {
-                // YAML plural keys (vLLM SR): embeddings, domains, …
-                let plural = format!("{kind}s");
-                s.extra.get(plural.as_str()).or_else(|| {
-                    let alt = kind.replace('-', "_");
-                    s.extra.get(alt.as_str())
-                })
+        let Some(raw) = s.extra.get(*kind).or_else(|| {
+            // YAML plural keys (vLLM SR): embeddings, domains, …
+            let plural = format!("{kind}s");
+            s.extra.get(plural.as_str()).or_else(|| {
+                let alt = kind.replace('-', "_");
+                s.extra.get(alt.as_str())
             })
-        else {
+        }) else {
             continue;
         };
         let items: Vec<serde_json::Value> = if raw.is_array() {
@@ -235,11 +228,7 @@ fn eval_language(s: &Signals, prompt: &str) -> Vec<SignalHit> {
     s.language
         .iter()
         .map(|n| {
-            let want = n
-                .extra
-                .get("code")
-                .and_then(|v| v.as_str())
-                .unwrap_or("en");
+            let want = n.extra.get("code").and_then(|v| v.as_str()).unwrap_or("en");
             let matched = detect_lang(prompt) == want;
             SignalHit {
                 kind: "language".into(),
@@ -252,10 +241,13 @@ fn eval_language(s: &Signals, prompt: &str) -> Vec<SignalHit> {
 }
 
 fn detect_lang(prompt: &str) -> &'static str {
-    let cjk = prompt.chars().filter(|c| {
-        let u = *c as u32;
-        (0x4E00..=0x9FFF).contains(&u) || (0x3040..=0x30FF).contains(&u)
-    }).count();
+    let cjk = prompt
+        .chars()
+        .filter(|c| {
+            let u = *c as u32;
+            (0x4E00..=0x9FFF).contains(&u) || (0x3040..=0x30FF).contains(&u)
+        })
+        .count();
     if cjk > prompt.chars().count() / 8 && cjk > 0 {
         "zh"
     } else {
@@ -286,11 +278,7 @@ fn eval_authz(s: &Signals, metadata: &HashMap<String, String>) -> Vec<SignalHit>
     s.authz
         .iter()
         .map(|n| {
-            let want = n
-                .extra
-                .get("role")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let want = n.extra.get("role").and_then(|v| v.as_str()).unwrap_or("");
             let matched = !want.is_empty() && role == want;
             SignalHit {
                 kind: "authz".into(),

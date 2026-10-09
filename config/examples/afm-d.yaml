@@ -97,7 +97,7 @@ recipes:
 
   # Catalog demo: same AFM-D path as afm-d-default; private/cloud models
   # remain for bypass / Location pruning documentation (symmetric to agent.yaml).
-  # Optional: set endpoint (e.g. "${DECISION_MODEL_URL:-http://127.0.0.1:8011}") for live System One.
+  # Optional: set endpoint (e.g. "${DECISION_MODEL_URL:-http://127.0.0.1:8010}") for live System One.
   - name: afm-d-catalog
     router: afm-d
     afm-d:

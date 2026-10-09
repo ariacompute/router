@@ -101,7 +101,12 @@ pub fn apply_request(
 }
 
 /// Persist a response only when the decision enables response-cache.
-pub fn remember_response(host: &PluginHost, plugins: &[PluginRef], req: &ChatRequest, body: &Value) {
+pub fn remember_response(
+    host: &PluginHost,
+    plugins: &[PluginRef],
+    req: &ChatRequest,
+    body: &Value,
+) {
     if !has_response_cache(plugins) {
         return;
     }

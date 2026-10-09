@@ -1,10 +1,10 @@
 //! Local Dashboard users: username/password (argon2id) + opaque sessions.
 
-use aria_router_core::RouterError;
 use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+use aria_router_core::RouterError;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -88,12 +88,10 @@ pub struct UserStore {
 impl UserStore {
     pub fn load(path: &Path) -> Result<Self, RouterError> {
         let users = if path.exists() {
-            let raw = std::fs::read_to_string(path).map_err(|e| {
-                RouterError::Io(format!("read {}: {e}", path.display()))
-            })?;
-            let file: UserFile = serde_json::from_str(&raw).map_err(|e| {
-                RouterError::Config(format!("users file {}: {e}", path.display()))
-            })?;
+            let raw = std::fs::read_to_string(path)
+                .map_err(|e| RouterError::Io(format!("read {}: {e}", path.display())))?;
+            let file: UserFile = serde_json::from_str(&raw)
+                .map_err(|e| RouterError::Config(format!("users file {}: {e}", path.display())))?;
             file.users
         } else {
             Vec::new()
@@ -115,17 +113,16 @@ impl UserStore {
 
     fn persist(&self) -> Result<(), RouterError> {
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                RouterError::Io(format!("mkdir {}: {e}", parent.display()))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| RouterError::Io(format!("mkdir {}: {e}", parent.display())))?;
         }
         let file = UserFile {
             users: self.users.clone(),
         };
-        let raw = serde_json::to_string_pretty(&file).map_err(|e| RouterError::Io(e.to_string()))?;
-        std::fs::write(&self.path, raw).map_err(|e| {
-            RouterError::Io(format!("write {}: {e}", self.path.display()))
-        })?;
+        let raw =
+            serde_json::to_string_pretty(&file).map_err(|e| RouterError::Io(e.to_string()))?;
+        std::fs::write(&self.path, raw)
+            .map_err(|e| RouterError::Io(format!("write {}: {e}", self.path.display())))?;
         Ok(())
     }
 
@@ -155,7 +152,11 @@ impl UserStore {
         self.users.iter().find(|u| u.id == id)
     }
 
-    pub fn create_admin(path: &Path, username: &str, password: &str) -> Result<UserPublic, RouterError> {
+    pub fn create_admin(
+        path: &Path,
+        username: &str,
+        password: &str,
+    ) -> Result<UserPublic, RouterError> {
         let mut store = if path.exists() {
             Self::load(path)?
         } else {
@@ -241,7 +242,11 @@ impl UserStore {
         Ok((pubu, token))
     }
 
-    pub fn login(&mut self, username: &str, password: &str) -> Result<(UserPublic, String), RouterError> {
+    pub fn login(
+        &mut self,
+        username: &str,
+        password: &str,
+    ) -> Result<(UserPublic, String), RouterError> {
         let username = username.trim();
         let (pubu, user_id) = {
             let Some(u) = self
@@ -516,10 +521,7 @@ pub fn extract_session_token(headers: &axum::http::HeaderMap) -> Option<String> 
             if let Some(rest) = s.strip_prefix("Bearer ") {
                 let t = rest.trim();
                 // Session tokens are hex; sk-aria_ / sk-bf- are API keys — ignore those here.
-                if !t.is_empty()
-                    && !t.starts_with("sk-aria_")
-                    && !t.starts_with("sk-bf-")
-                {
+                if !t.is_empty() && !t.starts_with("sk-aria_") && !t.starts_with("sk-bf-") {
                     return Some(t.to_string());
                 }
             }
@@ -550,9 +552,7 @@ mod tests {
         let path = dir.path().join("users.json");
         UserStore::create_admin(&path, "admin", "password1").unwrap();
         let mut store = UserStore::load(&path).unwrap();
-        let (u, tok) = store
-            .register("alice", "password1", true)
-            .unwrap();
+        let (u, tok) = store.register("alice", "password1", true).unwrap();
         assert_eq!(u.role, UserRole::User);
         let me = store.resolve_session(&tok).unwrap();
         assert_eq!(me.username, "alice");
@@ -574,13 +574,23 @@ mod tests {
         let path = dir.path().join("users.json");
         let mut store = UserStore::empty(path);
         let u1 = store
-            .upsert_serve_user("serve-1", Some("Jane@AriaCompute.com".into()), Some("Jane".into()), &[])
+            .upsert_serve_user(
+                "serve-1",
+                Some("Jane@AriaCompute.com".into()),
+                Some("Jane".into()),
+                &[],
+            )
             .unwrap();
         assert_eq!(u1.role, UserRole::Admin); // no admin yet -> first becomes admin
         assert_eq!(u1.name.as_deref(), Some("Jane"));
         assert_eq!(u1.email.as_deref(), Some("jane@ariacompute.com"));
         let u2 = store
-            .upsert_serve_user("serve-1", Some("jane@ariacompute.com".into()), Some("Jane Doe".into()), &[])
+            .upsert_serve_user(
+                "serve-1",
+                Some("jane@ariacompute.com".into()),
+                Some("Jane Doe".into()),
+                &[],
+            )
             .unwrap();
         assert_eq!(u2.id, u1.id); // same serve id -> updated, not duplicated
         assert_eq!(u2.name.as_deref(), Some("Jane Doe"));
@@ -638,6 +648,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("users.json");
         let mut store = UserStore::empty(path);
-        assert!(store.upsert_serve_user("", Some("a@b.c".into()), None, &[]).is_err());
+        assert!(store
+            .upsert_serve_user("", Some("a@b.c".into()), None, &[])
+            .is_err());
     }
 }

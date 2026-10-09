@@ -22,7 +22,7 @@ Routing policy is YAML v0.3 (`--config`). Secrets expand as `${VAR}` / `${VAR:-d
 | `listeners` | Data-plane bind (`address` + `port`; default `--bind`) |
 | `providers` | `defaults.default_model` + named models / `backend_refs` |
 | `entrypoints` | Virtual model names → `router: semantic\|agent\|afm-d` + `recipe` |
-| `recipes` | Semantic `routing.*`, agent `agent.*`, or afm-d `afm-d.*` (System One endpoint / timeout / fallback) |
+| `recipes` | Semantic `routing.*`, agent `agent.*`, or afm-d `afm-d.*` (System One endpoint / optional `track` / timeout / fallback) |
 | `global` | Auth / keys / users paths (optional) |
 
 Examples (English comments in every file):
@@ -133,7 +133,7 @@ cargo run -p aria-router -- serve \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# AFM-D gateway (also needs aria-engine at DECISION_MODEL_URL, default :8011)
+# AFM-D gateway (also needs aria-engine at DECISION_MODEL_URL, default :8010 encoder)
 export GATEWAY_API_KEY=…
 cargo run -p aria-router -- serve \
   --config config/examples/afm-d-gateway.yaml \
@@ -761,9 +761,10 @@ python -m bench compare \
 # aria = System One Choice (afm-d-auto); vllm_sr = keyword baseline (auto).
 export GATEWAY_BASE=https://tokenhub.tencentmaas.com
 export GATEWAY_API_KEY=your-api-key
-# Encoder System One for afm-d (default afm-d-gateway endpoint :8011):
-#   aria-engine serve --track encoder --bind 127.0.0.1:8011
-export DECISION_MODEL_URL=http://127.0.0.1:8011
+# Encoder System One for afm-d (afm-d-gateway defaults track: encoder @ :8010):
+#   aria-engine serve --track encoder --bind 127.0.0.1:8010
+# Decoder track uses :8011 (`--track decoder`); set afm-d.track: decoder if needed.
+export DECISION_MODEL_URL=http://127.0.0.1:8010
 
 # Stop semantic/agent gateway if running on :8899, then:
 aria-router serve \

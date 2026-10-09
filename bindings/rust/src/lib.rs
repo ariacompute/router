@@ -143,10 +143,8 @@ impl Router {
                         .post(format!("{}/v1/chat/completions", url.trim_end_matches('/')))
                         .json(&req);
                     if !self.setup.token.is_empty() {
-                        builder = builder.header(
-                            "authorization",
-                            format!("Bearer {}", self.setup.token),
-                        );
+                        builder =
+                            builder.header("authorization", format!("Bearer {}", self.setup.token));
                     }
                     builder.send().await?.text().await
                 })
@@ -191,14 +189,14 @@ mod tests {
         let mut r = Router::new();
         let p1 = std::path::Path::new("../../config/examples/semantic-tiny.yaml");
         let p2 = std::path::Path::new("config/examples/semantic-tiny.yaml");
-        let path = if p1.exists() {
-            p1
-        } else {
-            p2
-        };
+        let path = if p1.exists() { p1 } else { p2 };
         r.init(path.to_str().unwrap()).unwrap();
         let m = r.models().unwrap();
-        assert!(m["data"].as_array().unwrap().iter().any(|x| x == "ariacompute/semantic-auto"));
+        assert!(m["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x == "ariacompute/semantic-auto"));
     }
 
     #[test]

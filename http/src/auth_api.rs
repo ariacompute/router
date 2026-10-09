@@ -7,10 +7,10 @@ use crate::AppError;
 use crate::AppState;
 use aria_router_core::RouterError;
 use axum::extract::{Query, State};
-use reqwest::Method;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
+use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -34,7 +34,10 @@ pub fn optional_user(st: &AppState, headers: &HeaderMap) -> Option<UserPublic> {
     require_user(st, headers).ok()
 }
 
-pub fn gate_if_users(st: &AppState, headers: &HeaderMap) -> Result<Option<UserPublic>, RouterError> {
+pub fn gate_if_users(
+    st: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<UserPublic>, RouterError> {
     if st.users.lock().unwrap().is_empty() {
         return Ok(None);
     }
@@ -56,10 +59,7 @@ pub async fn register_status(State(st): State<Arc<AppState>>) -> Json<Value> {
     }))
 }
 
-pub async fn register(
-    State(st): State<Arc<AppState>>,
-    Json(body): Json<AuthBody>,
-) -> Response {
+pub async fn register(State(st): State<Arc<AppState>>, Json(body): Json<AuthBody>) -> Response {
     if st.users.lock().unwrap().is_empty() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -76,10 +76,8 @@ pub async fn register(
     match result {
         Ok((user, token)) => {
             let mut res = Json(json!({"user": user, "token": token})).into_response();
-            res.headers_mut().insert(
-                header::SET_COOKIE,
-                session_cookie(&token).parse().unwrap(),
-            );
+            res.headers_mut()
+                .insert(header::SET_COOKIE, session_cookie(&token).parse().unwrap());
             res
         }
         Err(e) => AppError(e).into_response(),
@@ -97,10 +95,8 @@ pub async fn login(
         .login(&body.username, &body.password)
         .map_err(AppError)?;
     let mut res = Json(json!({"user": user, "token": token})).into_response();
-    res.headers_mut().insert(
-        header::SET_COOKIE,
-        session_cookie(&token).parse().unwrap(),
-    );
+    res.headers_mut()
+        .insert(header::SET_COOKIE, session_cookie(&token).parse().unwrap());
     Ok(res)
 }
 
@@ -109,10 +105,8 @@ pub async fn logout(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Resp
         st.users.lock().unwrap().logout(&tok);
     }
     let mut res = Json(json!({"ok": true})).into_response();
-    res.headers_mut().insert(
-        header::SET_COOKIE,
-        clear_session_cookie().parse().unwrap(),
-    );
+    res.headers_mut()
+        .insert(header::SET_COOKIE, clear_session_cookie().parse().unwrap());
     res
 }
 
@@ -151,7 +145,9 @@ pub async fn list_users(
     if !matches!(u.role, UserRole::Admin) {
         return Err(AppError(RouterError::Unauthorized("admin required".into())));
     }
-    Ok(Json(json!({"users": st.users.lock().unwrap().list_public()})))
+    Ok(Json(
+        json!({"users": st.users.lock().unwrap().list_public()}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -192,7 +188,9 @@ pub async fn set_allow_register(
         return Err(AppError(RouterError::Unauthorized("admin required".into())));
     }
     st.doc.lock().unwrap().global.allow_register = body.allow_register;
-    Ok(Json(json!({"ok": true, "allow_register": body.allow_register})))
+    Ok(Json(
+        json!({"ok": true, "allow_register": body.allow_register}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -308,25 +306,31 @@ pub async fn oauth_callback(
     Query(q): Query<LinkCallbackQ>,
 ) -> Response {
     if let Some(err) = q.error {
-        return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&err))).into_response();
+        return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&err)))
+            .into_response();
     }
     let (Some(code), Some(state)) = (q.code, q.state) else {
         return Redirect::temporary("/?error=missing_code").into_response();
     };
-    let (site, site_url, _owner_user_id, _owner_email) = match st
-        .keys
-        .lock()
-        .unwrap()
-        .take_pending(&state)
-    {
-        Ok(v) => v,
-        Err(e) => {
-            return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
+    let (site, site_url, _owner_user_id, _owner_email) =
+        match st.keys.lock().unwrap().take_pending(&state) {
+            Ok(v) => v,
+            Err(e) => {
+                return Redirect::temporary(&format!(
+                    "/?error={}",
+                    urlencoding_encode(&e.to_string())
+                ))
                 .into_response();
-        }
-    };
-    let exchange_url = format!("{}/api/router-link/exchange", site_url.trim_end_matches('/'));
-    let client = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(30)).build() {
+            }
+        };
+    let exchange_url = format!(
+        "{}/api/router-link/exchange",
+        site_url.trim_end_matches('/')
+    );
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+    {
         Ok(c) => c,
         Err(e) => {
             return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
@@ -342,8 +346,11 @@ pub async fn oauth_callback(
         Ok(r) => match r.json().await {
             Ok(v) => v,
             Err(e) => {
-                return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
-                    .into_response();
+                return Redirect::temporary(&format!(
+                    "/?error={}",
+                    urlencoding_encode(&e.to_string())
+                ))
+                .into_response();
             }
         },
         Err(e) => {
@@ -395,12 +402,12 @@ pub async fn oauth_callback(
     // Upsert the serve identity as a router dashboard user (role by whitelist /
     // first-admin bootstrap). The serve role is intentionally NOT mirrored.
     let admin_emails = st.doc.lock().unwrap().global.admin_emails.clone();
-    let user = match st
-        .users
-        .lock()
-        .unwrap()
-        .upsert_serve_user(&serve_id_str, serve_email.clone(), serve_name, &admin_emails)
-    {
+    let user = match st.users.lock().unwrap().upsert_serve_user(
+        &serve_id_str,
+        serve_email.clone(),
+        serve_name,
+        &admin_emails,
+    ) {
         Ok(u) => u,
         Err(e) => {
             return Redirect::temporary(&format!("/?error={}", urlencoding_encode(&e.to_string())))
@@ -494,7 +501,9 @@ async fn serve_json(
         .request(method, url)
         .header(header::AUTHORIZATION, format!("Bearer {bearer}"));
     if let Some(b) = body {
-        req = req.header(header::CONTENT_TYPE, "application/json").json(&b);
+        req = req
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&b);
     }
     let resp = req
         .send()
@@ -515,10 +524,7 @@ async fn serve_json(
 /// (the stored sk-bf- after link, or the short-lived link_token at link time). Serve
 /// now returns the plaintext secret (`sk-bf-`) in each key object so the router can
 /// auto-sync it without a manual paste.
-async fn serve_fetch_api_keys(
-    site_url: &str,
-    bearer: &str,
-) -> Result<Vec<Value>, RouterError> {
+async fn serve_fetch_api_keys(site_url: &str, bearer: &str) -> Result<Vec<Value>, RouterError> {
     let url = format!("{}/api/api-keys", site_url.trim_end_matches('/'));
     let v = serve_json(Method::GET, &url, bearer, None).await?;
     Ok(v.as_array().cloned().unwrap_or_default())
@@ -639,7 +645,8 @@ pub async fn serve_account_sync(
     let mut keys = st.keys.lock().unwrap();
     match serve_pick_api_key(&arr) {
         Some((name, _prefix, secret)) => {
-            keys.oauth_set_api_key(&secret, Some(&name)).map_err(AppError)?;
+            keys.oauth_set_api_key(&secret, Some(&name))
+                .map_err(AppError)?;
             if keys.oauth_public().api_key_deleted {
                 keys.oauth_unmark_api_key_deleted().map_err(AppError)?;
             }
@@ -676,7 +683,10 @@ mod tests {
 
     #[test]
     fn urlencoding_encode_specials() {
-        assert_eq!(urlencoding_encode("hello world?x=1"), "hello%20world%3Fx%3D1");
+        assert_eq!(
+            urlencoding_encode("hello world?x=1"),
+            "hello%20world%3Fx%3D1"
+        );
         assert_eq!(urlencoding_encode("AZaz09-._~"), "AZaz09-._~");
     }
 

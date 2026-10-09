@@ -46,7 +46,7 @@
 | 1 | **config** | YAML v0.3 结构：`version` / `listeners` / `providers` / `entrypoints` / `recipes` / `global`；`${VAR}` 替换；引用校验；**无**顶层 `extensions` |
 | 2 | **semantic** | signals、projections、Boolean AST、priority/confidence、algorithms、plugins |
 | 3 | **agent** | 进程内 `BuiltinAgent`；固定工具 + `max_turns` / `timeout_ms`；schema 校验 |
-| 3b | **afm-d** | HTTP System One Choice 决策器；`afm-d.endpoint` → aria-engine；无 endpoint → first-eligible；`fallback` / `min_confidence` |
+| 3b | **afm-d** | HTTP System One Choice 决策器；`afm-d.endpoint` → aria-engine；可选 `track: encoder\|decoder`；无 endpoint → first-eligible；`fallback` / `min_confidence` |
 | 4 | **provider** | OpenAI 兼容转发、加权 `backend_refs`、health、latency 采样 |
 | 5 | **http** | 数据面 `:8899` chat/SSE/`/v1/models`；管理面默认 `127.0.0.1` health/validate/replay/providers + Dashboard API |
 | 6 | **ffi** | `libaria-router_ffi`：init/connect/complete/stream/models/last_route |
@@ -124,7 +124,8 @@ recipes:
   - name: afm-d-default
     router: afm-d
     afm-d:
-      endpoint: "${DECISION_MODEL_URL:-http://127.0.0.1:8011}"
+      endpoint: "${DECISION_MODEL_URL:-http://127.0.0.1:8010}"
+      track: encoder          # 可选；默认 encoder→Choice≤255（:8010）；decoder→≤16（:8011）
       timeout_ms: 5000
       fallback: local/general
       instructions: Pick the best model for this user request.
@@ -246,7 +247,7 @@ emits:
 - 响应 `answers.route.choice` 须 ∈ eligible；`confidence` 写入 `RouteDecision`；`reason` = `afm-d:{choice}`；成功答案写入容量 256 的进程内 FIFO 缓存。
 - `timeout_ms` 默认 5000；超时 / 非法响应 / 越权 choice → `fallback`（若配置且为已声明 provider）否则 FailClosed。
 - `min_confidence`：若配置且响应 confidence 低于阈值 → 同 fallback / FailClosed。
-- `eligible.len()>255` → FailClosed。Decoder Choice 上限 16：大池文档约定用 Encoder serve；runtime 不强制轨。
+- 可选 `afm-d.track: encoder | decoder`（与 aria-engine `--track` 对齐）。默认 / 未设 / `encoder` → eligible ≤255（`:8010`）；`decoder` → ≤16（validate：text providers 数；runtime FailClosed；`:8011`）。gateway 示例默认 `track: encoder` + `:8010`。
 - **不做**：进程内 candle / 加载 `afm-de` 权重；Score/Noul 路由原语（首期仅 Choice）。
 
 ### 3.5 HTTP
@@ -309,7 +310,7 @@ C API（`include/aria_router.h`）：
 
 - A-semantic：keyword 命中转发；实名 bypass；无路径 fail closed；SSE 至少 1 chunk。
 - A-agent：`submit_route` / 合法终态采纳；工具结果正确；非法/越权/超时/超 `max_turns` fail closed；与 semantic 入口不串扰。
-- A-afm-d：`afm-d-tiny` validate；无 endpoint → first-eligible；mock System One → choice 入 eligible；越权 / 低 confidence → fallback 或 FailClosed；与 semantic/agent 入口不串扰。
+- A-afm-d：`afm-d-tiny` validate；无 endpoint → first-eligible；mock System One → choice 入 eligible；越权 / 低 confidence → fallback 或 FailClosed；`track: decoder` 时 text providers / eligible >16 → validate/FailClosed；与 semantic/agent 入口不串扰。
 - B：启发式 + 三算法 + 五插件单测。
 - C：无 `ml` 时 learned 被引用 → Unsupported；未知 algorithm 同。
 - R：retention sticky 同 session 第二轮粘住模型；`semantic_cache` hit 头；ratelimit 超限 429；`elo` 选高分 modelRef；`cargo test` 默认绿；`cargo test -p aria-router-signal --features ml`（及 http `-F ml`）绿。

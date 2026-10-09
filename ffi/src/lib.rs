@@ -17,7 +17,8 @@ thread_local! {
 
 fn set_err(msg: &str) {
     LAST_ERROR.with(|s| {
-        *s.lock().unwrap() = Some(CString::new(msg).unwrap_or_else(|_| CString::new("err").unwrap()));
+        *s.lock().unwrap() =
+            Some(CString::new(msg).unwrap_or_else(|_| CString::new("err").unwrap()));
     });
 }
 
@@ -177,10 +178,17 @@ fn token_nonempty(h: &AriaRouterHandle) -> Option<&str> {
     h.token.as_deref().filter(|t| !t.is_empty())
 }
 
-fn complete_inner(h: &AriaRouterHandle, messages_json: &str, options_json: &str) -> Result<String, String> {
-    let opts: serde_json::Value =
-        serde_json::from_str(if options_json.is_empty() { "{}" } else { options_json })
-            .map_err(|e| e.to_string())?;
+fn complete_inner(
+    h: &AriaRouterHandle,
+    messages_json: &str,
+    options_json: &str,
+) -> Result<String, String> {
+    let opts: serde_json::Value = serde_json::from_str(if options_json.is_empty() {
+        "{}"
+    } else {
+        options_json
+    })
+    .map_err(|e| e.to_string())?;
     let model = opts
         .get("model")
         .and_then(|m| m.as_str())
@@ -198,37 +206,33 @@ fn complete_inner(h: &AriaRouterHandle, messages_json: &str, options_json: &str)
         let resp = if let Some(tok) = token_nonempty(h) {
             let app = data_router(st.clone());
             let body = serde_json::to_vec(&req_json).unwrap();
-            h.rt
-                .block_on(async {
-                    app.oneshot(
-                        Request::post("/v1/chat/completions")
-                            .header("content-type", "application/json")
-                            .header("authorization", format!("Bearer {tok}"))
-                            .body(Body::from(body))
-                            .unwrap(),
-                    )
-                    .await
-                })
-                .map_err(|e| e.to_string())?
+            h.rt.block_on(async {
+                app.oneshot(
+                    Request::post("/v1/chat/completions")
+                        .header("content-type", "application/json")
+                        .header("authorization", format!("Bearer {tok}"))
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+            })
+            .map_err(|e| e.to_string())?
         } else {
-            h.rt
-                .block_on(sdk_chat_complete(st.clone(), req_json))
+            h.rt.block_on(sdk_chat_complete(st.clone(), req_json))
                 .map_err(|e| e.to_string())?
         };
         let status = resp.status();
-        let bytes = h
-            .rt
-            .block_on(to_bytes(resp.into_body(), 1 << 22))
-            .map_err(|e| e.to_string())?;
+        let bytes =
+            h.rt.block_on(to_bytes(resp.into_body(), 1 << 22))
+                .map_err(|e| e.to_string())?;
         if status != StatusCode::OK {
             return Err(String::from_utf8_lossy(&bytes).into_owned());
         }
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     } else if let Some(url) = &h.base_url {
         let url = format!("{}/v1/chat/completions", url.trim_end_matches('/'));
-        let resp = h
-            .rt
-            .block_on(async {
+        let resp =
+            h.rt.block_on(async {
                 let client = reqwest::Client::new();
                 let mut req = client.post(&url).json(&req_json);
                 if let Some(tok) = token_nonempty(h) {
@@ -237,10 +241,7 @@ fn complete_inner(h: &AriaRouterHandle, messages_json: &str, options_json: &str)
                 req.send().await
             })
             .map_err(|e| e.to_string())?;
-        let text = h
-            .rt
-            .block_on(resp.text())
-            .map_err(|e| e.to_string())?;
+        let text = h.rt.block_on(resp.text()).map_err(|e| e.to_string())?;
         Ok(text)
     } else {
         Err("uninitialized".into())
@@ -362,7 +363,11 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = dir.join("tilde.yaml");
-        std::fs::write(&cfg, include_str!("../../config/examples/semantic-tiny.yaml")).unwrap();
+        std::fs::write(
+            &cfg,
+            include_str!("../../config/examples/semantic-tiny.yaml"),
+        )
+        .unwrap();
         let rel = cfg.strip_prefix(&home).expect("under home");
         // Keep forward slashes so `~/…` parsing is stable on Windows.
         let rel_fwd = rel.to_string_lossy().replace('\\', "/");
@@ -380,7 +385,11 @@ mod tests {
     fn init_ok_models() {
         let dir = tempfile_dir();
         let cfg = dir.join("c.yaml");
-        std::fs::write(&cfg, include_str!("../../config/examples/semantic-tiny.yaml")).unwrap();
+        std::fs::write(
+            &cfg,
+            include_str!("../../config/examples/semantic-tiny.yaml"),
+        )
+        .unwrap();
         let p = CString::new(cfg.to_str().unwrap()).unwrap();
         let h = aria_router_init(p.as_ptr());
         assert!(!h.is_null());
@@ -394,7 +403,11 @@ mod tests {
     fn complete_fast_response() {
         let dir = tempfile_dir();
         let cfg = dir.join("fast-response.yaml");
-        std::fs::write(&cfg, include_str!("../../bindings/testdata/fast-response.yaml")).unwrap();
+        std::fs::write(
+            &cfg,
+            include_str!("../../bindings/testdata/fast-response.yaml"),
+        )
+        .unwrap();
         let p = CString::new(cfg.to_str().unwrap()).unwrap();
         let h = aria_router_init(p.as_ptr());
         assert!(!h.is_null());
@@ -430,7 +443,10 @@ mod tests {
         let cfg = dir.join("fast-response-require-key.yaml");
         let mut yaml = include_str!("../../bindings/testdata/fast-response.yaml").to_string();
         yaml = yaml.replace("require_api_key: false", "require_api_key: true");
-        assert!(yaml.contains("require_api_key: true"), "fixture must enable require_api_key");
+        assert!(
+            yaml.contains("require_api_key: true"),
+            "fixture must enable require_api_key"
+        );
         std::fs::write(&cfg, yaml).unwrap();
         let p = CString::new(cfg.to_str().unwrap()).unwrap();
         let h = aria_router_init(p.as_ptr());
@@ -460,7 +476,11 @@ mod tests {
     fn setup_memory_only() {
         let dir = tempfile_dir();
         let cfg = dir.join("fast-response.yaml");
-        std::fs::write(&cfg, include_str!("../../bindings/testdata/fast-response.yaml")).unwrap();
+        std::fs::write(
+            &cfg,
+            include_str!("../../bindings/testdata/fast-response.yaml"),
+        )
+        .unwrap();
         let p = CString::new(cfg.to_str().unwrap()).unwrap();
         let h = aria_router_init(p.as_ptr());
         assert!(!h.is_null());
@@ -477,7 +497,11 @@ mod tests {
     fn complete_stream_callback() {
         let dir = tempfile_dir();
         let cfg = dir.join("fast-response.yaml");
-        std::fs::write(&cfg, include_str!("../../bindings/testdata/fast-response.yaml")).unwrap();
+        std::fs::write(
+            &cfg,
+            include_str!("../../bindings/testdata/fast-response.yaml"),
+        )
+        .unwrap();
         let p = CString::new(cfg.to_str().unwrap()).unwrap();
         let h = aria_router_init(p.as_ptr());
         assert!(!h.is_null());
