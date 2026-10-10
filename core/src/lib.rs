@@ -1,6 +1,8 @@
 //! Shared types and `RouterError`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -235,6 +237,111 @@ pub fn prompt_from_messages(messages: &[ChatMessage]) -> String {
         .join("\n")
 }
 
+/// Per-(session, turn) decision cache for context-prefix reuse.
+///
+/// Within the same agent turn (same session + same count of user messages) the
+/// frozen `RouteDecision` is reused instead of re-deciding; a new user turn (or
+/// unrecognizable context) forces a fresh decision. Keys are evicted FIFO once
+/// `max` is exceeded.
+#[derive(Debug, Default)]
+pub struct DecisionCache {
+    inner: Mutex<HashMap<(String, u64), RouteDecision>>,
+    max: usize,
+}
+
+impl DecisionCache {
+    pub fn new(max: usize) -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            max: max.max(1),
+        }
+    }
+
+    pub fn get(&self, session: &str, turn: u64) -> Option<RouteDecision> {
+        self.inner
+            .lock()
+            .unwrap()
+            .get(&(session.to_string(), turn))
+            .cloned()
+    }
+
+    pub fn put(&self, session: String, turn: u64, d: RouteDecision) {
+        let mut g = self.inner.lock().unwrap();
+        let key = (session, turn);
+        g.insert(key.clone(), d);
+        if g.len() > self.max {
+            // Evict an older entry (never the one just inserted) to bound memory.
+            let victim = g.keys().find(|k| **k != key).cloned();
+            if let Some(v) = victim {
+                g.remove(&v);
+            }
+        }
+    }
+
+    pub fn clear(&self) {
+        self.inner.lock().unwrap().clear();
+    }
+}
+
+/// Number of user messages in a request; used as the "turn" key for prefix reuse.
+pub fn turn_of(messages: &[ChatMessage]) -> u64 {
+    messages.iter().filter(|m| m.role == "user").count() as u64
+}
+
+/// Per-session rolling competence tracker.
+///
+/// Stage competence scores (0..1) are folded into a rolling estimate per
+/// session via exponential moving average. `score` returns `None` until at least
+/// one sample has been recorded, which callers use to *forbid* downgrade when
+/// competence is unknown.
+#[derive(Debug, Default)]
+pub struct CompetenceTracker {
+    inner: Mutex<HashMap<String, f32>>,
+}
+
+impl CompetenceTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record(&self, session: &str, stage: f32) {
+        let mut g = self.inner.lock().unwrap();
+        let next = match g.get(session) {
+            Some(&prev) => 0.7 * prev + 0.3 * stage,
+            None => stage,
+        };
+        g.insert(session.to_string(), next.clamp(0.0, 1.0));
+    }
+
+    pub fn score(&self, session: &str) -> Option<f32> {
+        self.inner.lock().unwrap().get(session).copied()
+    }
+}
+
+/// Best-effort pool tier (`small`/`mid`/`large`) from a logical model name.
+/// Prefers an explicit `tier` on the card where available; this helper only
+/// inspects the name and is used to populate evidence (`selected_group`).
+pub fn tier_of_model(name: &str) -> &'static str {
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with("-large") || lower.contains("/ariamodel-large") || lower.ends_with("/large")
+    {
+        "large"
+    } else if lower.ends_with("-mid")
+        || lower.contains("/ariamodel-mid")
+        || lower.ends_with("/mid")
+        || lower.contains("-medium")
+    {
+        "mid"
+    } else if lower.ends_with("-small")
+        || lower.contains("/ariamodel-small")
+        || lower.ends_with("/small")
+    {
+        "small"
+    } else {
+        "unknown"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +418,72 @@ mod tests {
         let bad: Result<i32, _> = serde_json::from_str("not-json");
         let e = RouterError::from(bad.unwrap_err());
         assert!(matches!(e, RouterError::InvalidParam(_)));
+    }
+
+    #[test]
+    fn decision_cache_hit_miss_and_evict() {
+        let cache = DecisionCache::new(2);
+        let d = RouteDecision::bypass("local/general");
+        assert!(cache.get("s", 1).is_none());
+        cache.put("s".into(), 1, d.clone());
+        let got = cache.get("s", 1).expect("should hit");
+        assert_eq!(got.model, "local/general");
+        // Different turn misses.
+        assert!(cache.get("s", 2).is_none());
+        // Eviction keeps behaviour bounded.
+        cache.put("s".into(), 2, RouteDecision::bypass("local/a"));
+        cache.put("s".into(), 3, RouteDecision::bypass("local/b"));
+        cache.put("s".into(), 4, RouteDecision::bypass("local/c"));
+        assert!(cache.get("s", 4).is_some());
+        cache.clear();
+        assert!(cache.get("s", 1).is_none());
+    }
+
+    #[test]
+    fn turn_of_counts_user_messages() {
+        use crate::ChatMessage;
+        let msgs = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: serde_json::json!("s"),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: serde_json::json!("u1"),
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: serde_json::json!("a"),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: serde_json::json!("u2"),
+            },
+        ];
+        assert_eq!(turn_of(&msgs), 2);
+    }
+
+    #[test]
+    fn competence_tracker_unknown_then_ema() {
+        let t = CompetenceTracker::new();
+        // Unknown session must forbid downgrade (callers treat None as "do not downgrade").
+        assert!(t.score("s1").is_none());
+        t.record("s1", 1.0);
+        assert_eq!(t.score("s1"), Some(1.0));
+        // EMA: 0.7*1.0 + 0.3*0.0 = 0.7, then clamps to [0,1].
+        t.record("s1", 0.0);
+        assert!((t.score("s1").unwrap() - 0.7).abs() < 1e-6);
+        // Sessions are tracked independently.
+        assert!(t.score("s2").is_none());
+    }
+
+    #[test]
+    fn tier_of_model_classifies_names() {
+        assert_eq!(tier_of_model("ariacompute/ariamodel-large"), "large");
+        assert_eq!(tier_of_model("x/y-large"), "large");
+        assert_eq!(tier_of_model("m-mid"), "mid");
+        assert_eq!(tier_of_model("m-medium"), "mid");
+        assert_eq!(tier_of_model("m-small"), "small");
+        assert_eq!(tier_of_model("local/general"), "unknown");
     }
 }

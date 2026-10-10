@@ -574,6 +574,11 @@ mod tests {
             prompt: None,
             model: None,
             endpoint: None,
+            prefix_reuse: None,
+            decision_ext: None,
+            delegate_endpoint: None,
+            worker_plan: None,
+            delegate_auth: None,
         };
         let t = task_from(
             &ChatRequest {

@@ -17,6 +17,7 @@ import Providers from './pages/Providers';
 import Replay from './pages/Replay';
 import Playground from './pages/Playground';
 import Cost from './pages/Cost';
+import CostByCompetence from './pages/CostByCompetence';
 import Keys from './pages/Keys';
 import Account from './pages/Account';
 import Users from './pages/Users';
@@ -33,6 +34,7 @@ const groups: NavGroup[] = [
     items: [
       { to: '/', label: 'Overview', end: true },
       { to: '/cost', label: 'Cost' },
+      { to: '/cost-competence', label: 'Cost by Competence' },
       { to: '/account', label: 'Account' },
     ],
   },
@@ -168,6 +170,7 @@ export default function App() {
       <Route path="/" element={<Overview />} />
       <Route path="/account" element={<Account />} />
       <Route path="/cost" element={<Cost />} />
+      <Route path="/cost-competence" element={<CostByCompetence />} />
       <Route path="/keys" element={<Keys />} />
       <Route path="/users" element={<Users />} />
       <Route path="/config" element={<Config />} />

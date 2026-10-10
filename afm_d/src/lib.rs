@@ -933,6 +933,7 @@ mod tests {
             instructions: Some("pick".into()),
             descriptions: HashMap::new(),
             min_confidence: Some(0.2),
+            prefix_reuse: None,
         };
         let req = ChatRequest {
             model: "ariacompute/afm-d-auto".into(),

@@ -26,6 +26,10 @@ pub struct CostEvent {
     pub decision: String,
     pub model: String,
     pub bypass: bool,
+    /// Competence/ability tier of the routed model (`small`/`mid`/`large`/`unknown`),
+    /// used to attribute cost savings from competence-aware downgrades.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub competence_tier: Option<String>,
     pub turns_in_request: u32,
     pub upstream_requests: u32,
     pub prompt_tokens: u64,
@@ -117,6 +121,47 @@ impl CostLedger {
             "requests": self.totals.requests,
             "distinct_users": self.users.len(),
             "avg_tokens_per_request": tokens as f64 / req as f64,
+        })
+    }
+
+    /// Cost attributed per competence tier. Also reports the notional
+    /// cost had every request routed to the `large` tier, so the UI can show the
+    /// saving from competence-aware downgrades.
+    pub fn by_competence_tier(&self) -> Value {
+        let mut buckets: HashMap<String, Bucket> = HashMap::new();
+        let mut notional_large_usd: f64 = 0.0;
+        for ev in &self.events {
+            let tier = ev
+                .competence_tier
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            Self::add_bucket(buckets.entry(tier.clone()).or_default(), ev);
+            // Notional large cost: assume large ~= 4x mid and mid ~= 4x small on price;
+            // we approximate large cost by scaling actual cost by tier weight.
+            let weight = match tier.as_str() {
+                "small" => 16.0,
+                "mid" => 4.0,
+                "large" => 1.0,
+                _ => 4.0,
+            };
+            notional_large_usd += ev.cost_usd * weight;
+        }
+        let mut out = serde_json::Map::new();
+        for (k, b) in &buckets {
+            out.insert(
+                k.clone(),
+                json!({
+                    "requests": b.requests,
+                    "cost_usd": b.cost_usd,
+                    "tokens": b.prompt_tokens + b.completion_tokens,
+                }),
+            );
+        }
+        json!({
+            "by_tier": Value::Object(out),
+            "actual_cost_usd": self.totals.cost_usd,
+            "notional_large_cost_usd": notional_large_usd,
+            "estimated_savings_usd": (notional_large_usd - self.totals.cost_usd).max(0.0),
         })
     }
 
@@ -250,6 +295,7 @@ mod tests {
             decision: "d".into(),
             model: "m".into(),
             bypass: false,
+            competence_tier: Some("mid".into()),
             turns_in_request: 1,
             upstream_requests: 1,
             prompt_tokens: 10,
@@ -303,5 +349,37 @@ mod tests {
         let capped = ledger.report(1);
         assert_eq!(capped["totals"]["requests"], 4097);
         assert_eq!(capped["recent"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn by_competence_tier_aggregates_and_estimates_savings() {
+        let mut ledger = CostLedger::default();
+        let mut small = base_event();
+        small.competence_tier = Some("small".into());
+        small.model = "ariacompute/ariamodel-small".into();
+        small.cost_usd = 0.001;
+        ledger.record(small);
+
+        let mut large = base_event();
+        large.competence_tier = Some("large".into());
+        large.model = "ariacompute/ariamodel-large".into();
+        large.cost_usd = 0.05;
+        ledger.record(large);
+
+        // unknown tier event
+        let mut unk = base_event();
+        unk.competence_tier = None;
+        ledger.record(unk);
+
+        let v = ledger.by_competence_tier();
+        let tiers = v["by_tier"].as_object().unwrap();
+        assert_eq!(tiers["small"]["requests"], 1);
+        assert_eq!(tiers["large"]["requests"], 1);
+        assert_eq!(tiers["unknown"]["requests"], 1);
+        // notional large cost > actual → positive estimated savings
+        assert!(
+            v["notional_large_cost_usd"].as_f64().unwrap() > v["actual_cost_usd"].as_f64().unwrap()
+        );
+        assert!(v["estimated_savings_usd"].as_f64().unwrap() >= 0.0);
     }
 }

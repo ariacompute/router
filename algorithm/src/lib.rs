@@ -207,6 +207,93 @@ recipes:
         .unwrap()
     }
 
+    fn hf_doc() -> RouterDocument {
+        RouterDocument::from_yaml_str(
+            r#"
+version: v0.3
+providers:
+  models:
+    - name: local_text
+      locality: local
+      modality: text
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+    - name: cloud_text
+      locality: cloud
+      modality: text
+      backend_refs: [{name: p, endpoint: 127.0.0.1:2}]
+    - name: local_audio
+      locality: local
+      modality: audio
+      backend_refs: [{name: p, endpoint: 127.0.0.1:3}]
+    - name: any_mod
+      locality: local
+      modality: any
+      backend_refs: [{name: p, endpoint: 127.0.0.1:4}]
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: r
+recipes:
+  - name: r
+    router: semantic
+    routing:
+      decisions:
+        - name: d
+          rules: { operator: AND, conditions: [] }
+          modelRefs: [{model: local_text}]
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn hard_filter_excludes_on_locality() {
+        let d = hf_doc();
+        let got = hard_filter(
+            &d,
+            &["local_text".into(), "cloud_text".into()],
+            Some("local"),
+            Some("text"),
+        );
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "local_text");
+    }
+
+    #[test]
+    fn hard_filter_excludes_on_modality() {
+        let d = hf_doc();
+        let got = hard_filter(
+            &d,
+            &["local_text".into(), "local_audio".into()],
+            None,
+            Some("text"),
+        );
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "local_text");
+    }
+
+    #[test]
+    fn hard_filter_any_modality_passes_modality_constraint() {
+        let d = hf_doc();
+        let got = hard_filter(&d, &["any_mod".into()], None, Some("text"));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "any_mod");
+    }
+
+    #[test]
+    fn hard_filter_empty_when_all_excluded() {
+        let d = hf_doc();
+        let got = hard_filter(&d, &["local_text".into()], Some("cloud"), Some("text"));
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn hard_filter_drops_unknown_names() {
+        let d = hf_doc();
+        let got = hard_filter(&d, &["ghost".into()], None, None);
+        assert!(got.is_empty());
+    }
+
     #[test]
     fn static_first() {
         let d = doc();

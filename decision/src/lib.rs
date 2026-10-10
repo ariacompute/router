@@ -1,7 +1,7 @@
 //! Boolean decisions + projections.
 
-use aria_router_config::{DecisionCfg, ProjectionCfg, Recipe, RuleNode};
-use aria_router_core::RouterError;
+use aria_router_config::{CompetenceCfg, DecisionCfg, ProjectionCfg, Recipe, RuleNode};
+use aria_router_core::{ModelCard, RouterError};
 use aria_router_signal::SignalSet;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -116,6 +116,65 @@ fn confidence_of(d: &DecisionCfg, signals: &SignalSet) -> f32 {
             }
         })
         .fold(1.0_f32, |a, b| a.min(b))
+}
+
+/// Competence-aware downgrade.
+///
+/// Given the selected model and the post-hard-constraint `eligible` pool, returns
+/// `Some(cheaper_model)` when all of:
+/// - the feature is `enabled`,
+/// - `competence` is known (caller passes `None` when unknown → no downgrade),
+/// - `simple_prob >= cfg.simple_threshold`,
+/// - `competence >= cfg.floor`,
+///   and there exists an eligible model whose tier rank is strictly cheaper than the
+///   selected model's. Otherwise returns `None` (keep the matched model). Fail-closed
+///   behavior is preserved because this only ever swaps *within* the already-eligible
+///   pool.
+pub fn apply_competence(
+    selected: &str,
+    eligible: &[ModelCard],
+    simple_prob: f32,
+    competence: Option<f32>,
+    cfg: &CompetenceCfg,
+) -> Option<String> {
+    if !cfg.enabled {
+        return None;
+    }
+    let competence = competence?; // unknown → forbid downgrade
+    if simple_prob < cfg.simple_threshold {
+        return None;
+    }
+    if competence < cfg.floor {
+        return None;
+    }
+    let selected_card = eligible.iter().find(|m| m.name == selected)?;
+    let selected_rank = tier_rank(Some(selected_card));
+    let mut best: Option<(u8, &ModelCard)> = None;
+    for m in eligible {
+        if m.name == selected {
+            continue;
+        }
+        let r = tier_rank(Some(m));
+        if r < selected_rank {
+            match best {
+                None => best = Some((r, m)),
+                Some((br, _)) if r < br => best = Some((r, m)),
+                _ => {}
+            }
+        }
+    }
+    best.map(|(_, m)| m.name.clone())
+}
+
+/// Lower number = cheaper tier. Unknown tiers are treated as `mid` (rank 1) so we
+/// never downgrade *to* an unknown tier nor assume an unknown selected model is cheap.
+fn tier_rank(m: Option<&ModelCard>) -> u8 {
+    match m.and_then(|m| m.tier.as_deref()) {
+        Some("small") => 0,
+        Some("mid") | Some("medium") => 1,
+        Some("large") => 2,
+        _ => 1,
+    }
 }
 
 pub fn eval_rule(
@@ -330,6 +389,9 @@ mod tests {
                 ],
                 algorithms: serde_json::Value::Null,
                 plugins: serde_json::Value::Null,
+                prefix_reuse: None,
+                competence: None,
+                decision_ext: None,
             }),
             agent: None,
             afm_d: None,
@@ -356,5 +418,89 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(d.name, "fallback");
+    }
+
+    fn card(name: &str, tier: &str) -> ModelCard {
+        ModelCard {
+            name: name.into(),
+            locality: "local".into(),
+            modality: "text".into(),
+            capabilities: vec!["chat".into()],
+            provider_model_id: String::new(),
+            tier: Some(tier.into()),
+        }
+    }
+
+    #[test]
+    fn competence_downgrade_prefers_cheaper_tier() {
+        let eligible = vec![
+            card("ariacompute/ariamodel-large", "large"),
+            card("ariacompute/ariamodel-mid", "mid"),
+            card("ariacompute/ariamodel-small", "small"),
+        ];
+        let cfg = CompetenceCfg {
+            enabled: true,
+            floor: 0.6,
+            simple_threshold: 0.7,
+        };
+        // Simple + competent → downgrade large → small.
+        let down = apply_competence(
+            "ariacompute/ariamodel-large",
+            &eligible,
+            0.9,
+            Some(0.95),
+            &cfg,
+        )
+        .unwrap();
+        assert_eq!(down, "ariacompute/ariamodel-small");
+
+        // Simple but low competence → no downgrade.
+        assert!(apply_competence(
+            "ariacompute/ariamodel-large",
+            &eligible,
+            0.9,
+            Some(0.4),
+            &cfg
+        )
+        .is_none());
+
+        // Unknown competence → no downgrade (fail-closed style).
+        assert!(
+            apply_competence("ariacompute/ariamodel-large", &eligible, 0.9, None, &cfg).is_none()
+        );
+
+        // Not simple enough → no downgrade.
+        assert!(apply_competence(
+            "ariacompute/ariamodel-large",
+            &eligible,
+            0.3,
+            Some(0.95),
+            &cfg
+        )
+        .is_none());
+
+        // Already cheapest → no downgrade.
+        assert!(apply_competence(
+            "ariacompute/ariamodel-small",
+            &eligible,
+            0.9,
+            Some(0.95),
+            &cfg
+        )
+        .is_none());
+
+        // Disabled → no downgrade.
+        let off = CompetenceCfg {
+            enabled: false,
+            ..cfg
+        };
+        assert!(apply_competence(
+            "ariacompute/ariamodel-large",
+            &eligible,
+            0.9,
+            Some(0.95),
+            &off
+        )
+        .is_none());
     }
 }

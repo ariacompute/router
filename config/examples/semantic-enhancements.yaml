@@ -1,0 +1,80 @@
+# Demonstrates the enhancement config blocks added to aria-router:
+# competence-aware downgrade, execution-evidence replay, decision-model
+# extension point, and context-prefix reuse.
+# Validates and serves as a reference for the new config blocks.
+
+version: v0.3
+
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      tier: mid
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:8000
+    - name: local/cheap
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      tier: small
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:8001
+
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      # ④ Decision-model extension point (per-recipe, NOT a top-level extensions block).
+      decision_ext:
+        endpoint: http://127.0.0.1:9
+        fallback: local/general
+      # ⑥ Context-prefix reuse: reuse the frozen decision within the same (session, turn).
+      prefix_reuse: true
+      # ① Competence-aware downgrade: simple + competent tasks may pick a cheaper tier.
+      competence:
+        enabled: true
+        floor: 0.6
+        simple_threshold: 0.7
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain", "walk me through"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+
+global:
+  require_api_key: false
+  stores:
+    memory:
+      enabled: true
+  services:
+    router_replay:
+      enabled: true

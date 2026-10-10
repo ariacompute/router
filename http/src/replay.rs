@@ -13,7 +13,7 @@ use std::sync::Mutex;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReplayRecord {
     pub id: String,
     pub decision: RouteDecision,
@@ -29,6 +29,23 @@ pub struct ReplayRecord {
     pub session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_preview: Option<String>,
+    /// Execution-evidence fields. Populated where the data is
+    /// available; `None` means "not recorded this turn" rather than an error.
+    /// Task category chosen by the decision model (e.g. `draft` / `review`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_category: Option<String>,
+    /// Selected model group / tier (`small` / `mid` / `large` / `unknown`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_group: Option<String>,
+    /// Tool outcomes captured during an agent turn (JSON).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_outcomes: Option<Value>,
+    /// Accepted (final) output preview for the routed request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_output: Option<String>,
+    /// Stage competence score (0..1) recorded for this decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_competence: Option<f32>,
 }
 
 #[derive(Debug, Default)]
@@ -100,7 +117,54 @@ mod tests {
             retention: None,
             session: Some("s1".into()),
             prompt_preview: Some("hi".into()),
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn evidence_fields_roundtrip() {
+        let mut ev_rec = rec("d-evidence");
+        ev_rec.task_category = Some("draft".into());
+        ev_rec.selected_group = Some("small".into());
+        ev_rec.tool_outcomes =
+            Some(serde_json::json!([{"tool": "list_eligible_models", "ok": true}]));
+        ev_rec.accepted_output = Some("final answer".into());
+        ev_rec.stage_competence = Some(0.87);
+        let line = serde_json::to_string(&ev_rec).unwrap();
+        // Empty Option fields are omitted by skip_serializing_if.
+        assert!(line.contains("task_category"));
+        assert!(line.contains("stage_competence"));
+        let parsed: ReplayRecord = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed.task_category.as_deref(), Some("draft"));
+        assert_eq!(parsed.selected_group.as_deref(), Some("small"));
+        assert_eq!(parsed.accepted_output.as_deref(), Some("final answer"));
+        assert_eq!(parsed.stage_competence, Some(0.87));
+        assert_eq!(
+            parsed.tool_outcomes.as_ref().unwrap()[0]["tool"],
+            "list_eligible_models"
+        );
+
+        // Record without evidence omits the keys entirely.
+        let rec2 = rec("d-plain");
+        let line2 = serde_json::to_string(&rec2).unwrap();
+        assert!(!line2.contains("task_category"));
+    }
+
+    #[test]
+    fn selected_group_derives_tier() {
+        assert_eq!(
+            aria_router_core::tier_of_model("ariacompute/ariamodel-small"),
+            "small"
+        );
+        assert_eq!(
+            aria_router_core::tier_of_model("ariacompute/ariamodel-mid"),
+            "mid"
+        );
+        assert_eq!(
+            aria_router_core::tier_of_model("ariacompute/ariamodel-large"),
+            "large"
+        );
+        assert_eq!(aria_router_core::tier_of_model("local/general"), "unknown");
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 mod auth_api;
 mod cost;
+mod decision_ext;
 mod embed;
 pub(crate) mod keys;
 mod memory;
@@ -53,6 +54,8 @@ pub struct AppState {
     pub last_route: Mutex<Option<RouteDecision>>,
     pub replay: Mutex<Vec<RouteDecision>>,
     pub replay_log: ReplayLog,
+    pub decision_cache: aria_router_core::DecisionCache,
+    pub competence: aria_router_core::CompetenceTracker,
     pub memory: SessionMemory,
     pub semantic_cache: SemanticCache,
     pub ratelimit: RateLimiter,
@@ -98,6 +101,8 @@ impl AppState {
             last_route: Mutex::new(None),
             replay: Mutex::new(Vec::new()),
             replay_log,
+            decision_cache: aria_router_core::DecisionCache::new(1024),
+            competence: aria_router_core::CompetenceTracker::new(),
             memory: SessionMemory::default(),
             semantic_cache: SemanticCache::default(),
             ratelimit: RateLimiter::default(),
@@ -204,6 +209,7 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
         .route("/v1/router/models", get(list_models_mgmt))
         .route("/v1/router/chat", post(chat_mgmt))
         .route("/v1/router/cost", get(cost_ep))
+        .route("/v1/router/cost/by-competence", get(cost_by_competence_ep))
         .route("/v1/router/keys", get(list_keys).post(create_key))
         .route("/v1/router/keys/{id}", delete(revoke_key))
         .with_state(state)
@@ -502,6 +508,12 @@ struct CostQ {
 async fn cost_ep(State(st): State<Arc<AppState>>, Query(q): Query<CostQ>) -> Json<Value> {
     let n = q.n.unwrap_or(20);
     Json(st.cost.lock().unwrap().report(n))
+}
+
+/// Cost attributed by competence tier, with estimated savings from competence-aware
+/// downgrades.
+async fn cost_by_competence_ep(State(st): State<Arc<AppState>>) -> Json<Value> {
+    Json(st.cost.lock().unwrap().by_competence_tier())
 }
 
 async fn list_keys(
@@ -1143,6 +1155,7 @@ fn record_cost(st: &AppState, ctx: &CostCtx, decision: &RouteDecision, usage: Co
         decision: decision.decision.clone(),
         model: decision.model.clone(),
         bypass: decision.bypass,
+        competence_tier: Some(aria_router_core::tier_of_model(&decision.model).to_string()),
         turns_in_request: usage.turns_in_request.max(1),
         upstream_requests: usage.upstream_requests,
         prompt_tokens: usage.prompt_tokens,
@@ -1242,6 +1255,7 @@ fn record(st: &AppState, d: RouteDecision) {
     }
     let doc = snapshot_doc(st);
     let cfg = doc.global.services.router_replay.clone();
+    let selected_group = aria_router_core::tier_of_model(&d.model).to_string();
     st.replay_log.push(
         ReplayRecord {
             id: d.replay_id.clone().unwrap_or_default(),
@@ -1252,6 +1266,11 @@ fn record(st: &AppState, d: RouteDecision) {
             retention: None,
             session: None,
             prompt_preview: None,
+            task_category: None,
+            selected_group: Some(selected_group),
+            tool_outcomes: None,
+            accepted_output: None,
+            stage_competence: None,
         },
         &cfg,
     );
@@ -1295,11 +1314,42 @@ pub async fn route_request(
             "entrypoint/recipe router mismatch".into(),
         ));
     }
-    match ep.router {
+    // Context-prefix reuse: within the same (session, turn) reuse
+    // the frozen decision instead of re-deciding. A new user turn (higher
+    // user-message count) or unrecognizable context forces a fresh decision.
+    let session = metadata.get("session").cloned().unwrap_or_default();
+    let turn = aria_router_core::turn_of(&req.messages);
+    let prefix_reuse = match ep.router {
+        RouterKind::Semantic => recipe
+            .routing
+            .as_ref()
+            .and_then(|r| r.prefix_reuse)
+            .unwrap_or(false),
+        RouterKind::Agent => recipe
+            .agent
+            .as_ref()
+            .and_then(|a| a.prefix_reuse)
+            .unwrap_or(false),
+        RouterKind::AfmD => recipe
+            .afm_d
+            .as_ref()
+            .and_then(|a| a.prefix_reuse)
+            .unwrap_or(false),
+    };
+    if prefix_reuse && !session.is_empty() {
+        if let Some(cached) = st.decision_cache.get(&session, turn) {
+            return Ok((cached, req, None, vec![]));
+        }
+    }
+    let (decision, fwd, extra, hdrs) = match ep.router {
         RouterKind::Semantic => route_semantic(st, &doc, &recipe, req, metadata).await,
         RouterKind::Agent => route_agent(st, &doc, &recipe, req, metadata).await,
         RouterKind::AfmD => route_afm_d(st, &doc, &recipe, req, metadata).await,
+    }?;
+    if prefix_reuse && !session.is_empty() {
+        st.decision_cache.put(session, turn, decision.clone());
     }
+    Ok((decision, fwd, extra, hdrs))
 }
 
 async fn route_semantic(
@@ -1425,6 +1475,40 @@ async fn route_semantic(
     if let Some(sticky) = sticky_override {
         model = sticky;
     }
+    // Competence-aware downgrade: if the task is simple enough and
+    // historical competence is above the floor, prefer the cheapest eligible tier.
+    // `simple_prob` is approximated by the strongest projection score; `competence`
+    // comes from the per-session tracker (None ⇒ unknown ⇒ no downgrade).
+    if let Some(comp_cfg) = &routing.competence {
+        let simple_prob = proj
+            .values
+            .values()
+            .filter_map(|v| v.as_f64())
+            .fold(0.0_f64, f64::max) as f32;
+        let competence = st.competence.score(&session);
+        if let Some(down) = aria_router_decision::apply_competence(
+            &model,
+            &eligible,
+            simple_prob,
+            competence,
+            comp_cfg,
+        ) {
+            model = down;
+        }
+    }
+    // Decision-model extension point: an external decision service
+    // may override the model choice. Unreachable / malformed → fallback model or
+    // FailClosed via the extension client.
+    let mut ext_meta: Option<RouteDecision> = None;
+    if let Some(ext) = &routing.decision_ext {
+        match decision_ext::decide(&req, ext).await {
+            Ok(d) => {
+                model = d.model.clone();
+                ext_meta = Some(d);
+            }
+            Err(e) => return Err(e),
+        }
+    }
     let hdrs = extra_headers(&plugins);
     let cache_response = has_response_cache(&plugins);
     let mut req_for_plugins = req.clone();
@@ -1480,6 +1564,12 @@ async fn route_semantic(
     // stash on decision.session already; push detailed record here.
     let cfg = doc.global.services.router_replay.clone();
     let _ = (&signals_summary, &proj, &emits, &cfg);
+    // Apply decision-model extension override (if any) to the final decision metadata.
+    let (dname, algo) = if let Some(ext) = &ext_meta {
+        (ext.decision.clone(), ext.algorithm.clone())
+    } else {
+        (dname.clone(), algo.clone())
+    };
     match apply_request(&st.plugins, &plugins, req_for_plugins)? {
         PluginOutcome::FastResponse(v) => {
             let d = decision(model.clone(), algo, dname, cache_response);
@@ -1536,6 +1626,11 @@ fn push_rich_replay(
             retention: retention.clone(),
             session: d.session.clone(),
             prompt_preview: Some(req.last_user_text().chars().take(200).collect()),
+            task_category: None,
+            selected_group: Some(aria_router_core::tier_of_model(&d.model).to_string()),
+            tool_outcomes: None,
+            accepted_output: None,
+            stage_competence: None,
         },
         cfg,
     );
@@ -1627,6 +1722,23 @@ async fn route_agent(
         return Err(RouterError::FailClosed(
             "no eligible models after hard constraints".into(),
         ));
+    }
+    // Long-horizon agent delegation: route the decision to an external
+    // agent / Worker-plan endpoint instead of the in-process builtin. Unreachable /
+    // timeout → fallback model or FailClosed via the decision-ext contract.
+    if let Some(ep) = &agent.delegate_endpoint {
+        let ext = aria_router_config::DecisionExtCfg {
+            endpoint: Some(ep.clone()),
+            track: agent.worker_plan.clone(),
+            timeout_ms: agent.timeout_ms,
+            fallback: agent.fallback.clone(),
+            auth: agent.delegate_auth.clone(),
+        };
+        let mut d = decision_ext::decide(&req, &ext).await?;
+        d.layer = "agent-delegate".into();
+        let mut fwd = req;
+        fwd.model = d.model.clone();
+        return Ok((d, fwd, None, vec![]));
     }
     let task = task_from(&req, eligible.clone(), agent);
     let tools = ToolRuntime {
@@ -3116,6 +3228,231 @@ global:
         };
         let (d2, _, _, _) = route_request(&st, req2, &meta).await.unwrap();
         assert_eq!(d2.model, "local/general");
+    }
+
+    #[tokio::test]
+    async fn cost_by_competence_reports_tiers_after_routing() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml_priced(&backend, false)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+        let body = json!({
+            "model": "ariacompute/semantic-auto",
+            "messages": [{"role":"user","content":"please explain rust"}]
+        });
+        let res = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        let json = cost_by_competence_ep(axum::extract::State(st.clone())).await;
+        let v = json.0;
+        // local/general has no explicit tier → bucketed as "unknown".
+        assert!(
+            v["by_tier"].get("unknown").is_some(),
+            "expected an unknown-tier bucket, got {v}"
+        );
+        assert!(v["estimated_savings_usd"].as_f64().unwrap() >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn hard_constraints_fail_closed_on_modality_mismatch() {
+        // A matched decision references a model whose modality ('audio') cannot satisfy
+        // the request's required modality ('text'). hard_filter therefore yields an empty
+        // eligible set and routing fails closed.
+        let doc = RouterDocument::from_yaml_str(
+            r#"
+version: v0.3
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      locality: local
+      modality: audio
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: r
+recipes:
+  - name: r
+    router: semantic
+    routing:
+      strategy: priority
+      decisions:
+        - name: d
+          priority: 100
+          rules: { operator: AND, conditions: [] }
+          modelRefs: [{model: local/general}]
+"#,
+        )
+        .unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let meta = std::collections::HashMap::new();
+        let req = aria_router_core::ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("hi"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let err = route_request(&st, req, &meta).await.unwrap_err();
+        match err {
+            aria_router_core::RouterError::FailClosed(msg) => assert!(
+                msg.contains("no eligible models after hard constraints"),
+                "unexpected fail-closed message: {msg}"
+            ),
+            other => panic!("expected FailClosed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn prefix_reuse_same_turn_reuses_decision() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      prefix_reuse: true
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-prefix-1".into());
+        let mk = |content: &str| ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!(content),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        // Turn 1: fresh decision, cached under (session, 1).
+        let (d1, _, _, _) = route_request(&st, mk("please explain rust"), &meta)
+            .await
+            .unwrap();
+        assert_eq!(d1.model, "local/general");
+        assert!(st.decision_cache.get("sess-prefix-1", 1).is_some());
+        // Same turn (still 1 user message): served from cache, same model.
+        let (d2, _, _, _) = route_request(&st, mk("please explain rust"), &meta)
+            .await
+            .unwrap();
+        assert_eq!(d2.model, d1.model);
+        assert!(st.decision_cache.get("sess-prefix-1", 1).is_some());
+        // New turn (2 user messages): different key, freshly decided and cached.
+        let mut req3 = mk("please explain loops");
+        req3.messages.push(aria_router_core::ChatMessage {
+            role: "assistant".into(),
+            content: json!("ok"),
+        });
+        req3.messages.push(aria_router_core::ChatMessage {
+            role: "user".into(),
+            content: json!("follow up"),
+        });
+        let (d3, _, _, _) = route_request(&st, req3, &meta).await.unwrap();
+        assert!(st.decision_cache.get("sess-prefix-1", 2).is_some());
+        assert_eq!(d3.model, "local/general");
+    }
+
+    #[tokio::test]
+    async fn agent_delegation_falls_back_when_endpoint_unreachable() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/agent-auto]
+    router: agent
+    recipe: agent-default
+recipes:
+  - name: agent-default
+    router: agent
+    agent:
+      timeout_ms: 1000
+      max_turns: 3
+      fallback: local/general
+      delegate_endpoint: http://127.0.0.1:1
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let meta: HashMap<String, String> = HashMap::new();
+        let req = ChatRequest {
+            model: "ariacompute/agent-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("route this"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        // Unreachable delegate endpoint → decision-ext fallback → bypass(fallback).
+        let (d, _, _, _) = route_request(&st, req, &meta).await.unwrap();
+        assert_eq!(d.model, "local/general");
+        assert_eq!(d.layer, "agent-delegate");
     }
 
     #[tokio::test]

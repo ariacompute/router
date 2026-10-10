@@ -236,6 +236,7 @@ version = "0.1.0"
 dependencies = [
  "aria-router-config",
  "aria-router-core",
+ "axum",
  "bytes",
  "futures-util",
  "reqwest",

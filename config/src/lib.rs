@@ -386,6 +386,60 @@ pub struct Routing {
     pub algorithms: serde_json::Value,
     #[serde(default)]
     pub plugins: serde_json::Value,
+    /// Context-prefix reuse: reuse the frozen decision for the
+    /// same (session, turn) instead of re-deciding within an agent turn.
+    #[serde(default)]
+    pub prefix_reuse: Option<bool>,
+    /// Competence-aware downgrade: when enabled and the task is
+    /// simple enough with historical competence above `floor`, prefer the
+    /// lowest-cost eligible tier instead of the matched model.
+    #[serde(default)]
+    pub competence: Option<CompetenceCfg>,
+    /// Decision-model extension point: delegate the model choice
+    /// to an external HTTP decision service.
+    #[serde(default)]
+    pub decision_ext: Option<DecisionExtCfg>,
+}
+
+/// Competence-aware downgrade configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CompetenceCfg {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Historical competence floor (0..1); below this, downgrade is forbidden.
+    #[serde(default = "default_competence_floor")]
+    pub floor: f32,
+    /// Simple-task probability threshold (0..1); at/above this the task is
+    /// considered cheap enough to route to a cheaper tier.
+    #[serde(default = "default_simple_threshold")]
+    pub simple_threshold: f32,
+}
+
+fn default_competence_floor() -> f32 {
+    0.6
+}
+
+fn default_simple_threshold() -> f32 {
+    0.7
+}
+
+/// Decision-model extension point. Per-recipe (not top-level) so it
+/// does not conflict with the repo's deliberate rejection of a top-level `extensions`
+/// block. Contract mirrors `afm-d` System One: `endpoint` + `track` + `timeout_ms` + `fallback`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionExtCfg {
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub track: Option<String>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub fallback: Option<String>,
+    #[serde(default)]
+    pub auth: Option<String>,
 }
 
 fn default_strategy() -> String {
@@ -582,6 +636,24 @@ pub struct AgentRecipe {
     pub model: Option<String>,
     #[serde(default)]
     pub endpoint: Option<String>,
+    /// Context-prefix reuse: reuse the frozen decision for the
+    /// same (session, turn) instead of re-deciding within an agent turn.
+    #[serde(default)]
+    pub prefix_reuse: Option<bool>,
+    /// Decision-model extension point: delegate the model choice
+    /// to an external HTTP decision service.
+    #[serde(default)]
+    pub decision_ext: Option<DecisionExtCfg>,
+    /// Long-horizon agent delegation: route the decision to an
+    /// external agent / Worker-plan endpoint instead of the in-process builtin.
+    #[serde(default)]
+    pub delegate_endpoint: Option<String>,
+    /// Optional Worker-plan / track identifier passed to the delegate endpoint.
+    #[serde(default)]
+    pub worker_plan: Option<String>,
+    /// Optional bearer token for the delegate endpoint.
+    #[serde(default)]
+    pub delegate_auth: Option<String>,
 }
 
 /// System One backend track for AFM-D (`afm-d.track`).
@@ -637,6 +709,10 @@ pub struct AfmDRecipe {
     /// If set and answer confidence is below this, use fallback / FailClosed.
     #[serde(default)]
     pub min_confidence: Option<f32>,
+    /// Context-prefix reuse: reuse the frozen decision for the
+    /// same (session, turn) instead of re-deciding within an agent turn.
+    #[serde(default)]
+    pub prefix_reuse: Option<bool>,
 }
 
 const LEARNED_SIGNAL_KEYS: &[&str] = &[
@@ -919,6 +995,16 @@ impl RouterDocument {
                     "decision {}: duplicate emit retention",
                     d.name
                 )));
+            }
+        }
+        if let Some(ext) = &routing.decision_ext {
+            match ext.endpoint.as_deref() {
+                Some(e) if !e.trim().is_empty() => {}
+                _ => {
+                    return Err(RouterError::Unsupported(
+                        "decision_ext requires a non-empty `endpoint`".into(),
+                    ));
+                }
             }
         }
         Ok(())
@@ -1437,6 +1523,132 @@ recipes:
 "#;
 
     #[test]
+    fn parse_competence_cfg_explicit_values() {
+        let doc = RouterDocument::from_yaml_str(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      competence:
+        enabled: true
+        floor: 0.5
+        simple_threshold: 0.8
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+"#,
+        )
+        .unwrap();
+        let comp = doc.recipes[0]
+            .routing
+            .as_ref()
+            .unwrap()
+            .competence
+            .as_ref()
+            .unwrap();
+        assert!(comp.enabled);
+        assert!((comp.floor - 0.5).abs() < 1e-6);
+        assert!((comp.simple_threshold - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parse_competence_cfg_defaults() {
+        let doc = RouterDocument::from_yaml_str(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      competence:
+        enabled: true
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+"#,
+        )
+        .unwrap();
+        let comp = doc.recipes[0]
+            .routing
+            .as_ref()
+            .unwrap()
+            .competence
+            .as_ref()
+            .unwrap();
+        // Defaults: floor 0.6, simple_threshold 0.7.
+        assert!((comp.floor - 0.6).abs() < 1e-6);
+        assert!((comp.simple_threshold - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
     fn parse_tiny() {
         let doc = RouterDocument::from_yaml_str(TINY).unwrap();
         assert_eq!(doc.entrypoints[0].router, RouterKind::Semantic);
@@ -1482,6 +1694,43 @@ recipes:
             "algorithm: not-a-real-algo\n          modelRefs:",
         );
         assert!(RouterDocument::from_yaml_str(&raw).is_err());
+    }
+
+    #[test]
+    fn decision_ext_without_endpoint_is_unsupported() {
+        let raw = TINY.replace(
+            "strategy: priority\n",
+            "strategy: priority\n      decision_ext:\n        fallback: local/general\n",
+        );
+        // from_yaml_str validates, so a decision_ext without an endpoint is rejected.
+        assert!(matches!(
+            RouterDocument::from_yaml_str(&raw),
+            Err(RouterError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn decision_ext_with_endpoint_validates() {
+        let raw = TINY.replace(
+            "strategy: priority\n",
+            "strategy: priority\n      decision_ext:\n        endpoint: http://127.0.0.1:9\n",
+        );
+        let doc = RouterDocument::from_yaml_str(&raw).unwrap();
+        assert!(doc.validate().is_ok());
+    }
+
+    #[test]
+    fn agent_delegation_fields_parse_and_validate() {
+        let raw = include_str!("../examples/agent-tiny.yaml").replace(
+            "fallback: local/general",
+            "fallback: local/general\n      delegate_endpoint: http://127.0.0.1:9\n      worker_plan: wp-1\n      delegate_auth: tok",
+        );
+        let doc = RouterDocument::from_yaml_str(&raw).unwrap();
+        assert!(doc.validate().is_ok());
+        let a = doc.recipe("agent-default").unwrap().agent.as_ref().unwrap();
+        assert_eq!(a.delegate_endpoint.as_deref(), Some("http://127.0.0.1:9"));
+        assert_eq!(a.worker_plan.as_deref(), Some("wp-1"));
+        assert_eq!(a.delegate_auth.as_deref(), Some("tok"));
     }
 
     #[test]
@@ -1593,6 +1842,7 @@ recipes:
             include_str!("../examples/afm-d-tiny.yaml"),
             include_str!("../examples/afm-d.yaml"),
             include_str!("../examples/afm-d-gateway.yaml"),
+            include_str!("../examples/semantic-enhancements.yaml"),
         ] {
             RouterDocument::from_yaml_str(raw).unwrap();
         }

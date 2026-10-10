@@ -4,6 +4,29 @@
 
 Aria Compute inference gateway: OpenAI-compatible HTTP, three parallel routers (**semantic** YAML v0.3, **lightweight builtin agent** with fixed in-process tools + limited turns, and **afm-d** System One Choice via aria-engine). Shared providers, hard constraints, and forwarding.
 
+## Router vs HiRoute vs vLLM Semantic Router
+
+| Dimension | Router (aria-router) | HiRoute | vLLM Semantic Router |
+|-----------|:---:|:---:|:---:|
+| OpenAI-compatible HTTP gateway (server-side) | ✅ | ❌ | ❌ |
+| Three parallel routers (semantic / agent / afm-d) | ✅ | ❌ | ❌ |
+| Semantic routing (signal → decision) | ✅ | ✅ | ✅ |
+| Hard-constraint pruning (location/auth/modality/tools, pre-rank) | ✅ | ❌ | ❌ |
+| Competence-aware downgrade (economic, capability-floored) | ✅ | ✅ | ❌ |
+| Bounded failover / fail closed (no silent degrade) | ✅ | ✅ | ❌ |
+| Execution evidence retention (task/model/tool/output/competence chain) | ✅ | ✅ | ❌ |
+| Long-horizon agent orchestration / delegation | ✅ | ✅ | ❌ |
+| Pluggable decision-model extension API | ✅ | ✅ | ❌ |
+| Multi-tenant / auth / billing (API key · OAuth · Users · six-factor cost) | ✅ | ❌ | ❌ |
+| Cost & competence observability (tier-attributed cost + dashboard) | ✅ | △ | ❌ |
+| Context-prefix reuse (frozen decision within a turn) | ✅ | ✅ | ❌ |
+| Integration surface (C ABI + eight-language SDK / deploy form) | ✅ | △ | △ |
+| Production server-side posture (multi-tenant · governance · operable) | ✅ | ❌ | ❌ |
+
+Legend: ✅ full support · △ partial / limited · ❌ not supported.
+
+**Takeaway**: Router keeps its hard-constraint + fail-closed + three-router-isolation contract while adopting HiRoute's competence-aware soft downgrade, structured execution evidence, pluggable decision extension, and long-horizon delegation — and wraps them in a production-grade OpenAI-compatible gateway with multi-tenant billing and a C ABI / eight-language SDK, covering the full server-side stack beyond vLLM SR's semantic layer.
+
 ## Build / Test
 
 ```bash

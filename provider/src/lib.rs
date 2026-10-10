@@ -298,6 +298,9 @@ fn api_key(b: &aria_router_config::BackendRef) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aria_router_config::RouterDocument;
+    use aria_router_core::ChatMessage;
+    use serde_json::json;
 
     #[test]
     fn pool_state_reuses_shared_client() {
@@ -310,5 +313,212 @@ mod tests {
         // Client is constructible and cloneable for concurrent requests.
         let _ = a.client.clone();
         let _ = b.client.clone();
+    }
+
+    #[test]
+    fn pool_state_record_updates_ema_and_failures() {
+        let p = PoolState::default();
+        // EMA: prev*0.7 + ms*0.3. First sample (prev==ms) stays 100, then it
+        // moves toward 0 by 30% each step: 100 -> 70 -> 49.
+        p.record("m", 100.0, true);
+        p.record("m", 0.0, true);
+        p.record("m", 0.0, true);
+        let v = p.latency_map().get("m").copied().unwrap();
+        assert!(
+            (v - 49.0).abs() < 1e-3,
+            "EMA latency for 'm' was {v}, expected ~49"
+        );
+        assert_eq!(p.failures_map().get("m").copied(), Some(0));
+        p.record("m", 1.0, false);
+        assert_eq!(p.failures_map().get("m").copied(), Some(1));
+    }
+
+    fn doc_with_backend(backend: &str) -> RouterDocument {
+        RouterDocument::from_yaml_str(&format!(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: m
+  models:
+    - name: m
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: low
+          endpoint: {backend}
+          weight: 1
+        - name: high
+          endpoint: {backend}
+          weight: 5
+"#,
+            backend = backend
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn pick_backend_prefers_highest_weight() {
+        let doc = doc_with_backend("127.0.0.1:9");
+        let p = doc.provider("m").unwrap();
+        assert_eq!(pick_backend(p).unwrap().name, "high");
+    }
+
+    fn backend_with(extra: &str) -> aria_router_config::BackendRef {
+        let doc = RouterDocument::from_yaml_str(&format!(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: m
+  models:
+    - name: m
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: x
+          endpoint: 127.0.0.1:1
+          weight: 1
+          {extra}
+"#,
+            extra = extra
+        ))
+        .unwrap();
+        doc.provider("m").unwrap().backend_refs[0].clone()
+    }
+
+    #[test]
+    fn backend_api_key_resolution() {
+        // Explicit api_key wins.
+        let b = backend_with("api_key: sk-abc");
+        assert_eq!(backend_api_key(&b), Some("sk-abc".into()));
+        // Inline secret pasted into api_key_env (no matching process env) is used directly.
+        let b2 = backend_with("api_key_env: sk-xyz1234567890abcdefghij");
+        assert_eq!(
+            backend_api_key(&b2),
+            Some("sk-xyz1234567890abcdefghij".into())
+        );
+        // Plain name with no env var and not inline-like resolves to None.
+        let b3 = backend_with("api_key_env: NOT_A_KEY");
+        assert_eq!(backend_api_key(&b3), None);
+    }
+
+    #[test]
+    fn looks_like_inline_api_key_classifies() {
+        assert!(looks_like_inline_api_key("sk-abc"));
+        assert!(looks_like_inline_api_key("sk_abc"));
+        assert!(looks_like_inline_api_key(
+            "abcdefghijklmnopqrstuvwxyz1234-5678"
+        ));
+        assert!(!looks_like_inline_api_key("short"));
+        assert!(!looks_like_inline_api_key("hello world"));
+    }
+
+    fn chat_req() -> ChatRequest {
+        ChatRequest {
+            model: "m".into(),
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: json!("hi"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        }
+    }
+
+    async fn mock_server() -> String {
+        use axum::extract::Json;
+        use axum::response::IntoResponse;
+        use axum::routing::post;
+        async fn echo(Json(v): Json<serde_json::Value>) -> impl IntoResponse {
+            let model = v.get("model").cloned().unwrap_or(json!("echo"));
+            let stream = v.get("stream").and_then(|x| x.as_bool()).unwrap_or(false);
+            if stream {
+                let chunk = json!({"model": model, "choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]});
+                let done = json!({"model": model, "choices":[{"index":0,"delta":{},"finish_reason":"stop"}], "usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}});
+                let body = format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n", chunk, done);
+                axum::response::Response::builder()
+                    .status(200)
+                    .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+                    .body(axum::body::Body::from(body))
+                    .unwrap()
+            } else {
+                axum::Json(json!({"model": model, "choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]})).into_response()
+            }
+        }
+        let app = axum::Router::new().route("/v1/chat/completions", post(echo));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("127.0.0.1:{}", addr.port())
+    }
+
+    async fn mock_server_status(status: u16) -> String {
+        use axum::http::StatusCode;
+        use axum::routing::post;
+        let handler = move || async move { StatusCode::from_u16(status).unwrap() };
+        let app = axum::Router::new().route("/v1/chat/completions", post(handler));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("127.0.0.1:{}", addr.port())
+    }
+
+    #[tokio::test]
+    async fn forward_parses_upstream_response() {
+        let backend = mock_server().await;
+        let doc = doc_with_backend(&backend);
+        let res = forward(&doc, "m", &chat_req(), &[], &PoolState::default())
+            .await
+            .unwrap();
+        assert_eq!(res["choices"][0]["message"]["content"], "ok");
+        // provider_model_id `echo` is forwarded upstream as the request model.
+        assert_eq!(res["model"], "echo");
+    }
+
+    #[tokio::test]
+    async fn forward_sse_text_concatenates() {
+        let backend = mock_server().await;
+        let doc = doc_with_backend(&backend);
+        let mut req = chat_req();
+        req.stream = true;
+        let text = forward_sse_text(&doc, "m", &req, &[], &PoolState::default())
+            .await
+            .unwrap();
+        assert!(text.contains("ok"));
+        assert!(text.contains("[DONE]"));
+    }
+
+    #[tokio::test]
+    async fn forward_unknown_model_fails_closed() {
+        let doc = doc_with_backend("127.0.0.1:9");
+        let err = forward(&doc, "nope", &chat_req(), &[], &PoolState::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RouterError::FailClosed(_)));
+    }
+
+    #[tokio::test]
+    async fn forward_upstream_500_returns_upstream_error() {
+        let backend = mock_server_status(500).await;
+        let doc = doc_with_backend(&backend);
+        let err = forward(&doc, "m", &chat_req(), &[], &PoolState::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RouterError::Upstream(_)));
     }
 }
