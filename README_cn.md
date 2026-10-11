@@ -4,29 +4,6 @@
 
 Aria Compute 推理网关：OpenAI 兼容 HTTP，三种并列决策器（**semantic** YAML v0.3、**轻量 builtin agent**：进程内固定工具 + 限 turns、**afm-d**：经 aria-engine System One Choice）。共享 providers、硬约束与转发。
 
-## Router vs HiRoute vs vLLM Semantic Router 特性对比
-
-| 维度 | Router (aria-router) | HiRoute | vLLM Semantic Router |
-|------|:---:|:---:|:---:|
-| OpenAI 兼容 HTTP 网关（服务端） | ✅ | ❌ | ❌ |
-| 三种并列决策器（semantic / agent / afm-d） | ✅ | ❌ | ❌ |
-| 语义路由（信号 → 决策） | ✅ | ✅ | ✅ |
-| 硬约束剪枝（location/auth/modality/tools，决策前） | ✅ | ❌ | ❌ |
-| 能力感知降级（competence-aware 经济降档） | ✅ | ✅ | ❌ |
-| 有界故障转移 / fail closed（不静默改行为） | ✅ | ✅ | ❌ |
-| 执行证据留存（任务/模型/工具/输出/能力 结构化证据链） | ✅ | ✅ | ❌ |
-| 长周期 Agent 编排 / 委托 | ✅ | ✅ | ❌ |
-| 决策模型扩展 API（外置决策服务） | ✅ | ✅ | ❌ |
-| 多租户 / 鉴权 / 计费（API key·OAuth·Users·六因子成本） | ✅ | ❌ | ❌ |
-| 成本·能力可观测（按 tier 成本归因 + Dashboard） | ✅ | △ | ❌ |
-| 上下文前缀复用（同 turn 冻结决策） | ✅ | ✅ | ❌ |
-| 集成面（C ABI + 八语言 SDK / 部署形态） | ✅ | △ | △ |
-| 生产级服务端定位（多租户·管控·可运维） | ✅ | ❌ | ❌ |
-
-图例：✅ 完整支持 · △ 部分/受限 · ❌ 不支持。
-
-**结论**：Router 在保持「硬约束 + fail closed + 三决策器隔离」的前提下，补齐了 HiRoute 的 competence-aware 软降级、结构化执行证据、可插拔决策扩展与长周期委托，并以生产级 OpenAI 兼容网关 + 多租户计费 + C ABI / 八语言 SDK 的组合，覆盖 vLLM SR 之外的服务端全栈需求。
-
 ## 构建 / 测试
 
 ```bash
@@ -837,6 +814,29 @@ python -m bench compare \
   --report ./out/afmd_vs_vsr_compare.json
 ```
 详见 [`bench/corpus/README.md`](bench/corpus/README.md) 与 [`bench/vllm-sr/`](bench/vllm-sr/)（外部 `vllm-sr` 配置与 validate/serve）。
+
+## Router vs HiRoute vs vLLM Semantic Router 特性对比
+
+| 维度 | Router (aria-router) | HiRoute | vLLM Semantic Router |
+|------|:---:|:---:|:---:|
+| OpenAI 兼容 HTTP 网关（服务端） | ✅ | ❌ | ❌ |
+| 三种并列决策器（semantic / agent / afm-d） | ✅ | ❌ | ❌ |
+| 语义路由（信号 → 决策） | ✅ | ✅ | ✅ |
+| 硬约束剪枝（location/auth/modality/tools，决策前） | ✅ | ❌ | ❌ |
+| 能力感知降级（competence-aware 经济降档） | ✅ | ✅ | ❌ |
+| 有界故障转移 / fail closed（不静默改行为） | ✅ | ✅ | ❌ |
+| 执行证据留存（任务/模型/工具/输出/能力 结构化证据链） | ✅ | ✅ | ❌ |
+| 长周期 Agent 编排 / 委托 | ✅ | ✅ | ❌ |
+| 决策模型扩展 API（外置决策服务） | ✅ | ✅ | ❌ |
+| 多租户 / 鉴权 / 计费（API key·OAuth·Users·六因子成本） | ✅ | ❌ | ❌ |
+| 成本·能力可观测（按 tier 成本归因 + Dashboard） | ✅ | △ | ❌ |
+| 上下文前缀复用（同 turn 冻结决策） | ✅ | ✅ | ❌ |
+| 集成面（C ABI + 八语言 SDK / 部署形态） | ✅ | △ | △ |
+| 生产级服务端定位（多租户·管控·可运维） | ✅ | ❌ | ❌ |
+
+图例：✅ 完整支持 · △ 部分/受限 · ❌ 不支持。
+
+**结论**：Router 在保持「硬约束 + fail closed + 三决策器隔离」的前提下，补齐了 HiRoute 的 competence-aware 软降级、结构化执行证据、可插拔决策扩展与长周期委托，并以生产级 OpenAI 兼容网关 + 多租户计费 + C ABI / 八语言 SDK 的组合，覆盖 vLLM SR 之外的服务端全栈需求。
 
 ## 工程约定
 
