@@ -1,7 +1,8 @@
 //! AFM-D System One decisioner: eligible models → Choice → RouteDecision.
 //!
-//! Deterministic tier shortcuts (chitchat / factoid / acronym / explain / mid)
-//! run before System One so Encoder Choice cannot over-promote teaching/large.
+//! Deterministic tier shortcuts (chitchat / factoid incl. arithmetic & brief
+//! lookup / acronym / explain / mid) run before System One so Encoder Choice
+//! cannot over-promote teaching/large.
 //! Successful System One answers are cached by (normalized text × eligible set).
 
 use aria_router_config::{AfmDRecipe, AfmDTrack};
@@ -165,6 +166,21 @@ fn is_closed_form_prompt(raw: &str, normalized: &str) -> bool {
     saw_a && saw_b
 }
 
+/// Max word count for brief factoid/lookup shortcuts (skips Encoder Choice).
+/// Kept below the System One probe phrase length ("Please route this non shortcut…").
+const BRIEF_LOOKUP_MAX_WORDS: usize = 6;
+
+/// Arithmetic / numeric expression on the raw head (ops are stripped by normalize).
+fn is_arithmetic(raw_head: &str) -> bool {
+    let has_digit = raw_head.chars().any(|c| c.is_ascii_digit());
+    if !has_digit {
+        return false;
+    }
+    raw_head
+        .chars()
+        .any(|c| matches!(c, '+' | '-' | '*' | '/' | '=' | '×' | '÷' | '%'))
+}
+
 fn is_short_factoid(head_normalized: &str, raw_head: &str) -> bool {
     if is_explain_intent(head_normalized) || is_systems_mid(head_normalized) {
         return false;
@@ -173,8 +189,16 @@ fn is_short_factoid(head_normalized: &str, raw_head: &str) -> bool {
         return false;
     }
     let words = head_normalized.split_whitespace().count();
-    if words > 24 {
+    if words == 0 || words > 24 {
         return false;
+    }
+    if is_arithmetic(raw_head) {
+        return true;
+    }
+    // Brief lookup: short utterances without explain/systems intent (e.g. "china
+    // emergency call", "capital of france") — Encoder Choice otherwise over-promotes large.
+    if words <= BRIEF_LOOKUP_MAX_WORDS {
+        return true;
     }
     head_normalized.contains("boiling point")
         || head_normalized.contains("convert ")
@@ -193,7 +217,7 @@ fn is_short_factoid(head_normalized: &str, raw_head: &str) -> bool {
 
 /// Deterministic tier before System One. Priority:
 /// chitchat → small; explain → large; acronym → small; systems/multi-q → mid;
-/// closed-form MCQ → small; factoid (question head) → small.
+/// closed-form MCQ → small; factoid (arithmetic / ≤6-word lookup / patterns) → small.
 fn shortcut_tier(raw: &str) -> Option<(&'static str, &'static str)> {
     let n = normalize_utterance(raw);
     if n.is_empty() {
@@ -995,6 +1019,38 @@ mod tests {
     }
 
     #[test]
+    fn shortcut_tier_covers_arithmetic_and_brief_lookups() {
+        // Previously fell through to Encoder Choice, which over-promotes large.
+        let small_cases: &[(&str, &str)] = &[
+            ("1+1=?", "afm-d:factoid-small"),
+            ("1 + 1 = ?", "afm-d:factoid-small"),
+            ("What is 7 × 8?", "afm-d:factoid-small"),
+            ("china emergency call", "afm-d:factoid-small"),
+            ("China emergency number", "afm-d:factoid-small"),
+            ("US emergency call", "afm-d:factoid-small"),
+            ("capital of france", "afm-d:factoid-small"),
+        ];
+        for (prompt, reason) in small_cases {
+            let got = shortcut_tier(prompt).unwrap_or_else(|| panic!("no shortcut for {prompt}"));
+            assert_eq!(got.0, "small", "tier mismatch for {prompt}");
+            assert_eq!(got.1, *reason, "reason mismatch for {prompt}");
+        }
+        // Still escalate teaching / systems; keep System One probe out of shortcuts.
+        assert_eq!(
+            shortcut_tier("Explain photosynthesis in one sentence.").map(|g| g.0),
+            Some("large")
+        );
+        assert_eq!(
+            shortcut_tier("Name one benefit of using an HTTP reverse proxy.").map(|g| g.0),
+            Some("mid")
+        );
+        assert!(
+            shortcut_tier("Please route this non shortcut probe request").is_none(),
+            "HTTP System One probes must not match brief-lookup shortcut"
+        );
+    }
+
+    #[test]
     fn shortcut_tier_covers_routing_gateway_hard() {
         // Corpus: bench/corpus/routing_gateway_hard.json expected_model → tier.
         let cases: &[(&str, &str, &str)] = &[
@@ -1168,6 +1224,36 @@ mod tests {
         .unwrap();
         assert_eq!(d.model, "ariacompute/ariamodel-small");
         assert_eq!(d.reason, "afm-d:chitchat-small");
+    }
+
+    #[tokio::test]
+    async fn arithmetic_and_brief_lookup_short_circuit_to_small() {
+        let eligible = vec![
+            card_tier("ariacompute/ariamodel-small", "small"),
+            card_tier("ariacompute/ariamodel-mid", "mid"),
+            card_tier("ariacompute/ariamodel-large", "large"),
+        ];
+        let decisioner = AfmDDecisioner {
+            endpoint: Some("http://127.0.0.1:1".into()),
+        };
+        for (prompt, reason) in [
+            ("1+1=?", "afm-d:factoid-small"),
+            ("china emergency call", "afm-d:factoid-small"),
+        ] {
+            let task = AfmDTask {
+                state: json!(format!("User message: {prompt}")),
+                eligible: eligible.clone(),
+                instructions: DEFAULT_INSTRUCTIONS.into(),
+                descriptions: HashMap::new(),
+                timeout_ms: 2000,
+                min_confidence: None,
+                fallback: None,
+                track: None,
+            };
+            let d = decisioner.route(task).await.unwrap();
+            assert_eq!(d.model, "ariacompute/ariamodel-small", "prompt={prompt}");
+            assert_eq!(d.reason, reason, "prompt={prompt}");
+        }
     }
 
     #[tokio::test]
