@@ -42,7 +42,19 @@ class TestCli(unittest.TestCase):
         with mock.patch("sys.stdout", buf):
             code = main(["list-corpus", "--json"])
         self.assertEqual(code, 0)
-        self.assertIn("routing_tiny.json", buf.getvalue())
+        out = buf.getvalue()
+        self.assertIn("routing_tiny.json", out)
+        self.assertIn("routing_gateway_eval.json", out)
+        self.assertIn("routing-accuracy", out)
+
+    def test_routing_accuracy_defaults(self) -> None:
+        p = build_parser()
+        ns = p.parse_args(
+            ["routing-accuracy", "--router", "http://127.0.0.1:8899"]
+        )
+        self.assertEqual(ns.cmd, "routing-accuracy")
+        self.assertTrue(ns.corpus.endswith("routing_gateway_eval.json"))
+        self.assertEqual(ns.entrypoint, "ariacompute/semantic-auto")
 
     def test_missing_pool_exit_2(self) -> None:
         code = main(["routing", "--report", "/tmp/nope.json"])

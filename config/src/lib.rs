@@ -1799,28 +1799,136 @@ recipes:
 
     #[test]
     fn template_provider_model_ids_match_embedded_gateway() {
-        let (s, m, l) = template_provider_model_ids("semantic").unwrap();
-        let doc =
-            RouterDocument::from_yaml_str(gateway_template_yaml("semantic").unwrap()).unwrap();
-        assert_eq!(
-            s,
-            doc.provider("ariacompute/ariamodel-small")
-                .unwrap()
-                .provider_model_id
-        );
-        assert_eq!(
-            m,
-            doc.provider("ariacompute/ariamodel-mid")
-                .unwrap()
-                .provider_model_id
-        );
-        assert_eq!(
-            l,
-            doc.provider("ariacompute/ariamodel-large")
-                .unwrap()
-                .provider_model_id
-        );
+        for kind in ["", "semantic", "agent", "afm-d"] {
+            let (s, m, l) = template_provider_model_ids(kind).unwrap();
+            let doc = RouterDocument::from_yaml_str(gateway_template_yaml(kind).unwrap()).unwrap();
+            assert_eq!(
+                s,
+                doc.provider("ariacompute/ariamodel-small")
+                    .unwrap()
+                    .provider_model_id,
+                "kind={kind}"
+            );
+            assert_eq!(
+                m,
+                doc.provider("ariacompute/ariamodel-mid")
+                    .unwrap()
+                    .provider_model_id,
+                "kind={kind}"
+            );
+            assert_eq!(
+                l,
+                doc.provider("ariacompute/ariamodel-large")
+                    .unwrap()
+                    .provider_model_id,
+                "kind={kind}"
+            );
+            assert!(!s.is_empty() && !m.is_empty() && !l.is_empty());
+        }
+        assert!(gateway_template_yaml("nope").is_err());
         assert!(template_provider_model_ids("nope").is_err());
+    }
+
+    fn assert_track_e_routing(routing: &Routing) {
+        let prio = |n: &str| {
+            routing
+                .decisions
+                .iter()
+                .find(|d| d.name == n)
+                .map(|d| d.priority)
+                .unwrap_or_else(|| panic!("missing decision {n}"))
+        };
+        // Track E: multi_question > systems_mid > factoid > intro_teach
+        assert!(prio("multi_question") > prio("systems_mid"));
+        assert!(prio("systems_mid") > prio("factoid"));
+        assert!(prio("factoid") > prio("intro_teach"));
+        let needs_intro = routing
+            .signals
+            .keywords
+            .iter()
+            .find(|k| k.name == "needs_intro")
+            .expect("needs_intro");
+        assert!(
+            !needs_intro
+                .keywords
+                .iter()
+                .any(|w| w == "what is" || w == "what are"),
+            "Track E: bare what-is must not be in needs_intro"
+        );
+        let needs_mid = routing
+            .signals
+            .keywords
+            .iter()
+            .find(|k| k.name == "needs_mid")
+            .expect("needs_mid");
+        assert!(needs_mid.keywords.iter().any(|w| w == "when to use"));
+    }
+
+    #[test]
+    fn triad_gateway_has_three_entrypoints_and_track_e_priorities() {
+        let doc =
+            RouterDocument::from_yaml_str(include_str!("../examples/triad-gateway.yaml")).unwrap();
+        assert_eq!(doc.entrypoints.len(), 3);
+        let routers: Vec<_> = doc.entrypoints.iter().map(|e| e.router).collect();
+        assert!(routers.contains(&RouterKind::Semantic));
+        assert!(routers.contains(&RouterKind::Agent));
+        assert!(routers.contains(&RouterKind::AfmD));
+        let mom = doc.recipe("mom").unwrap();
+        assert_track_e_routing(mom.routing.as_ref().expect("mom routing"));
+        let afm = doc.recipe("afm-d-default").unwrap().afm_d.as_ref().unwrap();
+        assert_eq!(afm.track, Some(AfmDTrack::Encoder));
+    }
+
+    #[test]
+    fn gateway_yamls_share_track_e_keyword_priorities() {
+        for (label, raw, recipe) in [
+            (
+                "semantic-gateway",
+                include_str!("../examples/semantic-gateway.yaml"),
+                "mom",
+            ),
+            (
+                "triad-gateway",
+                include_str!("../examples/triad-gateway.yaml"),
+                "mom",
+            ),
+        ] {
+            let doc = RouterDocument::from_yaml_str(raw).unwrap();
+            let r = doc
+                .recipe(recipe)
+                .unwrap_or_else(|_| panic!("{label}: recipe {recipe}"));
+            let routing = r
+                .routing
+                .as_ref()
+                .unwrap_or_else(|| panic!("{label}: routing"));
+            assert_track_e_routing(routing);
+        }
+    }
+
+    #[test]
+    fn write_afm_d_setup_overrides_endpoint_and_fallback() {
+        with_aria_compute_home(|_| {
+            let opts = SetupModelOpts {
+                base_url: Some("https://example.test".into()),
+                api_key_env: None,
+                api_key: None,
+                small_provider_model_id: None,
+                mid_provider_model_id: None,
+                large_provider_model_id: None,
+                agent_endpoint: None,
+                agent_model: None,
+                agent_fallback: None,
+                afm_d_endpoint: Some("http://127.0.0.1:8010".into()),
+                afm_d_fallback: Some("ariacompute/ariamodel-small".into()),
+            };
+            let path = write_default_config_with_opts("afm-d", true, true, true, &opts).unwrap();
+            let doc = RouterDocument::load_path(&path).unwrap();
+            assert_eq!(doc.entrypoints[0].router, RouterKind::AfmD);
+            let afm = doc.recipe("afm-d-default").unwrap().afm_d.as_ref().unwrap();
+            assert_eq!(afm.endpoint.as_deref(), Some("http://127.0.0.1:8010"));
+            assert_eq!(afm.fallback.as_deref(), Some("ariacompute/ariamodel-small"));
+            clear_default_config().unwrap();
+        });
     }
 
     #[test]
@@ -1893,6 +2001,7 @@ recipes:
             include_str!("../examples/afm-d-tiny.yaml"),
             include_str!("../examples/afm-d.yaml"),
             include_str!("../examples/afm-d-gateway.yaml"),
+            include_str!("../examples/triad-gateway.yaml"),
             include_str!("../examples/semantic-enhancements.yaml"),
         ] {
             RouterDocument::from_yaml_str(raw).unwrap();
