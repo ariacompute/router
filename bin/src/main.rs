@@ -278,6 +278,10 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("invalid template: {kind}").into());
     }
 
+    // Prompt hints come from the embedded gateway template (not hardcoded here).
+    let (tmpl_small, tmpl_mid, tmpl_large) =
+        aria_router_config::template_provider_model_ids(&kind)?;
+
     let models = aria_router_config::SetupModelOpts {
         base_url: prompt_opt(
             "gateway base_url [https://tokenhub.tencentmaas.com]: ",
@@ -313,17 +317,17 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         small_provider_model_id: prompt_opt(
-            "ariamodel-small provider_model_id [glm-5.3-flash]: ",
+            &format!("ariamodel-small provider_model_id [{tmpl_small}]: "),
             args.model_small,
             prompt_models,
         ),
         mid_provider_model_id: prompt_opt(
-            "ariamodel-mid provider_model_id [glm-5.3]: ",
+            &format!("ariamodel-mid provider_model_id [{tmpl_mid}]: "),
             args.model_mid,
             prompt_models,
         ),
         large_provider_model_id: prompt_opt(
-            "ariamodel-large provider_model_id [deepseek-v4-pro]: ",
+            &format!("ariamodel-large provider_model_id [{tmpl_large}]: "),
             args.model_large,
             prompt_models,
         ),

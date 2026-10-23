@@ -1220,6 +1220,36 @@ const LOGICAL_SMALL: &str = "ariacompute/ariamodel-small";
 const LOGICAL_MID: &str = "ariacompute/ariamodel-mid";
 const LOGICAL_LARGE: &str = "ariacompute/ariamodel-large";
 
+/// Embedded gateway YAML for a setup template (`semantic` / `agent` / `afm-d`).
+pub fn gateway_template_yaml(kind: &str) -> Result<&'static str, RouterError> {
+    match kind {
+        "" | "semantic" => Ok(SEMANTIC_GATEWAY_YAML),
+        "agent" => Ok(AGENT_GATEWAY_YAML),
+        "afm-d" => Ok(AFM_D_GATEWAY_YAML),
+        other => Err(RouterError::InvalidParam(format!(
+            "setup template must be semantic|agent|afm-d, got {other}"
+        ))),
+    }
+}
+
+/// Upstream `provider_model_id` defaults from the embedded gateway template
+/// (small, mid, large). Callers should use these as setup prompt hints instead
+/// of hardcoding TokenHub model names in the CLI.
+pub fn template_provider_model_ids(kind: &str) -> Result<(String, String, String), RouterError> {
+    let doc = RouterDocument::from_yaml_str(gateway_template_yaml(kind)?)?;
+    let id = |logical: &str| -> Result<String, RouterError> {
+        doc.provider(logical)
+            .map(|m| m.provider_model_id.clone())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                RouterError::Config(format!(
+                    "template {kind:?} missing provider_model_id for {logical}"
+                ))
+            })
+    };
+    Ok((id(LOGICAL_SMALL)?, id(LOGICAL_MID)?, id(LOGICAL_LARGE)?))
+}
+
 fn yaml_str(s: &str) -> serde_yaml::Value {
     serde_yaml::Value::String(s.to_string())
 }
@@ -1382,16 +1412,7 @@ pub fn write_default_config_with_opts(
             path.display()
         )));
     }
-    let body = match kind {
-        "" | "semantic" => SEMANTIC_GATEWAY_YAML,
-        "agent" => AGENT_GATEWAY_YAML,
-        "afm-d" => AFM_D_GATEWAY_YAML,
-        other => {
-            return Err(RouterError::InvalidParam(format!(
-                "setup template must be semantic|agent|afm-d, got {other}"
-            )))
-        }
-    };
+    let body = gateway_template_yaml(kind)?;
     let keys = default_keys_path()?;
     let users = default_users_path()?;
     let disp = |p: &PathBuf| {
@@ -1747,11 +1768,12 @@ recipes:
             assert_eq!(path, home.join("router.yml"));
             let doc = RouterDocument::load_path(&path).unwrap();
             assert_eq!(doc.entrypoints[0].router, RouterKind::Semantic);
+            let (want_s, want_m, _) = template_provider_model_ids("semantic").unwrap();
             let small = doc.provider("ariacompute/ariamodel-small").unwrap();
-            assert_eq!(small.provider_model_id, "glm-5.3-flash");
+            assert_eq!(small.provider_model_id, want_s);
             assert_eq!(small.tier.as_deref(), Some("small"));
             let mid = doc.provider("ariacompute/ariamodel-mid").unwrap();
-            assert_eq!(mid.provider_model_id, "glm-5.3");
+            assert_eq!(mid.provider_model_id, want_m);
             assert_eq!(mid.tier.as_deref(), Some("mid"));
             assert!(mid.backend_refs[0]
                 .api_key_env
@@ -1773,6 +1795,32 @@ recipes:
             clear_default_config().unwrap();
             assert!(!path.exists());
         });
+    }
+
+    #[test]
+    fn template_provider_model_ids_match_embedded_gateway() {
+        let (s, m, l) = template_provider_model_ids("semantic").unwrap();
+        let doc =
+            RouterDocument::from_yaml_str(gateway_template_yaml("semantic").unwrap()).unwrap();
+        assert_eq!(
+            s,
+            doc.provider("ariacompute/ariamodel-small")
+                .unwrap()
+                .provider_model_id
+        );
+        assert_eq!(
+            m,
+            doc.provider("ariacompute/ariamodel-mid")
+                .unwrap()
+                .provider_model_id
+        );
+        assert_eq!(
+            l,
+            doc.provider("ariacompute/ariamodel-large")
+                .unwrap()
+                .provider_model_id
+        );
+        assert!(template_provider_model_ids("nope").is_err());
     }
 
     #[test]
