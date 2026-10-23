@@ -1,8 +1,9 @@
 # Gateway semantic config (YAML v0.3) — **advanced** aria recipe.
 # Intentionally ahead of bench/vllm-sr/config-gateway.yaml (keyword baseline).
 # Entrypoint: ariacompute/semantic-auto → recipe mom.
-# Gold path: explain+high band → large; factoid → small; systems/trade-off → mid;
-# multi-turn/question → mid; long prompt → latency-aware / multi-factor; else → small.
+# Gold path: explain+high band → large; multi-Q / systems → mid; factoid → small;
+# intro/teach (no bare "what is") → large; long prompt → multi-factor; else → small.
+# Track E: bare "what is …" factoids must NOT hit intro_teach (omit what is/are).
 # Requires: export GATEWAY_API_KEY=…  (never commit secrets).
 
 version: v0.3
@@ -79,7 +80,16 @@ recipes:
             keywords: ["explain", "walk me through"]
           - name: needs_intro
             operator: OR
-            keywords: ["introduce", "introduction to", "what is", "what are", "how to", "how does", "overview of", "teach"]
+            # Intentionally omit bare "what is" / "what are" — those collide with
+            # factoids and multi-Q compares (Track E small→large / mid→large).
+            keywords:
+              - "introduce"
+              - "introduction to"
+              - "how to"
+              - "how does"
+              - "overview of"
+              - "teach"
+              - "walk me through"
           - name: factoid_small
             operator: OR
             keywords:
@@ -89,9 +99,22 @@ recipes:
               - "CPU"
               - "acronym"
               - "in celsius"
+              - "chemical symbol"
+              - "capital of"
+              - "chromosome"
           - name: needs_mid
             operator: OR
-            keywords: ["reverse proxy", "trade-off", "tradeoff"]
+            keywords:
+              - "reverse proxy"
+              - "trade-off"
+              - "tradeoff"
+              - "when to use"
+              - "when would you"
+              - "design choice"
+              - "versus"
+              - "cache eviction"
+              - "false-positive"
+              - "false positive"
         language:
           - name: english
             code: en
@@ -156,9 +179,54 @@ recipes:
             - name: header-mutation
               set:
                 x-aria-route: explanatory
+        - name: multi_question
+          description: Multi-question structure → mid (beats intro_teach on "What is A? What is B?")
+          priority: 97
+          rules:
+            operator: AND
+            conditions:
+              - type: structure
+                name: multi_question
+          modelRefs:
+            - model: ariacompute/ariamodel-mid
+          algorithm: static
+          plugins:
+            - name: header-mutation
+              set:
+                x-aria-route: multi_question
+        - name: systems_mid
+          description: Systems / trade-off / when-to-use → mid (beats intro on remaining overlaps)
+          priority: 96
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_mid
+          modelRefs:
+            - model: ariacompute/ariamodel-mid
+          algorithm: static
+          plugins:
+            - name: header-mutation
+              set:
+                x-aria-route: systems_mid
+        - name: factoid
+          description: Short factual prompts → small (beats systems_mid traps)
+          priority: 92
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: factoid_small
+          modelRefs:
+            - model: ariacompute/ariamodel-small
+          algorithm: static
+          plugins:
+            - name: header-mutation
+              set:
+                x-aria-route: factoid
         - name: intro_teach
-          description: Intro / teaching asks (introduce X, what is X, how to) -> large
-          priority: 95
+          description: Explicit teach/intro/how-to (not bare what-is) → large
+          priority: 88
           rules:
             operator: AND
             conditions:
@@ -173,21 +241,6 @@ recipes:
             - name: header-mutation
               set:
                 x-aria-route: intro_teach
-        - name: factoid
-          description: Short factual prompts → small (beats systems_mid traps)
-          priority: 90
-          rules:
-            operator: AND
-            conditions:
-              - type: keyword
-                name: factoid_small
-          modelRefs:
-            - model: ariacompute/ariamodel-small
-          algorithm: static
-          plugins:
-            - name: header-mutation
-              set:
-                x-aria-route: factoid
         - name: long_context
           description: Long prompt → multi-factor (cost+latency) over pool
           priority: 80
@@ -201,21 +254,6 @@ recipes:
             - model: ariacompute/ariamodel-mid
             - model: ariacompute/ariamodel-large
           algorithm: multi-factor
-        - name: systems_mid
-          description: Systems / trade-off prompts → static mid tier
-          priority: 70
-          rules:
-            operator: AND
-            conditions:
-              - type: keyword
-                name: needs_mid
-          modelRefs:
-            - model: ariacompute/ariamodel-mid
-          algorithm: static
-          plugins:
-            - name: header-mutation
-              set:
-                x-aria-route: systems_mid
         - name: multi_turn
           description: Multi-turn chat → static mid tier
           priority: 60
@@ -224,17 +262,6 @@ recipes:
             conditions:
               - type: conversation
                 name: multi_turn
-          modelRefs:
-            - model: ariacompute/ariamodel-mid
-          algorithm: static
-        - name: multi_question
-          description: Multi-question structure → static mid tier
-          priority: 50
-          rules:
-            operator: AND
-            conditions:
-              - type: structure
-                name: multi_question
           modelRefs:
             - model: ariacompute/ariamodel-mid
           algorithm: static

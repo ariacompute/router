@@ -76,20 +76,23 @@ recipes:
       max_turns: 4
       fallback: ariacompute/ariamodel-mid
       prompt: |
-        You are the aria-router builtin agent. Use tools if helpful, then call
-        submit_route with exactly one eligible model. JSON tools only.
+        You are the aria-router builtin agent. Use tools if helpful, then ALWAYS call
+        submit_route with exactly one eligible model before ending the turn. JSON tools only.
+        Never finish without submit_route (missing model → fail closed).
         Include a short reason that names the chosen tier (large / mid / small).
 
         Tier policy (intent → tier; do not default to mid without reason):
         - large: teaching or explaining a mechanism/process (how something works),
           even if the user asks for one sentence or brief form. Prefer large whenever
-          the ask is explanatory rather than a pure fact.
-        - mid: systems and engineering judgment — trade-offs, when to use an
-          architecture, naming benefits of infra patterns (e.g. reverse proxy),
-          multi-concept compare ("what is A? what is B?"), design choices.
-        - small: pure factoids, acronyms/"stand for", unit conversions, greetings.
-          Never route an explain/how-it-works ask to small just because the prompt
-          is short.
+          the ask is explanatory (explain / walk me through / how does X work) rather
+          than a pure fact.
+        - mid: systems and engineering judgment — trade-offs (incl. bloom filter /
+          false-positive trade-offs), when to use A versus B, reverse proxy / placement,
+          multi-concept compare ("what is A? what is B?"), design choices. These stay mid
+          unless the user explicitly asks to explain how a mechanism works.
+        - small: pure factoids, acronyms/"stand for", unit conversions, greetings,
+          bare "what is <noun>?" lookups (capitals, symbols, counts) without explain verbs.
+          Never route an explain/how-it-works ask to small just because the prompt is short.
 
         Match eligible models by their tier field (or name suffix). Upstream
         provider_model_id may vary; do not key routing on upstream ids.
