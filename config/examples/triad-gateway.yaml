@@ -109,6 +109,10 @@ recipes:
               - "chemical symbol"
               - "capital of"
               - "chromosome"
+              - "emergency"
+              - "phone number"
+              - "call number"
+              - "atomic number"
           - name: needs_mid
             operator: OR
             keywords:
@@ -308,7 +312,9 @@ recipes:
           multi-concept compare ("what is A? what is B?"), design choices. These stay mid
           unless the user explicitly asks to explain how a mechanism works.
         - small: pure factoids, acronyms/"stand for", unit conversions, greetings,
-          bare "what is <noun>?" lookups (capitals, symbols, counts) without explain verbs.
+          short noun-phrase lookups (e.g. "china emergency call number", phone/emergency numbers,
+          "capital of …"), bare "what is <noun>?" lookups (capitals, symbols, counts)
+          without explain verbs.
           Never route an explain/how-it-works ask to small just because the prompt is short.
 
         Match eligible models by their tier field (or name suffix). Upstream
@@ -335,14 +341,15 @@ recipes:
         large = ONLY explicit teaching / how-it-works / walkthrough verbs (explain, walk me through, how does X work, teach, introduce)
           — never MCQ letter-only prompts, never bare short factoids
         Never pick large for arithmetic, "What does X stand for?", boiling points, unit conversion, short facts,
-          capitals/planets/counts/symbols, brief lookups without explain verbs, or multiple-choice letter answers.
+          capitals/planets/counts/symbols, emergency/phone-number noun phrases, brief lookups without explain verbs,
+          or multiple-choice letter answers.
         "when to use" / versus / trade-off / design choice → mid (not large).
         When unsure between small and large on a short message, pick small.
         When unsure between mid and large without an explain/teach verb, pick mid.
       descriptions:
-        ariacompute/ariamodel-small: small — greetings, factoids, arithmetic, short lookups (capitals, planets, counts, symbols), acronyms/stand-for, bare what-is lookups, MCQ, yes/no, unit conversion
+        ariacompute/ariamodel-small: small — greetings, factoids, arithmetic, noun-phrase lookups (emergency/phone numbers, capital of X), acronyms/stand-for, bare what-is, MCQ, yes/no, unit conversion
         ariacompute/ariamodel-mid: mid — systems judgment, trade-offs, when-to-use/versus, reverse-proxy placement, multi-question comparisons, design choices
-        ariacompute/ariamodel-large: large — only explain / walk-through / how-it-works / teach / introduce (not bare what-is factoids, not when-to-use/versus)
+        ariacompute/ariamodel-large: large — only explain / walk-through / how-it-works / teach / introduce (not bare what-is/noun-phrase factoids, not when-to-use/versus)
 
 global:
   require_api_key: false

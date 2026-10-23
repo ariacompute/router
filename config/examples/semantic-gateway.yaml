@@ -102,6 +102,10 @@ recipes:
               - "chemical symbol"
               - "capital of"
               - "chromosome"
+              - "emergency"
+              - "phone number"
+              - "call number"
+              - "atomic number"
           - name: needs_mid
             operator: OR
             keywords:

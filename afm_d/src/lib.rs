@@ -181,6 +181,13 @@ fn is_short_factoid(head_normalized: &str, raw_head: &str) -> bool {
         || head_normalized.contains("celsius")
         || head_normalized.contains("fahrenheit")
         || head_normalized.contains("sea level")
+        // Noun-phrase lookups (Track E: "china emergency call number?", "Capital of Japan?").
+        || head_normalized.contains("emergency")
+        || head_normalized.contains("phone number")
+        || head_normalized.contains("call number")
+        || head_normalized.contains("capital of")
+        || head_normalized.contains("atomic number")
+        || head_normalized.contains("chemical symbol")
         || (head_normalized.starts_with("what is the ") && words <= 16)
         || (head_normalized.starts_with("what is ")
             && words <= 12
@@ -1042,6 +1049,14 @@ mod tests {
             ),
             ("hi", "small", "afm-d:chitchat-small"),
             ("What does HTTP stand for?", "small", "afm-d:acronym-small"),
+            (
+                "china emergency call number?",
+                "small",
+                "afm-d:factoid-small",
+            ),
+            ("US emergency phone number?", "small", "afm-d:factoid-small"),
+            ("Capital of Japan?", "small", "afm-d:factoid-small"),
+            ("Atomic number of carbon?", "small", "afm-d:factoid-small"),
         ];
         let mut hits = 0usize;
         for (prompt, tier, reason) in cases {
@@ -1050,9 +1065,9 @@ mod tests {
             assert_eq!(got.1, *reason, "reason mismatch for {prompt}");
             hits += 1;
         }
-        assert_eq!(hits, 12);
+        assert_eq!(hits, 16);
         // Offline label quality lower bound when all corpus rows shortcut correctly.
-        assert!((hits as f64) / 12.0 >= 0.83);
+        assert!((hits as f64) / 16.0 >= 0.83);
     }
 
     /// Mirror of `bench.compare.grade.format_mcq_prompt` for compare corpus rows.

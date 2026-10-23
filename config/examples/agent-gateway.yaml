@@ -91,7 +91,9 @@ recipes:
           multi-concept compare ("what is A? what is B?"), design choices. These stay mid
           unless the user explicitly asks to explain how a mechanism works.
         - small: pure factoids, acronyms/"stand for", unit conversions, greetings,
-          bare "what is <noun>?" lookups (capitals, symbols, counts) without explain verbs.
+          short noun-phrase lookups (e.g. "china emergency call number", phone/emergency numbers,
+          "capital of …"), bare "what is <noun>?" lookups (capitals, symbols, counts)
+          without explain verbs.
           Never route an explain/how-it-works ask to small just because the prompt is short.
 
         Match eligible models by their tier field (or name suffix). Upstream
