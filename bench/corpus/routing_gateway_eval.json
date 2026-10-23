@@ -1,0 +1,1612 @@
+[
+  {
+    "id": "large-000",
+    "domain": "sci",
+    "prompt": "Explain photosynthesis in one sentence.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-001",
+    "domain": "sci",
+    "prompt": "Please explain what photosynthesis does.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-002",
+    "domain": "sci",
+    "prompt": "Walk me through how photosynthesis works.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-003",
+    "domain": "sci",
+    "prompt": "Teach me how photosynthesis works briefly.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-004",
+    "domain": "sci",
+    "prompt": "How does photosynthesis work?",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-005",
+    "domain": "sci",
+    "prompt": "Introduce photosynthesis for a beginner.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-006",
+    "domain": "sci",
+    "prompt": "Give an overview of photosynthesis.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-007",
+    "domain": "sci",
+    "prompt": "Explain the mechanism behind photosynthesis.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-008",
+    "domain": "sci",
+    "prompt": "Explain cellular respiration in one sentence.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-009",
+    "domain": "sci",
+    "prompt": "Please explain what cellular respiration does.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-010",
+    "domain": "sci",
+    "prompt": "Walk me through how cellular respiration works.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-011",
+    "domain": "sci",
+    "prompt": "Teach me how cellular respiration works briefly.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-012",
+    "domain": "sci",
+    "prompt": "How does cellular respiration work?",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-013",
+    "domain": "sci",
+    "prompt": "Introduce cellular respiration for a beginner.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-014",
+    "domain": "sci",
+    "prompt": "Give an overview of cellular respiration.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-015",
+    "domain": "sci",
+    "prompt": "Explain the mechanism behind cellular respiration.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-016",
+    "domain": "sci",
+    "prompt": "Explain DNA replication in one sentence.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-017",
+    "domain": "sci",
+    "prompt": "Please explain what DNA replication does.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-018",
+    "domain": "sci",
+    "prompt": "Walk me through how DNA replication works.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-019",
+    "domain": "sci",
+    "prompt": "Teach me how DNA replication works briefly.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-020",
+    "domain": "sci",
+    "prompt": "How does DNA replication work?",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-021",
+    "domain": "sci",
+    "prompt": "Introduce DNA replication for a beginner.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-022",
+    "domain": "sci",
+    "prompt": "Give an overview of DNA replication.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-023",
+    "domain": "sci",
+    "prompt": "Explain the mechanism behind DNA replication.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-024",
+    "domain": "sci",
+    "prompt": "Explain natural selection in one sentence.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-025",
+    "domain": "sci",
+    "prompt": "Please explain what natural selection does.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-026",
+    "domain": "sci",
+    "prompt": "Walk me through how natural selection works.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-027",
+    "domain": "sci",
+    "prompt": "Teach me how natural selection works briefly.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-028",
+    "domain": "sci",
+    "prompt": "How does natural selection work?",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-029",
+    "domain": "sci",
+    "prompt": "Introduce natural selection for a beginner.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-030",
+    "domain": "sci",
+    "prompt": "Give an overview of natural selection.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-031",
+    "domain": "sci",
+    "prompt": "Explain the mechanism behind natural selection.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-032",
+    "domain": "sci",
+    "prompt": "Explain the greenhouse effect in one sentence.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-033",
+    "domain": "sci",
+    "prompt": "Please explain what the greenhouse effect does.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-034",
+    "domain": "sci",
+    "prompt": "Walk me through how the greenhouse effect works.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-035",
+    "domain": "sci",
+    "prompt": "Teach me how the greenhouse effect works briefly.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-036",
+    "domain": "sci",
+    "prompt": "How does the greenhouse effect work?",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-037",
+    "domain": "sci",
+    "prompt": "Introduce the greenhouse effect for a beginner.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-038",
+    "domain": "sci",
+    "prompt": "Give an overview of the greenhouse effect.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-039",
+    "domain": "sci",
+    "prompt": "Explain the mechanism behind the greenhouse effect.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-040",
+    "domain": "sci",
+    "prompt": "Explain osmosis in one sentence.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-041",
+    "domain": "sci",
+    "prompt": "Please explain what osmosis does.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-042",
+    "domain": "sci",
+    "prompt": "Walk me through how osmosis works.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-043",
+    "domain": "sci",
+    "prompt": "Teach me how osmosis works briefly.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-044",
+    "domain": "sci",
+    "prompt": "How does osmosis work?",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-045",
+    "domain": "sci",
+    "prompt": "Introduce osmosis for a beginner.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-046",
+    "domain": "sci",
+    "prompt": "Give an overview of osmosis.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-047",
+    "domain": "sci",
+    "prompt": "Explain the mechanism behind osmosis.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-048",
+    "domain": "sci",
+    "prompt": "Explain enzyme catalysis in one sentence.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-049",
+    "domain": "sci",
+    "prompt": "Please explain what enzyme catalysis does.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-050",
+    "domain": "sci",
+    "prompt": "Walk me through how enzyme catalysis works.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-051",
+    "domain": "sci",
+    "prompt": "Teach me how enzyme catalysis works briefly.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-052",
+    "domain": "sci",
+    "prompt": "How does enzyme catalysis work?",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-053",
+    "domain": "sci",
+    "prompt": "Introduce enzyme catalysis for a beginner.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-054",
+    "domain": "sci",
+    "prompt": "Give an overview of enzyme catalysis.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-055",
+    "domain": "sci",
+    "prompt": "Explain the mechanism behind enzyme catalysis.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-056",
+    "domain": "sci",
+    "prompt": "Explain the water cycle in one sentence.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-057",
+    "domain": "sci",
+    "prompt": "Please explain what the water cycle does.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-058",
+    "domain": "sci",
+    "prompt": "Walk me through how the water cycle works.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-059",
+    "domain": "sci",
+    "prompt": "Teach me how the water cycle works briefly.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-060",
+    "domain": "sci",
+    "prompt": "How does the water cycle work?",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-061",
+    "domain": "sci",
+    "prompt": "Introduce the water cycle for a beginner.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-062",
+    "domain": "sci",
+    "prompt": "Give an overview of the water cycle.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-063",
+    "domain": "sci",
+    "prompt": "Explain the mechanism behind the water cycle.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-064",
+    "domain": "sci",
+    "prompt": "Explain plate tectonics in one sentence.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-065",
+    "domain": "sci",
+    "prompt": "Please explain what plate tectonics does.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-066",
+    "domain": "sci",
+    "prompt": "Walk me through how plate tectonics works.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-067",
+    "domain": "sci",
+    "prompt": "Teach me how plate tectonics works briefly.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-068",
+    "domain": "sci",
+    "prompt": "How does plate tectonics work?",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "large-069",
+    "domain": "sci",
+    "prompt": "Introduce plate tectonics for a beginner.",
+    "expected_model": "deepseek-v4-pro",
+    "intent": "large"
+  },
+  {
+    "id": "mid-000",
+    "domain": "tech",
+    "prompt": "Name one benefit of using an HTTP reverse proxy.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-001",
+    "domain": "tech",
+    "prompt": "What is a common design trade-off when choosing a cache eviction policy?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-002",
+    "domain": "tech",
+    "prompt": "When would you place a reverse proxy in front of app servers?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-003",
+    "domain": "tech",
+    "prompt": "What is REST? What is GraphQL?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-004",
+    "domain": "tech",
+    "prompt": "When to use a message queue versus synchronous RPC?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-005",
+    "domain": "tech",
+    "prompt": "What trade-off do you accept with eventual consistency?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-006",
+    "domain": "tech",
+    "prompt": "Name a benefit of a reverse proxy for TLS termination.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-007",
+    "domain": "tech",
+    "prompt": "What is a CDN? What is an origin server?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-008",
+    "domain": "tech",
+    "prompt": "When would you choose LRU over LFU for cache eviction?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-009",
+    "domain": "tech",
+    "prompt": "Design choice: monolith first or services first for a small team?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-010",
+    "domain": "tech",
+    "prompt": "What is gRPC? What is JSON-RPC?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-011",
+    "domain": "tech",
+    "prompt": "When would you place a reverse proxy as an API gateway?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-012",
+    "domain": "tech",
+    "prompt": "Trade-off between strong and eventual consistency in a shopping cart.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-013",
+    "domain": "tech",
+    "prompt": "What is a sidecar proxy? What problem does it solve?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-014",
+    "domain": "tech",
+    "prompt": "When to use Redis versus Memcached for caching?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-015",
+    "domain": "tech",
+    "prompt": "Name one benefit of using an HTTP reverse proxy for rate limiting.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-016",
+    "domain": "tech",
+    "prompt": "What is blue-green deploy? What is canary deploy?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-017",
+    "domain": "tech",
+    "prompt": "Cache eviction trade-off: memory vs hit rate — when prefer TTL?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-018",
+    "domain": "tech",
+    "prompt": "When would you place a reverse proxy for path-based routing?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-019",
+    "domain": "tech",
+    "prompt": "What is CQRS? What is event sourcing?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-020",
+    "domain": "systems",
+    "prompt": "Trade-off of sync vs async replication for a primary database.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-021",
+    "domain": "systems",
+    "prompt": "When to use a push queue versus a pull queue?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-022",
+    "domain": "systems",
+    "prompt": "What is sharding? What is partitioning?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-023",
+    "domain": "systems",
+    "prompt": "Design choice: shared DB vs DB-per-service.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-024",
+    "domain": "systems",
+    "prompt": "When would you place a reverse proxy for sticky sessions?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-025",
+    "domain": "systems",
+    "prompt": "Name one benefit of using an HTTP reverse proxy for compression.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-026",
+    "domain": "systems",
+    "prompt": "What is a circuit breaker? What is a bulkhead?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-027",
+    "domain": "systems",
+    "prompt": "Trade-off between batch and streaming ETL pipelines.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-028",
+    "domain": "systems",
+    "prompt": "When to use leader election versus gossip membership?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-029",
+    "domain": "systems",
+    "prompt": "What is an outbox pattern? What problem does it solve?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-030",
+    "domain": "systems",
+    "prompt": "Cache eviction: write-through vs write-back trade-off.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-031",
+    "domain": "systems",
+    "prompt": "When would you place a reverse proxy for A/B routing?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-032",
+    "domain": "systems",
+    "prompt": "What is saga orchestration? What is choreography?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-033",
+    "domain": "systems",
+    "prompt": "Design choice: push vs pull metrics collection.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-034",
+    "domain": "systems",
+    "prompt": "Trade-off of columnar vs row storage for analytics.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-035",
+    "domain": "sci",
+    "prompt": "What is a controlled experiment? What is an observational study?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-036",
+    "domain": "sci",
+    "prompt": "Trade-off between sensitivity and specificity in a diagnostic test.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-037",
+    "domain": "sci",
+    "prompt": "When to use a parametric versus nonparametric statistical test?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-038",
+    "domain": "sci",
+    "prompt": "What is precision? What is recall?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-039",
+    "domain": "sci",
+    "prompt": "Design choice: cross-sectional vs longitudinal study.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-040",
+    "domain": "math",
+    "prompt": "What is bias? What is variance in estimation?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-041",
+    "domain": "math",
+    "prompt": "Trade-off between model complexity and generalization.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-042",
+    "domain": "math",
+    "prompt": "When to use L1 versus L2 regularization?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-043",
+    "domain": "math",
+    "prompt": "What is precision? What is accuracy as metrics?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-044",
+    "domain": "math",
+    "prompt": "Design choice: batch GD vs SGD for large datasets.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-045",
+    "domain": "tech",
+    "prompt": "Name one benefit of using an HTTP reverse proxy for authentication.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-046",
+    "domain": "tech",
+    "prompt": "When would you place a reverse proxy for WebSocket upgrade handling?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-047",
+    "domain": "tech",
+    "prompt": "What is mTLS? What is plain TLS termination at the edge?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-048",
+    "domain": "tech",
+    "prompt": "Trade-off of client-side vs server-side rendering for SEO apps.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-049",
+    "domain": "tech",
+    "prompt": "When to use feature flags versus long-lived branches?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-050",
+    "domain": "tech",
+    "prompt": "What is an API gateway? What is a service mesh?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-051",
+    "domain": "tech",
+    "prompt": "Cache eviction trade-off when keys are skewed (hot keys).",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-052",
+    "domain": "tech",
+    "prompt": "When would you place a reverse proxy for geo-based routing?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-053",
+    "domain": "tech",
+    "prompt": "What is idempotency? What is exactly-once delivery?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-054",
+    "domain": "tech",
+    "prompt": "Design choice: polling vs webhooks for integrations.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-055",
+    "domain": "systems",
+    "prompt": "Trade-off of quorum size in Raft for latency vs durability.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-056",
+    "domain": "systems",
+    "prompt": "When to use a shared-nothing vs shared-disk architecture?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-057",
+    "domain": "systems",
+    "prompt": "What is a bloom filter? What false-positive trade-off do you accept?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-058",
+    "domain": "systems",
+    "prompt": "Name one benefit of using an HTTP reverse proxy for request buffering.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-059",
+    "domain": "systems",
+    "prompt": "When would you place a reverse proxy for connection pooling to backends?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-060",
+    "domain": "systems",
+    "prompt": "What is backpressure? What is load shedding?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-061",
+    "domain": "systems",
+    "prompt": "Trade-off between push and pull for CDN invalidation.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-062",
+    "domain": "systems",
+    "prompt": "Design choice: leaderful vs leaderless replication.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-063",
+    "domain": "systems",
+    "prompt": "When to use a reverse proxy versus direct client-to-service mesh.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-064",
+    "domain": "chat",
+    "prompt": "What is a good API error format? What is a good retry policy?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-065",
+    "domain": "tech",
+    "prompt": "Name a reverse proxy trade-off when enabling request body buffering.",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-066",
+    "domain": "tech",
+    "prompt": "When would you choose sticky sessions behind a reverse proxy?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-067",
+    "domain": "tech",
+    "prompt": "What is horizontal scaling? What is vertical scaling?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-068",
+    "domain": "tech",
+    "prompt": "Cache eviction: size-based vs time-based — which trade-off?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "mid-069",
+    "domain": "tech",
+    "prompt": "When to use an API gateway reverse proxy for multi-tenant routing?",
+    "expected_model": "glm-5.3",
+    "intent": "mid"
+  },
+  {
+    "id": "small-000",
+    "domain": "sci",
+    "prompt": "What is the boiling point of water at sea level in Celsius?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-001",
+    "domain": "sci",
+    "prompt": "Convert 100C to Fahrenheit in celsius reference terms briefly.",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-002",
+    "domain": "sci",
+    "prompt": "What is the chemical symbol for gold?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-003",
+    "domain": "sci",
+    "prompt": "How many chromosomes do humans typically have?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-004",
+    "domain": "sci",
+    "prompt": "What planet is closest to the Sun?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-005",
+    "domain": "sci",
+    "prompt": "What is H2O?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-006",
+    "domain": "sci",
+    "prompt": "What is the speed of light in vacuum approximately in m/s?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-007",
+    "domain": "sci",
+    "prompt": "Capital of France?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-008",
+    "domain": "sci",
+    "prompt": "What gas do plants absorb during photosynthesis? Answer with the formula.",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-009",
+    "domain": "sci",
+    "prompt": "Freezing point of water in Celsius?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-010",
+    "domain": "tech",
+    "prompt": "What does CPU stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-011",
+    "domain": "tech",
+    "prompt": "What does HTTP stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-012",
+    "domain": "tech",
+    "prompt": "What does RAM stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-013",
+    "domain": "tech",
+    "prompt": "What does SSD stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-014",
+    "domain": "tech",
+    "prompt": "What does API stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-015",
+    "domain": "tech",
+    "prompt": "What does URL stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-016",
+    "domain": "tech",
+    "prompt": "What does DNS stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-017",
+    "domain": "tech",
+    "prompt": "What does JSON stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-018",
+    "domain": "tech",
+    "prompt": "What does SQL stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-019",
+    "domain": "tech",
+    "prompt": "What does GPU stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-020",
+    "domain": "tech",
+    "prompt": "What does TLS stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-021",
+    "domain": "tech",
+    "prompt": "What does CDN stand for as an acronym quiz?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-022",
+    "domain": "math",
+    "prompt": "What is 7×8?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-023",
+    "domain": "math",
+    "prompt": "1+1=?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-024",
+    "domain": "math",
+    "prompt": "What is 12*12?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-025",
+    "domain": "math",
+    "prompt": "Convert 2 kilometers to meters.",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-026",
+    "domain": "math",
+    "prompt": "What is the square root of 81?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-027",
+    "domain": "math",
+    "prompt": "What is 15% of 200?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-028",
+    "domain": "math",
+    "prompt": "How many degrees in a right angle?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-029",
+    "domain": "math",
+    "prompt": "What is 2^10?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-030",
+    "domain": "chat",
+    "prompt": "hi",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-031",
+    "domain": "chat",
+    "prompt": "hello",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-032",
+    "domain": "chat",
+    "prompt": "hey there",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-033",
+    "domain": "chat",
+    "prompt": "thanks",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-034",
+    "domain": "chat",
+    "prompt": "good morning",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-035",
+    "domain": "chat",
+    "prompt": "ok",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-036",
+    "domain": "chat",
+    "prompt": "bye",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-037",
+    "domain": "chat",
+    "prompt": "yes",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-038",
+    "domain": "chat",
+    "prompt": "no",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-039",
+    "domain": "chat",
+    "prompt": "ping",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-040",
+    "domain": "sci",
+    "prompt": "china emergency call number?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-041",
+    "domain": "sci",
+    "prompt": "US emergency phone number?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-042",
+    "domain": "sci",
+    "prompt": "Capital of Japan?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-043",
+    "domain": "sci",
+    "prompt": "Atomic number of carbon?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-044",
+    "domain": "sci",
+    "prompt": "What does DNA stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-045",
+    "domain": "sci",
+    "prompt": "What does RNA stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-046",
+    "domain": "tech",
+    "prompt": "What does HTML stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-047",
+    "domain": "tech",
+    "prompt": "What does CSS stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-048",
+    "domain": "tech",
+    "prompt": "What does SSH stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-049",
+    "domain": "tech",
+    "prompt": "What does VPC stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-050",
+    "domain": "tech",
+    "prompt": "Default HTTP port number?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-051",
+    "domain": "tech",
+    "prompt": "Default HTTPS port number?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-052",
+    "domain": "tech",
+    "prompt": "What does IPv4 stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-053",
+    "domain": "tech",
+    "prompt": "What does MAC address stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-054",
+    "domain": "math",
+    "prompt": "What is 9+10?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-055",
+    "domain": "math",
+    "prompt": "Convert 1 hour to minutes.",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-056",
+    "domain": "math",
+    "prompt": "How many bits in a byte?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-057",
+    "domain": "math",
+    "prompt": "What is 1000 millimeters in meters?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-058",
+    "domain": "chat",
+    "prompt": "hi — quick fact: what does FAQ stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-059",
+    "domain": "tech",
+    "prompt": "What does CRUD stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-060",
+    "domain": "tech",
+    "prompt": "What does ACID stand for in databases?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-061",
+    "domain": "tech",
+    "prompt": "What does REST stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-062",
+    "domain": "tech",
+    "prompt": "What does YAML stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-063",
+    "domain": "tech",
+    "prompt": "What does CLI stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-064",
+    "domain": "sci",
+    "prompt": "Boiling point of water in Kelvin approximately?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-065",
+    "domain": "sci",
+    "prompt": "What does ATP stand for in biology?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-066",
+    "domain": "math",
+    "prompt": "What is 5*5?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-067",
+    "domain": "math",
+    "prompt": "Convert 32F reference: is water frozen? yes or no",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-068",
+    "domain": "chat",
+    "prompt": "hello — what does IDK stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "small-069",
+    "domain": "tech",
+    "prompt": "What does OOM stand for in ops slang?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "small"
+  },
+  {
+    "id": "trap-000",
+    "domain": "tech",
+    "prompt": "What does the term architecture stand for as a CS acronym quiz?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-001",
+    "domain": "tech",
+    "prompt": "What does the word tradeoff stand for in this acronym quiz?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-002",
+    "domain": "tech",
+    "prompt": "In one word, what does PROXY stand for as an acronym quiz?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-003",
+    "domain": "tech",
+    "prompt": "What does CACHE stand for as an ops acronym quiz?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-004",
+    "domain": "tech",
+    "prompt": "What does SCHEDULER stand for in this acronym quiz?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-005",
+    "domain": "tech",
+    "prompt": "Boiling point quiz: what does OS stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-006",
+    "domain": "tech",
+    "prompt": "What does the term reverse stand for as a networking acronym quiz?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-007",
+    "domain": "sci",
+    "prompt": "Explain nothing — what does DNA stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-008",
+    "domain": "tech",
+    "prompt": "Walk me through nothing; what does HTTP stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-009",
+    "domain": "tech",
+    "prompt": "Introduction to acronyms: what does CPU stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-010",
+    "domain": "tech",
+    "prompt": "How to spell the expansion: what does RAM stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-011",
+    "domain": "systems",
+    "prompt": "Overview of letters only: what does API stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-012",
+    "domain": "tech",
+    "prompt": "Teach the acronym: what does SSD stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-013",
+    "domain": "tech",
+    "prompt": "What does the term eviction stand for as a quiz acronym?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-014",
+    "domain": "tech",
+    "prompt": "Design quiz acronym: what does LRU stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-015",
+    "domain": "math",
+    "prompt": "Explain digits only: what is 2+2?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-016",
+    "domain": "chat",
+    "prompt": "Please explain nothing — just say hi",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-017",
+    "domain": "tech",
+    "prompt": "What does GRAPHQL stand for as an acronym quiz?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-018",
+    "domain": "tech",
+    "prompt": "Trade-off quiz letters: what does CAP stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  },
+  {
+    "id": "trap-019",
+    "domain": "sci",
+    "prompt": "How does spelling work for ATP — what does ATP stand for?",
+    "expected_model": "qwen3.5-flash",
+    "intent": "trap"
+  }
+]

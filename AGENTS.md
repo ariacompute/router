@@ -44,6 +44,8 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `./scripts/run-binding-tests.sh`
 - `python -m unittest discover -s bench/tests -t .`
 - `python -m bench routing --router aria_router=… --router vllm_sr=… …`
+- `python -m bench routing-accuracy --router http://127.0.0.1:8899 --corpus bench/corpus/routing_gateway_eval.json`
+- `./scripts/run-routing-accuracy.sh`（Track E：semantic/agent/afm-d）
 - `python -m bench compare --corpus bench/corpus/mmlu_tiny.jsonl …`
 
 ## 进行中需求

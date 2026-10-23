@@ -1,4 +1,4 @@
-"""CLI: ``python -m bench routing|research|compare|list-corpus|download-*``."""
+"""CLI: ``python -m bench routing|routing-accuracy|research|compare|list-corpus|…``."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import sys
 import urllib.request
 from pathlib import Path
 
+from .accuracy.runner import run_routing_accuracy
+from .build_routing_eval import main as build_routing_eval_main
 from .compare.runner import load_compare_corpus, run_compare
 from .http_client import EndpointConfig
 from .prices import load_prices
@@ -33,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m bench",
         description=(
-            "Router bench: ADR-040 + DRACO research + MCQ compare vs vLLM Semantic Router "
+            "Router bench: ADR-040 + routing-accuracy + DRACO research + MCQ compare "
             "(report-only JSON+MD; never fails CI on thresholds)"
         ),
     )
@@ -113,6 +115,52 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--eps", type=float, default=0.03, help="oracle_cost_optimal epsilon")
     pr.set_defaults(corpus=str(_CORPUS_DIR / "routing_tiny.json"))
 
+    pa = sub.add_parser(
+        "routing-accuracy",
+        help="Router-API-only label accuracy (no --pool; pick vs expected_model)",
+    )
+    pa.add_argument(
+        "--router",
+        action="append",
+        default=[],
+        metavar="NAME=URL",
+        help="live router URL (repeatable; first used; bare URL → aria_router)",
+    )
+    pa.add_argument(
+        "--entrypoint",
+        default="ariacompute/semantic-auto",
+        help="virtual model / entrypoint id",
+    )
+    pa.add_argument(
+        "--pick-header",
+        action="append",
+        default=[],
+        metavar="HEADER",
+        help="response header for routed model (default x-aria-router-model)",
+    )
+    pa.add_argument(
+        "--pick-map",
+        action="append",
+        default=[],
+        metavar="FOREIGN=POOL_MODEL",
+        help="map logical pick → upstream id",
+    )
+    pa.add_argument(
+        "--corpus",
+        default=str(_CORPUS_DIR / "routing_gateway_eval.json"),
+    )
+    pa.add_argument("--report", default="bench_accuracy.json")
+    pa.add_argument("--report-md", default=None)
+    pa.add_argument(
+        "--api-key",
+        action="append",
+        default=[],
+        metavar="ALIAS=KEY",
+        help="bearer for router / router_<name>",
+    )
+    pa.add_argument("--timeout", type=float, default=120.0)
+    pa.add_argument("--max-tokens", type=int, default=16)
+
     pre = sub.add_parser("research", help="DRACO-shaped research rubric eval")
     add_common(pre)
     pre.set_defaults(corpus=str(_CORPUS_DIR / "research_tiny.jsonl"), max_tokens=512)
@@ -126,6 +174,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     pl = sub.add_parser("list-corpus", help="List bundled tiny corpora")
     pl.add_argument("--json", action="store_true")
+
+    pb = sub.add_parser(
+        "build-routing-eval",
+        help="Generate routing_gateway_eval.json (templates + optional MMLU/DRACO)",
+    )
+    pb.add_argument("--out", default=str(_CORPUS_DIR / "routing_gateway_eval.json"))
+    pb.add_argument("--from-mmlu", default=None)
+    pb.add_argument("--from-draco", default=None)
+    pb.add_argument("--mmlu-limit", type=int, default=80)
+    pb.add_argument("--draco-limit", type=int, default=40)
 
     pd = sub.add_parser("download-draco", help="Download perplexity-ai/draco test.jsonl")
     pd.add_argument("--out", default="draco_test.jsonl")
@@ -212,6 +270,21 @@ def main(argv: list[str] | None = None) -> int:
                     "kind": "routing",
                 },
                 {
+                    "name": "routing_gateway.json",
+                    "path": str(_CORPUS_DIR / "routing_gateway.json"),
+                    "kind": "routing",
+                },
+                {
+                    "name": "routing_gateway_hard.json",
+                    "path": str(_CORPUS_DIR / "routing_gateway_hard.json"),
+                    "kind": "routing",
+                },
+                {
+                    "name": "routing_gateway_eval.json",
+                    "path": str(_CORPUS_DIR / "routing_gateway_eval.json"),
+                    "kind": "routing-accuracy",
+                },
+                {
                     "name": "research_tiny.jsonl",
                     "path": str(_CORPUS_DIR / "research_tiny.jsonl"),
                     "kind": "research",
@@ -229,11 +302,71 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"{r['kind']}\t{r['path']}")
             return 0
 
+        if args.cmd == "build-routing-eval":
+            argv = ["--out", args.out]
+            if args.from_mmlu:
+                argv.extend(["--from-mmlu", args.from_mmlu])
+            if args.from_draco:
+                argv.extend(["--from-draco", args.from_draco])
+            argv.extend(["--mmlu-limit", str(args.mmlu_limit)])
+            argv.extend(["--draco-limit", str(args.draco_limit)])
+            return build_routing_eval_main(argv)
+
         if args.cmd == "download-draco":
             return _download_urls(_DRACO_URLS, Path(args.out), args.timeout, "DRACO test.jsonl")
 
         if args.cmd == "download-mmlu":
             return _download_urls(_MMLU_URLS, Path(args.out), args.timeout, "mmlu")
+
+        if args.cmd == "routing-accuracy":
+            keys = _parse_kv_list(args.api_key)
+            pick_map = _parse_kv_list(args.pick_map)
+            if not args.router:
+                print("error: provide --router URL", file=sys.stderr)
+                return 2
+            routers = parse_router_args(
+                args.router,
+                entrypoint_args=[args.entrypoint],
+                pick_header_args=(
+                    [f"aria_router={h}" for h in args.pick_header]
+                    if args.pick_header
+                    else []
+                ),
+                api_keys=keys,
+                timeout_s=args.timeout,
+                default_entrypoint=args.entrypoint,
+            )
+            if not routers:
+                print("error: provide --router URL", file=sys.stderr)
+                return 2
+            rs = routers[0]
+            # Allow bare --pick-header values (not NAME=HEADER) for this subcommand.
+            headers = list(args.pick_header) if args.pick_header else rs.pick_headers
+            corpus = load_routing_corpus(args.corpus)
+            report = run_routing_accuracy(
+                corpus=corpus,
+                router=rs.endpoint,
+                entrypoint=args.entrypoint,
+                pick_headers=headers,
+                pick_map=pick_map,
+                max_tokens=args.max_tokens,
+            )
+            json_path = Path(args.report)
+            md_path = Path(args.report_md) if args.report_md else None
+            jp, mp = write_reports(report, json_path, md_path)
+            print(
+                json.dumps(
+                    {
+                        "report": str(jp),
+                        "report_md": str(mp),
+                        "summary": report.get("summary"),
+                        "ci_fail": report.get("ci_fail"),
+                        "mode": report.get("mode"),
+                    },
+                    indent=2,
+                )
+            )
+            return 0
 
         keys = _parse_kv_list(args.api_key)
         pool = _build_pool(args.pool, keys, args.timeout)

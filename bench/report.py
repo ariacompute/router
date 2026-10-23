@@ -55,7 +55,19 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append("| metric | value |")
         lines.append("|--------|-------|")
         for k, v in summary.items():
-            lines.append(f"| {k} | {_fmt(v)} |")
+            if isinstance(v, dict):
+                lines.append(f"| {k} | `{json.dumps(v, ensure_ascii=False)}` |")
+            else:
+                lines.append(f"| {k} | {_fmt(v)} |")
+        lines.append("")
+
+    confusion = report.get("confusion") or {}
+    if confusion:
+        lines.append("## Confusion (expected tier → predicted)")
+        lines.append("")
+        lines.append("```json")
+        lines.append(json.dumps(confusion, indent=2, ensure_ascii=False))
+        lines.append("```")
         lines.append("")
 
     ladder = report.get("ladder") or []

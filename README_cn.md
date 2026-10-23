@@ -556,6 +556,8 @@ chmod +x aria-router
 | 子命令 | 用途 |
 |--------|------|
 | `routing` | ADR-040 矩阵 + always / oracle / domain / knn / **多 live router** ladder |
+| `routing-accuracy` | **仅 Router API** 的 label 准确率（选路 vs `expected_model`；无需 `--pool`） |
+| `build-routing-eval` | 生成 `routing_gateway_eval.json`（≥200 模板；可选并入 MMLU/DRACO） |
 | `research` | DRACO 形 JSONL + rubric，对比 always_X 与各 router |
 | `compare` | MCQ **accuracy + E2E latency + tokens**（对齐 VSR 公开 bench 叙事） |
 | `list-corpus` | 打印内置 tiny 语料 |
@@ -576,7 +578,7 @@ routing / research 的质量模式（`--quality`）：`label`、`overlap`、`jud
 
 可选中间步：本地 serve `semantic-gateway` / `agent-gateway` / `afm-d-gateway`，在仅 pool track 上追加 `--router aria_router=…`（及 `--pick-map`），使选路经 router 再进同一上游 pool。
 
-下方片段：**A** = 上游仅 pool；**B** = semantic-auto vs vLLM SR；**C** = agent-auto vs vLLM SR；**D** = afm-d-auto vs vLLM SR。
+下方片段：**A** = 上游仅 pool；**B** = semantic-auto vs vLLM SR；**C** = agent-auto vs vLLM SR；**D** = afm-d-auto vs vLLM SR；**E** = routing-accuracy（三决策器共用 eval 语料，仅 API）。
 
 ```bash
 python -m unittest discover -s bench/tests -t .
@@ -813,6 +815,43 @@ python -m bench compare \
   --timeout 300 \
   --report ./out/afmd_vs_vsr_compare.json
 ```
+
+```bash
+# --- Track E：routing-accuracy（仅 Router API；≥200 金标）---
+# 度量选路是否命中 expected_model — 无 --pool / 无 TokenHub 矩阵。
+# 用 triad-gateway 一次挂起三个 entrypoint（或脚本 --start-router）。
+# AFM-D 需 System One：aria-engine serve --track encoder --bind 127.0.0.1:8010
+# GATEWAY_API_KEY 必须在 *serve* 进程环境里（TokenHub）。不要把它当作客户端
+# Authorization 发给 :8899（triad-gateway 的 require_api_key: false）。
+export GATEWAY_API_KEY=your-api-key
+export DECISION_MODEL_URL=http://127.0.0.1:8010
+
+aria-router serve \
+  --config config/examples/triad-gateway.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+# 一键：semantic → agent → afm-d；写出 out/acc_{semantic,agent,afmd}.json + acc_summary.json
+# （本 shell 不必设 GATEWAY_API_KEY；若开启 require_api_key 再用 ROUTER_API_KEY）
+./scripts/run-routing-accuracy.sh
+# 或：./scripts/run-routing-accuracy.sh --start-router
+# 决策模型未起时跳过 AFM-D：./scripts/run-routing-accuracy.sh --skip-afmd
+
+# 单决策器：
+python -m bench routing-accuracy \
+  --router http://127.0.0.1:8899 \
+  --entrypoint ariacompute/semantic-auto \
+  --pick-header x-aria-router-model \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --corpus bench/corpus/routing_gateway_eval.json \
+  --report ./out/acc_semantic.json
+
+# 重建 eval 语料（模板；可选本地合并 MMLU/DRACO — 勿提交全量 dump）：
+python -m bench build-routing-eval
+```
+
 详见 [`bench/corpus/README.md`](bench/corpus/README.md) 与 [`bench/vllm-sr/`](bench/vllm-sr/)（外部 `vllm-sr` 配置与 validate/serve）。
 
 ## Router vs HiRoute vs vLLM Semantic Router 特性对比

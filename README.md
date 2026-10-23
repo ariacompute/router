@@ -561,6 +561,8 @@ Python ≥3.10 **report-only** harness under [`bench/`](bench/) (stdlib; aligns 
 | Subcommand | Purpose |
 |------------|---------|
 | `routing` | ADR-040 Q×M matrix + always / oracle / domain / knn / **multi live router** ladder |
+| `routing-accuracy` | **Router-API-only** label accuracy (pick vs `expected_model`; no `--pool`) |
+| `build-routing-eval` | Generate `routing_gateway_eval.json` (≥200 templates; optional MMLU/DRACO) |
 | `research` | Perplexity DRACO-shaped JSONL + rubric axes vs always_X + routers |
 | `compare` | MCQ **accuracy + E2E latency + tokens** (parity with VSR public bench narrative) |
 | `list-corpus` | Print bundled tiny fixtures |
@@ -581,7 +583,7 @@ Two common tracks (same `routing` / `compare` CLIs; different what you measure):
 
 Optional middle step: serve `semantic-gateway` / `agent-gateway` / `afm-d-gateway` locally and add `--router aria_router=…` (+ `--pick-map`) to the pool-only track so picks go through the router into the same upstream pool.
 
-Tracks in the snippets below: **A** = upstream pool-only; **B** = semantic-auto vs vLLM SR; **C** = agent-auto vs vLLM SR; **D** = afm-d-auto vs vLLM SR.
+Tracks in the snippets below: **A** = upstream pool-only; **B** = semantic-auto vs vLLM SR; **C** = agent-auto vs vLLM SR; **D** = afm-d-auto vs vLLM SR; **E** = routing-accuracy (triad corpus, API-only).
 
 ```bash
 python -m unittest discover -s bench/tests -t .
@@ -818,6 +820,43 @@ python -m bench compare \
   --timeout 300 \
   --report ./out/afmd_vs_vsr_compare.json
 ```
+
+```bash
+# --- Track E: routing-accuracy (router API only; ≥200 gold labels) ---
+# Measures pick correctness vs expected_model — no --pool / no TokenHub matrix.
+# Serve all three entrypoints once via triad-gateway (or --start-router).
+# AFM-D needs System One: aria-engine serve --track encoder --bind 127.0.0.1:8010
+# GATEWAY_API_KEY must be in the *serve* process env (TokenHub). Do not pass it as
+# client Authorization to :8899 (triad-gateway has require_api_key: false).
+export GATEWAY_API_KEY=your-api-key
+export DECISION_MODEL_URL=http://127.0.0.1:8010
+
+aria-router serve \
+  --config config/examples/triad-gateway.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+# One-shot: semantic → agent → afm-d; writes out/acc_{semantic,agent,afmd}.json + acc_summary.json
+# (no GATEWAY_API_KEY needed in this shell; optional ROUTER_API_KEY if require_api_key)
+./scripts/run-routing-accuracy.sh
+# Or: ./scripts/run-routing-accuracy.sh --start-router
+# Skip AFM-D if decision model is down: ./scripts/run-routing-accuracy.sh --skip-afmd
+
+# Single decisioner:
+python -m bench routing-accuracy \
+  --router http://127.0.0.1:8899 \
+  --entrypoint ariacompute/semantic-auto \
+  --pick-header x-aria-router-model \
+  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-mid=glm-5.3 \
+  --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
+  --corpus bench/corpus/routing_gateway_eval.json \
+  --report ./out/acc_semantic.json
+
+# Regenerate eval corpus (templates; optional local MMLU/DRACO merge — do not commit full dumps):
+python -m bench build-routing-eval
+```
+
 See [`bench/corpus/README.md`](bench/corpus/README.md) and [`bench/vllm-sr/`](bench/vllm-sr/) (external `vllm-sr` config + validate/serve). 
 
 ## Router vs HiRoute vs vLLM Semantic Router

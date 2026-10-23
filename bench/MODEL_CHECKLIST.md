@@ -80,7 +80,9 @@ curl -sS -D - -o /dev/null -X POST http://127.0.0.1:8899/v1/chat/completions \
 
 - [ ] `bench/corpus/routing_gateway.json` — `expected_model` = **上游名**
 - [ ] `bench/corpus/routing_gateway_hard.json` — 同上（small/mid/large 分布 + 陷阱题）
+- [ ] `bench/corpus/routing_gateway_eval.json` — Track E（≥200）；换上游时重跑 `python -m bench build-routing-eval` 并改 `_TIER_TO_MODEL`
 - [ ] `mmlu_tiny.jsonl`（compare）— **无** `expected_model`，一般不用因换模型而改
+- [ ] Track E：`config/examples/triad-gateway.yaml` + `./scripts/run-routing-accuracy.sh`
 
 ---
 
