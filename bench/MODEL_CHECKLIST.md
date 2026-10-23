@@ -5,7 +5,7 @@
 | 角色 | 含义 | 当前示例 |
 |------|------|----------|
 | **逻辑名** | router 选档 / YAML `providers.models[].name` / 响应头 | `ariacompute/ariamodel-{small,mid,large}` |
-| **上游名** | 真正打到 API 的 `model`（`provider_model_id` / bench `--model-id`） | `qwen3.5-flash` / `glm-5.3` / `deepseek-v4-pro` |
+| **上游名** | 真正打到 API 的 `model`（`provider_model_id` / bench `--model-id`） | `glm-5.3-flash` / `glm-5.3` / `deepseek-v4-pro` |
 
 `--quality label` 的 corpus `expected_model` 必须与 **bench pool 解析后的上游名**一致（经 `--pick-map` 之后）。
 
@@ -18,7 +18,7 @@
 ```text
 alias:     small | mid | large
 logical:   <逻辑名>          # 例 ariacompute/ariamodel-small
-upstream:  <上游 model id>   # 例 qwen3.5-flash
+upstream:  <上游 model id>   # 例 glm-5.3-flash
 base_url:  <OpenAI 根>       # 无尾斜杠；见 §1 注意 /v1
 api_key:   <环境变量名>      # 例 GATEWAY_API_KEY（勿写进 Git）
 usd_mtok:  <USD / 1M tok>    # 成本表
@@ -204,7 +204,7 @@ PY
 
 | alias | 逻辑名 | 上游名 |
 |-------|--------|--------|
-| small | `ariacompute/ariamodel-small` | `qwen3.5-flash` |
+| small | `ariacompute/ariamodel-small` | `glm-5.3-flash` |
 | mid | `ariacompute/ariamodel-mid` | `glm-5.3` |
 | large | `ariacompute/ariamodel-large` | `deepseek-v4-pro` |
 

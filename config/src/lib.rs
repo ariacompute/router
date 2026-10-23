@@ -1747,6 +1747,9 @@ recipes:
             assert_eq!(path, home.join("router.yml"));
             let doc = RouterDocument::load_path(&path).unwrap();
             assert_eq!(doc.entrypoints[0].router, RouterKind::Semantic);
+            let small = doc.provider("ariacompute/ariamodel-small").unwrap();
+            assert_eq!(small.provider_model_id, "glm-5.3-flash");
+            assert_eq!(small.tier.as_deref(), Some("small"));
             let mid = doc.provider("ariacompute/ariamodel-mid").unwrap();
             assert_eq!(mid.provider_model_id, "glm-5.3");
             assert_eq!(mid.tier.as_deref(), Some("mid"));

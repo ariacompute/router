@@ -11,7 +11,7 @@ DEFAULT_USD_PER_MTOK: dict[str, float] = {
     "local/small": 0.10,
     "local/large": 0.60,
     "local/general": 0.30,
-    "qwen3.5-flash": 0.20,
+    "glm-5.3-flash": 0.20,
     "glm-5.3": 0.80,
     "deepseek-v4-pro": 2.40,
     "ariacompute/ariamodel-small": 0.20,

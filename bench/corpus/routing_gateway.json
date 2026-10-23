@@ -9,7 +9,7 @@
     "id": "sci-q2",
     "domain": "sci",
     "prompt": "What is the boiling point of water at sea level in Celsius?",
-    "expected_model": "qwen3.5-flash"
+    "expected_model": "glm-5.3-flash"
   },
   {
     "id": "tech-q1",
@@ -21,7 +21,7 @@
     "id": "tech-q2",
     "domain": "tech",
     "prompt": "What does CPU stand for?",
-    "expected_model": "qwen3.5-flash"
+    "expected_model": "glm-5.3-flash"
   },
   {
     "id": "tech-q3",

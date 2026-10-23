@@ -313,7 +313,7 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         small_provider_model_id: prompt_opt(
-            "ariamodel-small provider_model_id [qwen3.5-flash]: ",
+            "ariamodel-small provider_model_id [glm-5.3-flash]: ",
             args.model_small,
             prompt_models,
         ),

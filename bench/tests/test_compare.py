@@ -144,7 +144,7 @@ class TestCompareE2E(unittest.TestCase):
             }
         ]
         prices = {
-            "qwen3.5-flash": 1.0,
+            "glm-5.3-flash": 1.0,
             "ariacompute/ariamodel-small": 9.0,
             "default": 0.5,
         }
@@ -171,7 +171,7 @@ class TestCompareE2E(unittest.TestCase):
         report = run_compare(
             corpus=corpus,
             pool={"small": EndpointConfig("http://127.0.0.1:8000")},
-            model_ids={"small": "qwen3.5-flash"},
+            model_ids={"small": "glm-5.3-flash"},
             routers=[
                 RouterSpec(
                     "aria_router",
@@ -181,7 +181,7 @@ class TestCompareE2E(unittest.TestCase):
                 ),
             ],
             prices=prices,
-            pick_map={"ariacompute/ariamodel-small": "qwen3.5-flash"},
+            pick_map={"ariacompute/ariamodel-small": "glm-5.3-flash"},
             skip_probe=True,
             chat_fn=chat_fn,
         )
@@ -189,7 +189,7 @@ class TestCompareE2E(unittest.TestCase):
         self.assertEqual(len(aria_rows), 1)
         row = aria_rows[0]
         self.assertEqual(row["routed_model_raw"], "ariacompute/ariamodel-small")
-        self.assertEqual(row["routed_model"], "qwen3.5-flash")
+        self.assertEqual(row["routed_model"], "glm-5.3-flash")
         self.assertNotIn("pick_error", row)
         # 1000 completion tokens @ $1/MTok → $0.001
         self.assertAlmostEqual(row["cost_usd"], 0.001)

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 # Upstream TokenHub ids (must match MODEL_CHECKLIST / pick-map targets).
-SMALL = "qwen3.5-flash"
+SMALL = "glm-5.3-flash"
 MID = "glm-5.3"
 LARGE = "deepseek-v4-pro"
 

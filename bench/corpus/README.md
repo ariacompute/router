@@ -7,7 +7,7 @@ Bundled **tiny** fixtures for offline CI. They are **not** official Perplexity D
 | File | Mode | Notes |
 |------|------|-------|
 | `routing_tiny.json` | `routing` | ~4 questions with `expected_model` (`local/small` / `local/large`) and `sci-` / `tech-` domains |
-| `routing_gateway.json` | `routing` | 5 Gateway/TokenHub items: explain → large (`deepseek-v4-pro`); systems/trade-off → mid (`glm-5.3`); else → small (`qwen3.5-flash`) |
+| `routing_gateway.json` | `routing` | 5 Gateway/TokenHub items: explain → large (`deepseek-v4-pro`); systems/trade-off → mid (`glm-5.3`); else → small (`glm-5.3-flash`) |
 | `routing_gateway_hard.json` | `routing` | ~12 items for §6.6 Track B **and** §6.8 Agent Track B; same TokenHub ids; use with `--prices bench/prices/ariamodel.json` and `--pick-map ariacompute/ariamodel-*=…` |
 | `routing_gateway_eval.json` | `routing-accuracy` | **≥200** gold-labeled prompts (templates; optional MMLU/DRACO merge). Fields: `id`, `domain`, `prompt`, `expected_model` (upstream), `intent` (`small`/`mid`/`large`/`trap`). Shared gold for semantic / agent / afm-d. Rebuild: `python -m bench build-routing-eval` |
 | `research_tiny.jsonl` | `research` | 2 tasks with mini rubrics (4 axes) + `expected_hits` for label mode |
@@ -19,8 +19,8 @@ Bundled **tiny** fixtures for offline CI. They are **not** official Perplexity D
 |--------|------------------|----------|
 | large | `deepseek-v4-pro` | explain / teach / how-it-works |
 | mid | `glm-5.3` | systems / trade-off / multi-Q / placement |
-| small | `qwen3.5-flash` | factoid / acronym / unit / greeting / arithmetic |
-| trap → small | `qwen3.5-flash` | factoid with mid/large bait words |
+| small | `glm-5.3-flash` | factoid / acronym / unit / greeting / arithmetic |
+| trap → small | `glm-5.3-flash` | factoid with mid/large bait words |
 
 Priority when intents overlap: explanatory (large) > systems (mid) > factoid (small).
 

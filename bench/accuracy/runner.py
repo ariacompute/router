@@ -13,15 +13,15 @@ from ..routing.runner import load_routing_corpus
 
 # Logical → upstream (default Gateway triad).
 _DEFAULT_PICK_MAP = {
-    "ariacompute/ariamodel-small": "qwen3.5-flash",
+    "ariacompute/ariamodel-small": "glm-5.3-flash",
     "ariacompute/ariamodel-mid": "glm-5.3",
     "ariacompute/ariamodel-large": "deepseek-v4-pro",
 }
 
-_UPSTREAM_MODELS = ("qwen3.5-flash", "glm-5.3", "deepseek-v4-pro")
+_UPSTREAM_MODELS = ("glm-5.3-flash", "glm-5.3", "deepseek-v4-pro")
 
 _TIER_OF = {
-    "qwen3.5-flash": "small",
+    "glm-5.3-flash": "small",
     "glm-5.3": "mid",
     "deepseek-v4-pro": "large",
 }
@@ -58,7 +58,7 @@ def run_routing_accuracy(
         pmap.update(pick_map)
     models = list(_UPSTREAM_MODELS)
     alias_to_model = {
-        "small": "qwen3.5-flash",
+        "small": "glm-5.3-flash",
         "mid": "glm-5.3",
         "large": "deepseek-v4-pro",
     }

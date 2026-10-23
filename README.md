@@ -578,7 +578,7 @@ Two common tracks (same `routing` / `compare` CLIs; different what you measure):
 
 | Track | What runs | Flags | Measures |
 |-------|-----------|-------|----------|
-| Upstream pool-only | Chat **directly** at TokenHub (same triad as Track B) | `--pool` + `--model-id` + `--api-key` + `--prices`; **no** `--router` | Backend quality / cost ladder among `qwen3.5-flash` / `glm-5.3` / `deepseek-v4-pro` (no local router process) |
+| Upstream pool-only | Chat **directly** at TokenHub (same triad as Track B) | `--pool` + `--model-id` + `--api-key` + `--prices`; **no** `--router` | Backend quality / cost ladder among `glm-5.3-flash` / `glm-5.3` / `deepseek-v4-pro` (no local router process) |
 | Multi-router ladder | Chat via **live routers**, then (optionally) shared pools | `--router` + `--entrypoint` / `--pick-header`, plus `--pool` for always/oracle baselines | Router pick quality (aria-router vs vLLM SR, etc.) on ADR-040 / MCQ |
 
 Optional middle step: serve `semantic-gateway` / `agent-gateway` / `afm-d-gateway` locally and add `--router aria_router=…` (+ `--pick-map`) to the pool-only track so picks go through the router into the same upstream pool.
@@ -597,7 +597,7 @@ export GATEWAY_API_KEY=your-api-key
 # --quality label scores against corpus expected_model; writes out/gateway_routing.{json,md}.
 python -m bench routing \
   --pool small=$GATEWAY_BASE --pool mid=$GATEWAY_BASE --pool large=$GATEWAY_BASE \
-  --model-id small=qwen3.5-flash \
+  --model-id small=glm-5.3-flash \
   --model-id mid=glm-5.3 \
   --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
@@ -609,7 +609,7 @@ python -m bench routing \
 # MCQ accuracy + E2E latency + tokens on mmlu_tiny via the same pools (always_* only).
 python -m bench compare \
   --pool small=$GATEWAY_BASE --pool mid=$GATEWAY_BASE --pool large=$GATEWAY_BASE \
-  --model-id small=qwen3.5-flash \
+  --model-id small=glm-5.3-flash \
   --model-id mid=glm-5.3 \
   --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
@@ -657,13 +657,13 @@ python -m bench routing \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-small=glm-5.3-flash \
   --pick-map ariacompute/ariamodel-mid=glm-5.3 \
   --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
   --pool small=https://tokenhub.tencentmaas.com \
   --pool mid=https://tokenhub.tencentmaas.com \
   --pool large=https://tokenhub.tencentmaas.com \
-  --model-id small=qwen3.5-flash \
+  --model-id small=glm-5.3-flash \
   --model-id mid=glm-5.3 \
   --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
@@ -684,13 +684,13 @@ python -m bench compare \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-small=glm-5.3-flash \
   --pick-map ariacompute/ariamodel-mid=glm-5.3 \
   --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
   --pool small=https://tokenhub.tencentmaas.com \
   --pool mid=https://tokenhub.tencentmaas.com \
   --pool large=https://tokenhub.tencentmaas.com \
-  --model-id small=qwen3.5-flash \
+  --model-id small=glm-5.3-flash \
   --model-id mid=glm-5.3 \
   --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
@@ -719,13 +719,13 @@ python -m bench routing \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-small=glm-5.3-flash \
   --pick-map ariacompute/ariamodel-mid=glm-5.3 \
   --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
   --pool small=https://tokenhub.tencentmaas.com \
   --pool mid=https://tokenhub.tencentmaas.com \
   --pool large=https://tokenhub.tencentmaas.com \
-  --model-id small=qwen3.5-flash \
+  --model-id small=glm-5.3-flash \
   --model-id mid=glm-5.3 \
   --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
@@ -742,13 +742,13 @@ python -m bench compare \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-small=glm-5.3-flash \
   --pick-map ariacompute/ariamodel-mid=glm-5.3 \
   --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
   --pool small=https://tokenhub.tencentmaas.com \
   --pool mid=https://tokenhub.tencentmaas.com \
   --pool large=https://tokenhub.tencentmaas.com \
-  --model-id small=qwen3.5-flash \
+  --model-id small=glm-5.3-flash \
   --model-id mid=glm-5.3 \
   --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
@@ -782,13 +782,13 @@ python -m bench routing \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-small=glm-5.3-flash \
   --pick-map ariacompute/ariamodel-mid=glm-5.3 \
   --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
   --pool small=https://tokenhub.tencentmaas.com \
   --pool mid=https://tokenhub.tencentmaas.com \
   --pool large=https://tokenhub.tencentmaas.com \
-  --model-id small=qwen3.5-flash \
+  --model-id small=glm-5.3-flash \
   --model-id mid=glm-5.3 \
   --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
@@ -805,13 +805,13 @@ python -m bench compare \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-small=glm-5.3-flash \
   --pick-map ariacompute/ariamodel-mid=glm-5.3 \
   --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
   --pool small=https://tokenhub.tencentmaas.com \
   --pool mid=https://tokenhub.tencentmaas.com \
   --pool large=https://tokenhub.tencentmaas.com \
-  --model-id small=qwen3.5-flash \
+  --model-id small=glm-5.3-flash \
   --model-id mid=glm-5.3 \
   --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
@@ -847,7 +847,7 @@ python -m bench routing-accuracy \
   --router http://127.0.0.1:8899 \
   --entrypoint ariacompute/semantic-auto \
   --pick-header x-aria-router-model \
-  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-small=glm-5.3-flash \
   --pick-map ariacompute/ariamodel-mid=glm-5.3 \
   --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
   --corpus bench/corpus/routing_gateway_eval.json \

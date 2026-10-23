@@ -9,7 +9,7 @@
     "id": "sci-q2",
     "domain": "sci",
     "prompt": "What is the boiling point of water at sea level in Celsius?",
-    "expected_model": "qwen3.5-flash"
+    "expected_model": "glm-5.3-flash"
   },
   {
     "id": "tech-q1",
@@ -21,7 +21,7 @@
     "id": "tech-q2",
     "domain": "tech",
     "prompt": "What does CPU stand for?",
-    "expected_model": "qwen3.5-flash"
+    "expected_model": "glm-5.3-flash"
   },
   {
     "id": "tech-q3",
@@ -33,7 +33,7 @@
     "id": "trap-arch-factoid",
     "domain": "tech",
     "prompt": "What does the term architecture stand for as a CS acronym quiz?",
-    "expected_model": "qwen3.5-flash"
+    "expected_model": "glm-5.3-flash"
   },
   {
     "id": "multi-q",
@@ -45,7 +45,7 @@
     "id": "fact-celsius",
     "domain": "sci",
     "prompt": "Convert 100C to Fahrenheit in celsius reference terms briefly.",
-    "expected_model": "qwen3.5-flash"
+    "expected_model": "glm-5.3-flash"
   },
   {
     "id": "explain-os",
@@ -63,12 +63,12 @@
     "id": "short-hi",
     "domain": "chat",
     "prompt": "hi",
-    "expected_model": "qwen3.5-flash"
+    "expected_model": "glm-5.3-flash"
   },
   {
     "id": "stand-for-http",
     "domain": "tech",
     "prompt": "What does HTTP stand for?",
-    "expected_model": "qwen3.5-flash"
+    "expected_model": "glm-5.3-flash"
   }
 ]

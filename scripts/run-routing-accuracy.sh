@@ -122,7 +122,7 @@ fi
 mkdir -p "$OUT_DIR"
 
 PICK_MAP=(
-  --pick-map ariacompute/ariamodel-small=qwen3.5-flash
+  --pick-map ariacompute/ariamodel-small=glm-5.3-flash
   --pick-map ariacompute/ariamodel-mid=glm-5.3
   --pick-map ariacompute/ariamodel-large=deepseek-v4-pro
 )

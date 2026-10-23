@@ -479,13 +479,13 @@ python -m bench routing \
   --entrypoint vllm_sr=auto \
   --pick-header aria_router=x-aria-router-model \
   --pick-header vllm_sr=x-vsr-selected-model \
-  --pick-map ariacompute/ariamodel-small=qwen3.5-flash \
+  --pick-map ariacompute/ariamodel-small=glm-5.3-flash \
   --pick-map ariacompute/ariamodel-mid=glm-5.3 \
   --pick-map ariacompute/ariamodel-large=deepseek-v4-pro \
   --pool small=https://tokenhub.tencentmaas.com \
   --pool mid=https://tokenhub.tencentmaas.com \
   --pool large=https://tokenhub.tencentmaas.com \
-  --model-id small=qwen3.5-flash --model-id mid=glm-5.3 --model-id large=deepseek-v4-pro \
+  --model-id small=glm-5.3-flash --model-id mid=glm-5.3 --model-id large=deepseek-v4-pro \
   --api-key small=$GATEWAY_API_KEY --api-key mid=$GATEWAY_API_KEY --api-key large=$GATEWAY_API_KEY \
   --prices bench/prices/ariamodel.json --quality label \
   --corpus bench/corpus/routing_gateway_hard.json \

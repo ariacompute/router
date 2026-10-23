@@ -20,7 +20,7 @@ providers:
     default_model: ariacompute/ariamodel-mid
   models:
     - name: ariacompute/ariamodel-small
-      provider_model_id: qwen3.5-flash
+      provider_model_id: glm-5.3-flash
       tier: small
       locality: cloud
       modality: text

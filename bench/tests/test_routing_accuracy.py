@@ -61,7 +61,7 @@ class TestRoutingAccuracy(unittest.TestCase):
             {
                 "id": "b",
                 "prompt": "What does CPU stand for?",
-                "expected_model": "qwen3.5-flash",
+                "expected_model": "glm-5.3-flash",
             },
             {
                 "id": "c",
@@ -97,7 +97,7 @@ class TestRoutingAccuracy(unittest.TestCase):
     def test_wrong_tier_and_missing_header(self) -> None:
         corpus = [
             {"id": "w", "prompt": "Explain Y", "expected_model": "deepseek-v4-pro"},
-            {"id": "m", "prompt": "hi", "expected_model": "qwen3.5-flash"},
+            {"id": "m", "prompt": "hi", "expected_model": "glm-5.3-flash"},
         ]
 
         def fake_chat(cfg, *, model, prompt, max_tokens=16, temperature=0.0, **_k):
@@ -131,7 +131,7 @@ class TestRoutingAccuracy(unittest.TestCase):
                         "id": "q1",
                         "domain": "chat",
                         "prompt": "hi",
-                        "expected_model": "qwen3.5-flash",
+                        "expected_model": "glm-5.3-flash",
                         "intent": "small",
                     }
                 ],

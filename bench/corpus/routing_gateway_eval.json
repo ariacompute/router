@@ -983,630 +983,630 @@
     "id": "small-000",
     "domain": "sci",
     "prompt": "What is the boiling point of water at sea level in Celsius?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-001",
     "domain": "sci",
     "prompt": "Convert 100C to Fahrenheit in celsius reference terms briefly.",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-002",
     "domain": "sci",
     "prompt": "What is the chemical symbol for gold?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-003",
     "domain": "sci",
     "prompt": "How many chromosomes do humans typically have?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-004",
     "domain": "sci",
     "prompt": "What planet is closest to the Sun?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-005",
     "domain": "sci",
     "prompt": "What is H2O?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-006",
     "domain": "sci",
     "prompt": "What is the speed of light in vacuum approximately in m/s?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-007",
     "domain": "sci",
     "prompt": "Capital of France?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-008",
     "domain": "sci",
     "prompt": "What gas do plants absorb during photosynthesis? Answer with the formula.",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-009",
     "domain": "sci",
     "prompt": "Freezing point of water in Celsius?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-010",
     "domain": "tech",
     "prompt": "What does CPU stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-011",
     "domain": "tech",
     "prompt": "What does HTTP stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-012",
     "domain": "tech",
     "prompt": "What does RAM stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-013",
     "domain": "tech",
     "prompt": "What does SSD stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-014",
     "domain": "tech",
     "prompt": "What does API stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-015",
     "domain": "tech",
     "prompt": "What does URL stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-016",
     "domain": "tech",
     "prompt": "What does DNS stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-017",
     "domain": "tech",
     "prompt": "What does JSON stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-018",
     "domain": "tech",
     "prompt": "What does SQL stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-019",
     "domain": "tech",
     "prompt": "What does GPU stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-020",
     "domain": "tech",
     "prompt": "What does TLS stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-021",
     "domain": "tech",
     "prompt": "What does CDN stand for as an acronym quiz?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-022",
     "domain": "math",
     "prompt": "What is 7×8?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-023",
     "domain": "math",
     "prompt": "1+1=?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-024",
     "domain": "math",
     "prompt": "What is 12*12?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-025",
     "domain": "math",
     "prompt": "Convert 2 kilometers to meters.",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-026",
     "domain": "math",
     "prompt": "What is the square root of 81?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-027",
     "domain": "math",
     "prompt": "What is 15% of 200?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-028",
     "domain": "math",
     "prompt": "How many degrees in a right angle?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-029",
     "domain": "math",
     "prompt": "What is 2^10?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-030",
     "domain": "chat",
     "prompt": "hi",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-031",
     "domain": "chat",
     "prompt": "hello",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-032",
     "domain": "chat",
     "prompt": "hey there",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-033",
     "domain": "chat",
     "prompt": "thanks",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-034",
     "domain": "chat",
     "prompt": "good morning",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-035",
     "domain": "chat",
     "prompt": "ok",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-036",
     "domain": "chat",
     "prompt": "bye",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-037",
     "domain": "chat",
     "prompt": "yes",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-038",
     "domain": "chat",
     "prompt": "no",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-039",
     "domain": "chat",
     "prompt": "ping",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-040",
     "domain": "sci",
     "prompt": "china emergency call number?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-041",
     "domain": "sci",
     "prompt": "US emergency phone number?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-042",
     "domain": "sci",
     "prompt": "Capital of Japan?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-043",
     "domain": "sci",
     "prompt": "Atomic number of carbon?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-044",
     "domain": "sci",
     "prompt": "What does DNA stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-045",
     "domain": "sci",
     "prompt": "What does RNA stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-046",
     "domain": "tech",
     "prompt": "What does HTML stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-047",
     "domain": "tech",
     "prompt": "What does CSS stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-048",
     "domain": "tech",
     "prompt": "What does SSH stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-049",
     "domain": "tech",
     "prompt": "What does VPC stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-050",
     "domain": "tech",
     "prompt": "Default HTTP port number?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-051",
     "domain": "tech",
     "prompt": "Default HTTPS port number?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-052",
     "domain": "tech",
     "prompt": "What does IPv4 stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-053",
     "domain": "tech",
     "prompt": "What does MAC address stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-054",
     "domain": "math",
     "prompt": "What is 9+10?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-055",
     "domain": "math",
     "prompt": "Convert 1 hour to minutes.",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-056",
     "domain": "math",
     "prompt": "How many bits in a byte?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-057",
     "domain": "math",
     "prompt": "What is 1000 millimeters in meters?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-058",
     "domain": "chat",
     "prompt": "hi — quick fact: what does FAQ stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-059",
     "domain": "tech",
     "prompt": "What does CRUD stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-060",
     "domain": "tech",
     "prompt": "What does ACID stand for in databases?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-061",
     "domain": "tech",
     "prompt": "What does REST stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-062",
     "domain": "tech",
     "prompt": "What does YAML stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-063",
     "domain": "tech",
     "prompt": "What does CLI stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-064",
     "domain": "sci",
     "prompt": "Boiling point of water in Kelvin approximately?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-065",
     "domain": "sci",
     "prompt": "What does ATP stand for in biology?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-066",
     "domain": "math",
     "prompt": "What is 5*5?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-067",
     "domain": "math",
     "prompt": "Convert 32F reference: is water frozen? yes or no",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-068",
     "domain": "chat",
     "prompt": "hello — what does IDK stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "small-069",
     "domain": "tech",
     "prompt": "What does OOM stand for in ops slang?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "small"
   },
   {
     "id": "trap-000",
     "domain": "tech",
     "prompt": "What does the term architecture stand for as a CS acronym quiz?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-001",
     "domain": "tech",
     "prompt": "What does the word tradeoff stand for in this acronym quiz?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-002",
     "domain": "tech",
     "prompt": "In one word, what does PROXY stand for as an acronym quiz?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-003",
     "domain": "tech",
     "prompt": "What does CACHE stand for as an ops acronym quiz?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-004",
     "domain": "tech",
     "prompt": "What does SCHEDULER stand for in this acronym quiz?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-005",
     "domain": "tech",
     "prompt": "Boiling point quiz: what does OS stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-006",
     "domain": "tech",
     "prompt": "What does the term reverse stand for as a networking acronym quiz?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-007",
     "domain": "sci",
     "prompt": "Explain nothing — what does DNA stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-008",
     "domain": "tech",
     "prompt": "Walk me through nothing; what does HTTP stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-009",
     "domain": "tech",
     "prompt": "Introduction to acronyms: what does CPU stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-010",
     "domain": "tech",
     "prompt": "How to spell the expansion: what does RAM stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-011",
     "domain": "systems",
     "prompt": "Overview of letters only: what does API stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-012",
     "domain": "tech",
     "prompt": "Teach the acronym: what does SSD stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-013",
     "domain": "tech",
     "prompt": "What does the term eviction stand for as a quiz acronym?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-014",
     "domain": "tech",
     "prompt": "Design quiz acronym: what does LRU stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-015",
     "domain": "math",
     "prompt": "Explain digits only: what is 2+2?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-016",
     "domain": "chat",
     "prompt": "Please explain nothing — just say hi",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-017",
     "domain": "tech",
     "prompt": "What does GRAPHQL stand for as an acronym quiz?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-018",
     "domain": "tech",
     "prompt": "Trade-off quiz letters: what does CAP stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   },
   {
     "id": "trap-019",
     "domain": "sci",
     "prompt": "How does spelling work for ATP — what does ATP stand for?",
-    "expected_model": "qwen3.5-flash",
+    "expected_model": "glm-5.3-flash",
     "intent": "trap"
   }
 ]
