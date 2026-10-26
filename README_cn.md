@@ -253,7 +253,7 @@ curl -s http://127.0.0.1:8090/v1/router/topology | jq .
 curl -s http://127.0.0.1:8090/v1/router/config | jq .
 ```
 
-响应头：`x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`。
+响应头：`x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`。若设置了 retention emit，还会有：`x-aria-router-retention-keep-current-model`、`x-aria-router-retention-ttl-turns`、`x-aria-router-retention-drop`、`x-aria-router-retention-prefer-prefix`。
 
 ## SDK Bindings
 
@@ -853,6 +853,83 @@ python -m bench build-routing-eval
 ```
 
 详见 [`bench/corpus/README.md`](bench/corpus/README.md) 与 [`bench/vllm-sr/`](bench/vllm-sr/)（外部 `vllm-sr` 配置与 validate/serve）。
+
+## ContextHold
+
+同一用户轮次内的 tool / assistant 往返保持已选模型；只在自然边界（用户新消息或上下文压缩）再重新决策。混用便宜模型与主力模型时，KV Cache / 前缀复用仍然划算。
+
+- semantic / agent / afm-d 配方上，**`prefix_reuse` 缺省为 `true`**（显式 `false` 关闭）。同一**显式 session**、同一**用户消息条数**内，复用冻结的 `RouteDecision`。
+- **用户新消息**（turn 计数上升）→ 全新决策。
+- **压缩**（消息列表变短，或 system 提示词 / `tools` 指纹变化）→ 清除该 session 的 DecisionCache 与 sticky，再重新路由。
+- **Sticky TTL**（`stores.memory`）**仅在用户消息条数上升时**递减——不会在每一次工具调用的 HTTP 请求上扣减。同一模型再次 pin **不会**刷新 TTL；换模型才重新记满 TTL。
+- **afm-d / agent sticky**：当 `global.stores.memory.enabled` 与 `prefix_reuse` 均开启时，路由成功后 pin 所选模型；后续用户轮上若仍通过硬约束则短路（跳过 System One / builtin agent），reason 为 `sticky:…`。semantic 仍由 decision 的 `emits.retention.keep_current_model` 在 algorithm 选型之后驱动 sticky。
+- **仅显式 session**：ContextHold 只认 `x-aria-session` 或 body `session`。自动生成的 `req_*` id 仅用于成本记账——不冻结决策、不写 sticky。
+
+请发送显式 session，并带上**累积的对话历史**（或至少让用户消息条数递增），以驱动 turn 键与 TTL。只发最后一条消息的客户端会一直保持 `turn_of == 1`，sticky TTL 不会前进。未提供显式 session 时，路由粘性等价于「每次请求都重新决策」。
+
+### 行为一览
+
+```text
+带显式 session 的请求
+        │
+        ▼
+  已压缩？ ──是──► 清除 DecisionCache + sticky ──► 重新路由
+        │ 否
+        ▼
+  若用户轮计数上升则 tick sticky TTL
+        │
+        ▼
+  同 (session, turn) 命中缓存？ ──是──► 复用冻结模型
+        │ 否
+        ▼
+  afm-d/agent sticky 仍 eligible？ ──是──► 短路
+        │ 否
+        ▼
+  跑 semantic / agent / afm-d → pin（若适用）
+```
+
+### 配置示意
+
+```yaml
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      prefix_reuse: true   # 省略时默认 true
+      # …
+
+  - name: agent-default
+    router: agent
+    agent:
+      prefix_reuse: true
+      # …
+
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      prefix_reuse: true
+      # …
+
+global:
+  stores:
+    memory:
+      enabled: true
+      max_sessions: 4096
+      default_ttl_turns: 2
+```
+
+semantic 跨轮 sticky 仍需要 decision emit，例如：
+
+```yaml
+emits:
+  - kind: retention
+    retention:
+      ttl_turns: 2
+      keep_current_model: true
+```
+
+参见 [`semantic-stateful.yaml`](config/examples/semantic-stateful.yaml) 与各 `*-gateway.yaml` 示例（已写 `prefix_reuse: true`）。
 
 ## Router vs HiRoute vs vLLM Semantic Router 特性对比
 

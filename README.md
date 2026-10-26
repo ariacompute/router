@@ -258,7 +258,7 @@ curl -s http://127.0.0.1:8090/v1/router/topology | jq .
 curl -s http://127.0.0.1:8090/v1/router/config | jq .
 ```
 
-Response headers: `x-aria-router-layer`, `x-aria-router-decision`, `x-aria-router-model`.
+Response headers: `x-aria-router-layer`, `x-aria-router-decision`, `x-aria-router-model`. When retention emits are set: `x-aria-router-retention-keep-current-model`, `x-aria-router-retention-ttl-turns`, `x-aria-router-retention-drop`, `x-aria-router-retention-prefer-prefix`.
 
 ## SDK Bindings
 
@@ -858,6 +858,83 @@ python -m bench build-routing-eval
 ```
 
 See [`bench/corpus/README.md`](bench/corpus/README.md) and [`bench/vllm-sr/`](bench/vllm-sr/) (external `vllm-sr` config + validate/serve). 
+
+## ContextHold
+
+Hold the routed model through in-turn tool / assistant rounds; re-decide only at natural boundaries (new user message or context compaction). That keeps KV-cache / prefix reuse useful when mixing cheaper and stronger models.
+
+- **`prefix_reuse` defaults to `true`** on semantic, agent, and afm-d recipes (`false` turns it off). Within the same **explicit session** and the same **user-message count**, the frozen `RouteDecision` is reused.
+- **New user message** (turn count increases) → fresh decision.
+- **Compaction** (message list gets shorter, or system-prompt / `tools` fingerprint changes) → clear DecisionCache + sticky for that session, then re-route.
+- **Sticky TTL** (`stores.memory`) decrements only when the user-message count rises — not on every tool-call HTTP request. Re-pinning the same model does not refresh TTL; switching models starts a new TTL budget.
+- **afm-d / agent sticky**: with `global.stores.memory.enabled` and `prefix_reuse`, a successful route pins the model; on a later user turn, if it is still hard-eligible, the router short-circuits (skips System One / builtin agent) with reason `sticky:…`. Semantic sticky still comes from decision `emits.retention.keep_current_model` after algorithm selection.
+- **Explicit session only**: ContextHold keys off `x-aria-session` or body `session`. Auto-generated `req_*` ids stay cost-only — they do not freeze decisions or write sticky.
+
+Send an explicit session and accumulating chat history (growing user-message count) for turn keys and TTL. Last-message-only clients keep `turn_of == 1` and will not advance sticky TTL. Without an explicit session, routing stickiness matches “decide every request.”
+
+### Behavior at a glance
+
+```text
+request + explicit session
+        │
+        ▼
+  compacted? ──yes──► clear DecisionCache + sticky ──► re-route
+        │ no
+        ▼
+  tick sticky TTL if user-turn count increased
+        │
+        ▼
+  same (session, turn) cached? ──yes──► reuse frozen model
+        │ no
+        ▼
+  afm-d/agent sticky still eligible? ──yes──► short-circuit
+        │ no
+        ▼
+  run semantic / agent / afm-d → pin (if applicable)
+```
+
+### Config sketch
+
+```yaml
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      prefix_reuse: true   # default true if omitted
+      # …
+
+  - name: agent-default
+    router: agent
+    agent:
+      prefix_reuse: true
+      # …
+
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      prefix_reuse: true
+      # …
+
+global:
+  stores:
+    memory:
+      enabled: true
+      max_sessions: 4096
+      default_ttl_turns: 2
+```
+
+Semantic sticky across turns still needs a decision emit, for example:
+
+```yaml
+emits:
+  - kind: retention
+    retention:
+      ttl_turns: 2
+      keep_current_model: true
+```
+
+See [`semantic-stateful.yaml`](config/examples/semantic-stateful.yaml) and the `*-gateway.yaml` examples (`prefix_reuse: true`).
 
 ## Router vs HiRoute vs vLLM Semantic Router
 
