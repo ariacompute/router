@@ -70,6 +70,7 @@ recipes:
   - name: agent-default
     router: agent
     agent:
+      prefix_reuse: true
       endpoint: https://tokenhub.tencentmaas.com
       model: ariacompute/ariamodel-mid
       timeout_ms: 45000

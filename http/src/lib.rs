@@ -32,7 +32,7 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use cost::{cost_usd, estimate_tokens, now_rfc3339, CostEvent, CostLedger};
 pub use keys::{extract_bearer, validate_oauth_key, AuthIdentity, KeyStore};
-use memory::{SessionMemory, SessionState};
+use memory::SessionMemory;
 use ratelimit::RateLimiter;
 use replay::{ReplayLog, ReplayRecord};
 use semantic_cache::SemanticCache;
@@ -687,9 +687,14 @@ async fn chat_with_auth(
 ) -> Result<Response, RouterError> {
     let req: ChatRequest =
         serde_json::from_value(body).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
-    let session = session_id(&headers, &req);
+    // ContextHold (prefix_reuse / sticky) only keys off an explicit client session.
+    // Auto `req_*` ids are for cost ledger uniqueness and must not freeze decisions.
+    let explicit = explicit_session(&headers, &req);
+    let session = explicit.clone().unwrap_or_else(ephemeral_session_id);
     let mut metadata = metadata_from_headers(&headers);
-    metadata.insert("session".into(), session.clone());
+    if let Some(s) = explicit {
+        metadata.insert("session".into(), s);
+    }
     let want_stream = req.stream;
     let entrypoint = req.model.clone();
     route_and_forward(
@@ -823,18 +828,29 @@ fn resolve_chat_auth(
     })
 }
 
-fn session_id(headers: &HeaderMap, req: &ChatRequest) -> String {
+/// Client-provided session for ContextHold (`x-aria-session` or body `session`).
+fn explicit_session(headers: &HeaderMap, req: &ChatRequest) -> Option<String> {
     if let Some(v) = headers.get("x-aria-session").and_then(|v| v.to_str().ok()) {
         if !v.is_empty() {
-            return v.to_string();
+            return Some(v.to_string());
         }
     }
     if let Some(v) = req.extra.get("session").and_then(|v| v.as_str()) {
         if !v.is_empty() {
-            return v.to_string();
+            return Some(v.to_string());
         }
     }
-    format!("req_{}", now_rfc3339())
+    None
+}
+
+fn ephemeral_session_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "req_{}_{}",
+        now_rfc3339(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 async fn route_and_forward(
@@ -887,9 +903,6 @@ async fn route_and_forward(
                     tokens_source: "estimate",
                 },
             );
-            if !session.is_empty() {
-                st.memory.tick(&session);
-            }
             let mut res = Json(cached).into_response();
             attach_route_headers(res.headers_mut(), &decision);
             return Ok(res);
@@ -912,9 +925,6 @@ async fn route_and_forward(
                 },
             );
             maybe_store_semantic(&st, &decision, &last_user, &fast);
-            if !session.is_empty() {
-                st.memory.tick(&session);
-            }
             let mut res = Json(fast).into_response();
             attach_route_headers(res.headers_mut(), &decision);
             Ok(res)
@@ -932,9 +942,6 @@ async fn route_and_forward(
                     turns_in_request,
                     prompt_est,
                 );
-                if !session.is_empty() {
-                    st.memory.tick(&session);
-                }
                 let mut res = Response::builder()
                     .status(200)
                     .header(header::CONTENT_TYPE, "text/event-stream")
@@ -970,9 +977,6 @@ async fn route_and_forward(
                         tokens_source: src,
                     },
                 );
-                if !session.is_empty() {
-                    st.memory.tick(&session);
-                }
                 let mut res = Json(body).into_response();
                 attach_route_headers(res.headers_mut(), &decision);
                 Ok(res)
@@ -1314,40 +1318,101 @@ pub async fn route_request(
             "entrypoint/recipe router mismatch".into(),
         ));
     }
-    // Context-prefix reuse: within the same (session, turn) reuse
-    // the frozen decision instead of re-deciding. A new user turn (higher
-    // user-message count) or unrecognizable context forces a fresh decision.
+    // ContextHold / prefix reuse: freeze the decision within a user turn;
+    // re-decide on a new user message or after context compaction.
     let session = metadata.get("session").cloned().unwrap_or_default();
     let turn = aria_router_core::turn_of(&req.messages);
+    let tools = req.extra.get("tools");
     let prefix_reuse = match ep.router {
         RouterKind::Semantic => recipe
             .routing
             .as_ref()
             .and_then(|r| r.prefix_reuse)
-            .unwrap_or(false),
+            .unwrap_or(true),
         RouterKind::Agent => recipe
             .agent
             .as_ref()
             .and_then(|a| a.prefix_reuse)
-            .unwrap_or(false),
+            .unwrap_or(true),
         RouterKind::AfmD => recipe
             .afm_d
             .as_ref()
             .and_then(|a| a.prefix_reuse)
-            .unwrap_or(false),
+            .unwrap_or(true),
     };
+    let memory_on = doc.global.stores.memory.enabled;
     if prefix_reuse && !session.is_empty() {
+        let compacted = st
+            .decision_cache
+            .observe_and_check_compact(&session, &req.messages, tools);
+        if compacted {
+            st.memory.clear(&session);
+        } else {
+            st.memory.tick_if_new_turn(&session, turn);
+        }
         if let Some(cached) = st.decision_cache.get(&session, turn) {
             return Ok((cached, req, None, vec![]));
         }
+        // afm-d / agent: sticky short-circuit on a new user turn when still eligible.
+        if matches!(ep.router, RouterKind::Agent | RouterKind::AfmD) && memory_on {
+            if let Some(st_mem) = st.memory.get(&session) {
+                let all = hard_filter(
+                    &doc,
+                    std::slice::from_ref(&st_mem.sticky_model),
+                    None,
+                    Some("text"),
+                );
+                if let Some(card) = all.into_iter().next() {
+                    let decision = RouteDecision {
+                        model: card.name.clone(),
+                        algorithm: None,
+                        reason: format!("sticky:{}", st_mem.decision),
+                        confidence: 1.0,
+                        layer: ep.router.as_str().into(),
+                        decision: st_mem.decision.clone(),
+                        bypass: false,
+                        routing_latency_ms: None,
+                        cache_response: false,
+                        retention_drop: None,
+                        retention_ttl_turns: Some(st_mem.ttl_turns_left),
+                        retention_keep_current_model: Some(true),
+                        retention_prefer_prefix: None,
+                        semantic_cache_hit: None,
+                        replay_id: None,
+                        session: Some(session.clone()),
+                    };
+                    st.decision_cache
+                        .put(session.clone(), turn, decision.clone());
+                    let mut fwd = req;
+                    fwd.model = decision.model.clone();
+                    return Ok((decision, fwd, None, vec![]));
+                }
+            }
+        }
     }
-    let (decision, fwd, extra, hdrs) = match ep.router {
+    let (mut decision, fwd, extra, hdrs) = match ep.router {
         RouterKind::Semantic => route_semantic(st, &doc, &recipe, req, metadata).await,
         RouterKind::Agent => route_agent(st, &doc, &recipe, req, metadata).await,
         RouterKind::AfmD => route_afm_d(st, &doc, &recipe, req, metadata).await,
     }?;
     if prefix_reuse && !session.is_empty() {
-        st.decision_cache.put(session, turn, decision.clone());
+        st.decision_cache
+            .put(session.clone(), turn, decision.clone());
+        // afm-d / agent pin sticky so the next user turn can short-circuit.
+        if matches!(ep.router, RouterKind::Agent | RouterKind::AfmD) && memory_on {
+            let ttl = doc.global.stores.memory.default_ttl_turns.max(1);
+            st.memory.pin(
+                &session,
+                decision.model.clone(),
+                decision.decision.clone(),
+                ttl,
+                turn,
+                &doc.global.stores.memory,
+            );
+            decision.retention_keep_current_model = Some(true);
+            decision.retention_ttl_turns = Some(ttl);
+            decision.session = Some(session);
+        }
     }
     Ok((decision, fwd, extra, hdrs))
 }
@@ -1521,14 +1586,15 @@ async fn route_semantic(
         .as_ref()
         .and_then(|r| r.ttl_turns)
         .unwrap_or(doc.global.stores.memory.default_ttl_turns);
+    let user_turn = aria_router_core::turn_of(&req.messages);
     if keep && doc.global.stores.memory.enabled && !session.is_empty() {
-        st.memory.put(
+        // Same model re-pin keeps remaining TTL (ContextHold: no refresh).
+        st.memory.pin(
             &session,
-            SessionState {
-                sticky_model: model.clone(),
-                ttl_turns_left: ttl.max(1),
-                decision: dname.clone(),
-            },
+            model.clone(),
+            dname.clone(),
+            ttl.max(1),
+            user_turn,
             &doc.global.stores.memory,
         );
     }
@@ -3214,13 +3280,24 @@ global:
         let (d1, _, _, _) = route_request(&st, req1, &meta).await.unwrap();
         assert_eq!(d1.model, "local/general");
         assert_eq!(d1.retention_keep_current_model, Some(true));
-        // Second turn without keyword would normally hit default_fast; sticky keeps general.
+        // Second user turn (accumulating history) without keyword would hit
+        // default_fast; sticky keeps general. Turn key advances so DecisionCache misses.
         let req2 = ChatRequest {
             model: "ariacompute/semantic-auto".into(),
-            messages: vec![aria_router_core::ChatMessage {
-                role: "user".into(),
-                content: json!("hi"),
-            }],
+            messages: vec![
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("please explain rust"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: json!("ok"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("hi"),
+                },
+            ],
             stream: false,
             max_tokens: None,
             temperature: None,
@@ -3453,6 +3530,1217 @@ recipes:
         let (d, _, _, _) = route_request(&st, req, &meta).await.unwrap();
         assert_eq!(d.model, "local/general");
         assert_eq!(d.layer, "agent-delegate");
+    }
+
+    #[tokio::test]
+    async fn prefix_reuse_defaults_on_same_turn() {
+        // Omit prefix_reuse → default true; same (session, turn) reuses decision.
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-default-prefix".into());
+        let mk = |content: &str| ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!(content),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d1, _, _, _) = route_request(&st, mk("please explain rust"), &meta)
+            .await
+            .unwrap();
+        assert!(st.decision_cache.get("sess-default-prefix", 1).is_some());
+        let (d2, _, _, _) = route_request(&st, mk("please explain rust"), &meta)
+            .await
+            .unwrap();
+        assert_eq!(d2.model, d1.model);
+    }
+
+    #[tokio::test]
+    async fn prefix_reuse_false_does_not_cache() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      prefix_reuse: false
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-no-prefix".into());
+        let req = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("please explain rust"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let _ = route_request(&st, req, &meta).await.unwrap();
+        assert!(st.decision_cache.get("sess-no-prefix", 1).is_none());
+    }
+
+    #[tokio::test]
+    async fn prefix_reuse_tool_append_holds_model_and_ttl() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/fast
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+    - name: local/fast
+      provider_model_id: echo-fast
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+          emits:
+            - kind: retention
+              retention:
+                ttl_turns: 3
+                keep_current_model: true
+        - name: default_fast
+          priority: 1
+          rules:
+            operator: AND
+            conditions: []
+          modelRefs:
+            - model: local/fast
+global:
+  stores:
+    memory:
+      enabled: true
+      default_ttl_turns: 3
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-tool-hold".into());
+        let req1 = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("please explain rust"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d1, _, _, _) = route_request(&st, req1, &meta).await.unwrap();
+        assert_eq!(d1.model, "local/general");
+        let ttl_before = st.memory.get("sess-tool-hold").unwrap().ttl_turns_left;
+        // Same user turn: append assistant + tool — must freeze model and not tick TTL.
+        let req2 = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("please explain rust"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: json!("calling tool"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "tool".into(),
+                    content: json!("tool result"),
+                },
+            ],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d2, _, _, _) = route_request(&st, req2, &meta).await.unwrap();
+        assert_eq!(d2.model, "local/general");
+        assert_eq!(
+            st.memory.get("sess-tool-hold").unwrap().ttl_turns_left,
+            ttl_before
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_clears_sticky_allows_redecide() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/fast
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+    - name: local/fast
+      provider_model_id: echo-fast
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+          emits:
+            - kind: retention
+              retention:
+                ttl_turns: 4
+                keep_current_model: true
+        - name: default_fast
+          priority: 1
+          rules:
+            operator: AND
+            conditions: []
+          modelRefs:
+            - model: local/fast
+global:
+  stores:
+    memory:
+      enabled: true
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-compact".into());
+        let req1 = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![
+                aria_router_core::ChatMessage {
+                    role: "system".into(),
+                    content: json!("sys-v1"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("please explain rust"),
+                },
+            ],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d1, _, _, _) = route_request(&st, req1, &meta).await.unwrap();
+        assert_eq!(d1.model, "local/general");
+        assert!(st.memory.get("sess-compact").is_some());
+        // Compaction: fewer messages + new system prefix → clear sticky.
+        let req2 = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![
+                aria_router_core::ChatMessage {
+                    role: "system".into(),
+                    content: json!("sys-v2-summary"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("hi"),
+                },
+            ],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d2, _, _, _) = route_request(&st, req2, &meta).await.unwrap();
+        assert_eq!(d2.model, "local/fast");
+    }
+
+    #[tokio::test]
+    async fn afm_d_sticky_holds_across_user_turns() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/small
+  models:
+    - name: local/small
+      tier: small
+      provider_model_id: echo-s
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+    - name: local/mid
+      tier: mid
+      provider_model_id: echo-m
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+    - name: local/large
+      tier: large
+      provider_model_id: echo-l
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/afm-d-auto]
+    router: afm-d
+    recipe: afm-d-default
+recipes:
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      timeout_ms: 1000
+      fallback: local/mid
+global:
+  stores:
+    memory:
+      enabled: true
+      default_ttl_turns: 4
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-afmd-sticky".into());
+        let req1 = ChatRequest {
+            model: "ariacompute/afm-d-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("please explain how rust ownership works"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d1, _, _, _) = route_request(&st, req1, &meta).await.unwrap();
+        assert_eq!(d1.model, "local/large");
+        assert_eq!(d1.retention_keep_current_model, Some(true));
+        // New user turn with greeting: without sticky would shortcut to small.
+        let req2 = ChatRequest {
+            model: "ariacompute/afm-d-auto".into(),
+            messages: vec![
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("please explain how rust ownership works"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: json!("..."),
+                },
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("hi"),
+                },
+            ],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d2, _, _, _) = route_request(&st, req2, &meta).await.unwrap();
+        assert_eq!(d2.model, "local/large");
+        assert!(d2.reason.starts_with("sticky:"));
+        // Compaction clears sticky → greeting routes to small.
+        let req3 = ChatRequest {
+            model: "ariacompute/afm-d-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("hi"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d3, _, _, _) = route_request(&st, req3, &meta).await.unwrap();
+        assert_eq!(d3.model, "local/small");
+    }
+
+    #[tokio::test]
+    async fn agent_sticky_holds_across_user_turns() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+    - name: local/other
+      provider_model_id: echo-o
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/agent-auto]
+    router: agent
+    recipe: agent-default
+recipes:
+  - name: agent-default
+    router: agent
+    agent:
+      timeout_ms: 1000
+      max_turns: 3
+      fallback: local/general
+      delegate_endpoint: http://127.0.0.1:1
+global:
+  stores:
+    memory:
+      enabled: true
+      default_ttl_turns: 4
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-agent-sticky".into());
+        let req1 = ChatRequest {
+            model: "ariacompute/agent-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("route this"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d1, _, _, _) = route_request(&st, req1, &meta).await.unwrap();
+        assert_eq!(d1.model, "local/general");
+        assert_eq!(d1.retention_keep_current_model, Some(true));
+        let req2 = ChatRequest {
+            model: "ariacompute/agent-auto".into(),
+            messages: vec![
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("route this"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: json!("ok"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("again please"),
+                },
+            ],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d2, _, _, _) = route_request(&st, req2, &meta).await.unwrap();
+        assert_eq!(d2.model, "local/general");
+        assert!(d2.reason.starts_with("sticky:"));
+    }
+
+    #[tokio::test]
+    async fn no_explicit_session_skips_prefix_reuse_cache() {
+        // Without metadata session, DecisionCache must not freeze across calls.
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let meta = HashMap::new();
+        let req = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("please explain rust"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let _ = route_request(&st, req, &meta).await.unwrap();
+        assert!(st.decision_cache.get("", 1).is_none());
+        // Ephemeral keys are never written under an empty session.
+        assert!(st.decision_cache.get("sess-none", 1).is_none());
+    }
+
+    #[tokio::test]
+    async fn body_session_enables_prefix_reuse_via_http() {
+        let backend = mock_upstream().await;
+        let host = backend.trim_start_matches("http://");
+        let yaml = format!(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: {host}
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+global:
+  require_api_key: false
+"#
+        );
+        let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+        let body = json!({
+            "model": "ariacompute/semantic-auto",
+            "session": "body-sess-1",
+            "messages": [{"role":"user","content":"please explain rust"}]
+        })
+        .to_string();
+        let res = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(st.decision_cache.get("body-sess-1", 1).is_some());
+    }
+
+    #[tokio::test]
+    async fn tools_fingerprint_change_compacts_decision_cache() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-tools-fp".into());
+        let mut extra = serde_json::Map::new();
+        extra.insert("tools".into(), json!([{"name":"search"}]));
+        let req1 = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("please explain rust"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: extra.clone(),
+        };
+        let _ = route_request(&st, req1, &meta).await.unwrap();
+        assert!(st.decision_cache.get("sess-tools-fp", 1).is_some());
+        // Same user turn / messages, but tools payload changed → cache busted.
+        extra.insert("tools".into(), json!([{"name":"browse"}]));
+        let req2 = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("please explain rust"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra,
+        };
+        let _ = route_request(&st, req2, &meta).await.unwrap();
+        // After compaction the prior turn-1 entry is cleared, then re-put for the new baseline.
+        assert!(st.decision_cache.get("sess-tools-fp", 1).is_some());
+        // Changing tools alone must have gone through observe_and_check_compact (compacted=true).
+        // Prove isolation: a third call with the *same* tools hits the frozen decision.
+        let mut extra3 = serde_json::Map::new();
+        extra3.insert("tools".into(), json!([{"name":"browse"}]));
+        let req3 = ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("please explain rust"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: extra3,
+        };
+        let (d3, _, _, _) = route_request(&st, req3, &meta).await.unwrap();
+        assert_eq!(d3.model, "local/general");
+    }
+
+    #[tokio::test]
+    async fn sticky_ttl_expires_after_user_turns() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/fast
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+    - name: local/fast
+      provider_model_id: echo-fast
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+          emits:
+            - kind: retention
+              retention:
+                ttl_turns: 2
+                keep_current_model: true
+        - name: default_fast
+          priority: 1
+          rules:
+            operator: AND
+            conditions: []
+          modelRefs:
+            - model: local/fast
+global:
+  stores:
+    memory:
+      enabled: true
+      default_ttl_turns: 2
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-ttl-exp".into());
+        let mk = |msgs: Vec<aria_router_core::ChatMessage>| ChatRequest {
+            model: "ariacompute/semantic-auto".into(),
+            messages: msgs,
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d1, _, _, _) = route_request(
+            &st,
+            mk(vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("please explain rust"),
+            }]),
+            &meta,
+        )
+        .await
+        .unwrap();
+        assert_eq!(d1.model, "local/general");
+        assert_eq!(st.memory.get("sess-ttl-exp").unwrap().ttl_turns_left, 2);
+        // Turn 2: TTL ticks to 1; sticky still holds for a non-keyword follow-up.
+        let (d2, _, _, _) = route_request(
+            &st,
+            mk(vec![
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("please explain rust"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: json!("ok"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("thanks"),
+                },
+            ]),
+            &meta,
+        )
+        .await
+        .unwrap();
+        assert_eq!(d2.model, "local/general");
+        assert_eq!(st.memory.get("sess-ttl-exp").unwrap().ttl_turns_left, 1);
+        // Turn 3: TTL expires → sticky gone → default_fast.
+        let (d3, _, _, _) = route_request(
+            &st,
+            mk(vec![
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("please explain rust"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: json!("ok"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("thanks"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: json!("np"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("bye"),
+                },
+            ]),
+            &meta,
+        )
+        .await
+        .unwrap();
+        assert_eq!(d3.model, "local/fast");
+        assert!(st.memory.get("sess-ttl-exp").is_none());
+    }
+
+    #[tokio::test]
+    async fn afm_d_ineligible_sticky_falls_through_to_route() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/small
+  models:
+    - name: local/small
+      tier: small
+      provider_model_id: echo-s
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+    - name: local/large
+      tier: large
+      provider_model_id: echo-l
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/afm-d-auto]
+    router: afm-d
+    recipe: afm-d-default
+recipes:
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      timeout_ms: 1000
+      fallback: local/small
+global:
+  stores:
+    memory:
+      enabled: true
+      default_ttl_turns: 4
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc.clone());
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-afmd-badsticky".into());
+        // Pre-seed sticky with a model that will fail hard_filter.
+        st.memory.pin(
+            "sess-afmd-badsticky",
+            "gone/missing".into(),
+            "prior".into(),
+            4,
+            1,
+            &doc.global.stores.memory,
+        );
+        let req = ChatRequest {
+            model: "ariacompute/afm-d-auto".into(),
+            messages: vec![
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("please explain how rust ownership works"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "assistant".into(),
+                    content: json!("…"),
+                },
+                aria_router_core::ChatMessage {
+                    role: "user".into(),
+                    content: json!("hi"),
+                },
+            ],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        // Turn 2: sticky ineligible → fall through; greeting shortcuts to small.
+        let (d, _, _, _) = route_request(&st, req, &meta).await.unwrap();
+        assert_eq!(d.model, "local/small");
+        assert!(!d.reason.starts_with("sticky:"));
+    }
+
+    #[tokio::test]
+    async fn afm_d_without_memory_does_not_pin_sticky() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/small
+  models:
+    - name: local/small
+      tier: small
+      provider_model_id: echo-s
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+    - name: local/large
+      tier: large
+      provider_model_id: echo-l
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/afm-d-auto]
+    router: afm-d
+    recipe: afm-d-default
+recipes:
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      timeout_ms: 1000
+      fallback: local/small
+global:
+  stores:
+    memory:
+      enabled: false
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-afmd-nomem".into());
+        let req = ChatRequest {
+            model: "ariacompute/afm-d-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("please explain how rust ownership works"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d, _, _, _) = route_request(&st, req, &meta).await.unwrap();
+        assert_eq!(d.model, "local/large");
+        assert!(d.retention_keep_current_model.is_none());
+        assert!(st.memory.get("sess-afmd-nomem").is_none());
+        // DecisionCache still freezes the same turn when prefix_reuse defaults on.
+        assert!(st.decision_cache.get("sess-afmd-nomem", 1).is_some());
+    }
+
+    #[tokio::test]
+    async fn agent_prefix_reuse_false_skips_sticky_pin() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/agent-auto]
+    router: agent
+    recipe: agent-default
+recipes:
+  - name: agent-default
+    router: agent
+    agent:
+      prefix_reuse: false
+      timeout_ms: 1000
+      max_turns: 3
+      fallback: local/general
+      delegate_endpoint: http://127.0.0.1:1
+global:
+  stores:
+    memory:
+      enabled: true
+      default_ttl_turns: 4
+"#;
+        let doc = RouterDocument::from_yaml_str(yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mut meta = HashMap::new();
+        meta.insert("session".into(), "sess-agent-noprefix".into());
+        let req = ChatRequest {
+            model: "ariacompute/agent-auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("route this"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let (d, _, _, _) = route_request(&st, req, &meta).await.unwrap();
+        assert_eq!(d.model, "local/general");
+        assert!(st.decision_cache.get("sess-agent-noprefix", 1).is_none());
+        assert!(st.memory.get("sess-agent-noprefix").is_none());
+        assert!(d.retention_keep_current_model.is_none());
+    }
+
+    #[tokio::test]
+    async fn x_aria_session_header_enables_context_hold() {
+        let backend = mock_upstream().await;
+        let host = backend.trim_start_matches("http://");
+        let yaml = format!(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      backend_refs:
+        - name: primary
+          endpoint: {host}
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: local/general
+global:
+  require_api_key: false
+"#
+        );
+        let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+        let body = json!({
+            "model": "ariacompute/semantic-auto",
+            "messages": [{"role":"user","content":"please explain rust"}]
+        })
+        .to_string();
+        let res = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("x-aria-session", "hdr-sess-1")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(st.decision_cache.get("hdr-sess-1", 1).is_some());
     }
 
     #[tokio::test]

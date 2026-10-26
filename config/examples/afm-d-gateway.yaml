@@ -73,6 +73,7 @@ recipes:
   - name: afm-d-default
     router: afm-d
     afm-d:
+      prefix_reuse: true
       endpoint: "${DECISION_MODEL_URL:-http://127.0.0.1:8010}"
       track: encoder
       timeout_ms: 5000

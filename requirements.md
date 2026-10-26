@@ -180,13 +180,15 @@ emits:
 - Looper：**R 实现 `ratings`**（读/写同一 Elo 表）；其余（`confidence`、`fusion`、`remom`、`workflows`）仍 Unsupported。
 - Plugins：B 至少 `header-mutation`、`request-params`、`system-prompt`、`fast-response`、`response-cache`（exact）；C 其余引用即须实现或 Unsupported。
 
-### 3.3.1 状态化路由（阶段 R）
+### 3.3.1 状态化路由（阶段 R）— ContextHold
 
-- Session 键：`x-aria-session` 或 body `session`（与 cost 共用）。
-- 命中 decision 且 `retention.keep_current_model`：写入 `stores.memory` sticky model + `ttl_turns`；后续 turn 在 algorithm 前若 sticky 仍 eligible 则覆盖选型；每成功转发 `ttl_turns_left -= 1`，到 0 清除。
+- Session 键：`x-aria-session` 或 body `session`（与 cost 共用）。**仅显式 session** 参与 ContextHold；未提供时 cost 使用一次性 `req_*` id，不冻结决策、不写 sticky。
+- **`prefix_reuse`（缺省 `true`；显式 `false` 关闭）**：同一显式 `(session, user 消息条数)` 内冻结 `RouteDecision`，工具往返不换模型；新 user 消息再决策。消息条数变少或 system / `tools` 指纹变化视为压缩，清除该 session 的决策缓存与 sticky。
+- Semantic：命中 decision 且 `retention.keep_current_model` → `stores.memory` sticky；后续 turn 在 algorithm 后若 sticky 仍 eligible 则覆盖选型。同模型再 pin **不重置** TTL；TTL 仅在 **user 消息条数上升** 时 `-= 1`，到 0 清除。
+- Agent / AFM-D：当 `stores.memory.enabled` 且 `prefix_reuse` 开启时，路由成功后 pin sticky；新 user turn 上若 sticky 仍 eligible 则短路（不调用 System One / builtin agent）。`get_request_view` 仍可读 session 摘要。
 - `retention.drop`：禁止本响应写入 `semantic_cache`。
-- 响应头：`x-aria-router-retention-drop` / `ttl-turns` / `keep-current-model` / `prefer-prefix`（显式设置才发）。
-- Bypass 不写 retention；agent 路径不强制 sticky（仅 `get_request_view` 可读 session 摘要）。
+- 响应头：`x-aria-router-retention-drop` / `ttl-turns` / `keep-current-model` / `prefer-prefix`（显式设置才发）。`prefer_prefix_retention` 仍仅透传，不实现 SAAR 计分。
+- Bypass 不写 retention。
 
 ### 3.3.2 生产 stores / services（阶段 R）
 

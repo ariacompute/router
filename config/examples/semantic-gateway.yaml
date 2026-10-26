@@ -73,6 +73,7 @@ recipes:
     router: semantic
     routing:
       strategy: priority
+      prefix_reuse: true
       signals:
         keywords:
           - name: needs_explain

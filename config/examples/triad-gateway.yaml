@@ -81,6 +81,7 @@ recipes:
     router: semantic
     routing:
       strategy: priority
+      prefix_reuse: true
       signals:
         keywords:
           - name: needs_explain
@@ -291,6 +292,7 @@ recipes:
   - name: agent-default
     router: agent
     agent:
+      prefix_reuse: true
       endpoint: https://tokenhub.tencentmaas.com
       model: ariacompute/ariamodel-mid
       timeout_ms: 45000
@@ -326,6 +328,7 @@ recipes:
   - name: afm-d-default
     router: afm-d
     afm-d:
+      prefix_reuse: true
       endpoint: "${DECISION_MODEL_URL:-http://127.0.0.1:8010}"
       track: encoder
       timeout_ms: 5000

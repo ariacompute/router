@@ -237,22 +237,38 @@ pub fn prompt_from_messages(messages: &[ChatMessage]) -> String {
         .join("\n")
 }
 
+/// Per-session context fingerprint used to detect compaction / rebuild.
+#[derive(Debug, Clone, Copy)]
+struct SessionCtx {
+    msg_len: usize,
+    prefix_fp: u64,
+}
+
 /// Per-(session, turn) decision cache for context-prefix reuse.
 ///
 /// Within the same agent turn (same session + same count of user messages) the
 /// frozen `RouteDecision` is reused instead of re-deciding; a new user turn (or
 /// unrecognizable context) forces a fresh decision. Keys are evicted FIFO once
-/// `max` is exceeded.
-#[derive(Debug, Default)]
+/// `max` is exceeded. Compaction (message count drop or system/tools prefix
+/// change) clears all entries for that session.
+#[derive(Debug)]
 pub struct DecisionCache {
     inner: Mutex<HashMap<(String, u64), RouteDecision>>,
+    session_ctx: Mutex<HashMap<String, SessionCtx>>,
     max: usize,
+}
+
+impl Default for DecisionCache {
+    fn default() -> Self {
+        Self::new(1024)
+    }
 }
 
 impl DecisionCache {
     pub fn new(max: usize) -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
+            session_ctx: Mutex::new(HashMap::new()),
             max: max.max(1),
         }
     }
@@ -278,9 +294,72 @@ impl DecisionCache {
         }
     }
 
+    /// Observe the current message list / tools for `session`.
+    ///
+    /// Returns `true` when context was compacted (message count dropped, or
+    /// system-prompt / tools fingerprint changed). On compaction, all cached
+    /// decisions for the session are cleared.
+    pub fn observe_and_check_compact(
+        &self,
+        session: &str,
+        messages: &[ChatMessage],
+        tools: Option<&serde_json::Value>,
+    ) -> bool {
+        if session.is_empty() {
+            return false;
+        }
+        let msg_len = messages.len();
+        let prefix_fp = context_prefix_fp(messages, tools);
+        let compacted = {
+            let ctx = self.session_ctx.lock().unwrap();
+            match ctx.get(session) {
+                Some(prev) => msg_len < prev.msg_len || prefix_fp != prev.prefix_fp,
+                None => false,
+            }
+        };
+        if compacted {
+            // Drop frozen decisions; fingerprint is rewritten as the new baseline below.
+            self.inner
+                .lock()
+                .unwrap()
+                .retain(|(s, _), _| s.as_str() != session);
+        }
+        self.session_ctx
+            .lock()
+            .unwrap()
+            .insert(session.to_string(), SessionCtx { msg_len, prefix_fp });
+        compacted
+    }
+
+    /// Drop every cached decision (and context fingerprint) for one session.
+    pub fn clear_session(&self, session: &str) {
+        self.inner
+            .lock()
+            .unwrap()
+            .retain(|(s, _), _| s.as_str() != session);
+        self.session_ctx.lock().unwrap().remove(session);
+    }
+
     pub fn clear(&self) {
         self.inner.lock().unwrap().clear();
+        self.session_ctx.lock().unwrap().clear();
     }
+}
+
+/// Hash of system messages + optional `tools` payload (agent tool definitions).
+/// Used to detect prompt rebuild / compaction that should bust prefix reuse.
+pub fn context_prefix_fp(messages: &[ChatMessage], tools: Option<&serde_json::Value>) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    for m in messages.iter().filter(|m| m.role == "system") {
+        m.role.hash(&mut h);
+        m.text().hash(&mut h);
+    }
+    if let Some(t) = tools {
+        t.to_string().hash(&mut h);
+    }
+    h.finish()
 }
 
 /// Number of user messages in a request; used as the "turn" key for prefix reuse.
@@ -437,6 +516,121 @@ mod tests {
         assert!(cache.get("s", 4).is_some());
         cache.clear();
         assert!(cache.get("s", 1).is_none());
+    }
+
+    #[test]
+    fn decision_cache_compaction_clears_session() {
+        let cache = DecisionCache::new(8);
+        let long = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: json!("sys-a"),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: json!("u1"),
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: json!("a1"),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: json!("u2"),
+            },
+        ];
+        assert!(!cache.observe_and_check_compact("s1", &long, None));
+        cache.put("s1".into(), 2, RouteDecision::bypass("m1"));
+        assert!(cache.get("s1", 2).is_some());
+        // Tool append grows length with same system → not compacted.
+        let mut grown = long.clone();
+        grown.push(ChatMessage {
+            role: "tool".into(),
+            content: json!("ok"),
+        });
+        assert!(!cache.observe_and_check_compact("s1", &grown, None));
+        assert!(cache.get("s1", 2).is_some());
+        // Shorter history → compacted, decisions cleared.
+        let short = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: json!("sys-a"),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: json!("summary"),
+            },
+        ];
+        assert!(cache.observe_and_check_compact("s1", &short, None));
+        assert!(cache.get("s1", 2).is_none());
+        // System prefix change → compacted.
+        cache.put("s1".into(), 1, RouteDecision::bypass("m2"));
+        let changed_sys = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: json!("sys-b"),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: json!("summary"),
+            },
+        ];
+        assert!(cache.observe_and_check_compact("s1", &changed_sys, None));
+        assert!(cache.get("s1", 1).is_none());
+    }
+
+    #[test]
+    fn decision_cache_tools_fingerprint_and_clear_session() {
+        let cache = DecisionCache::new(8);
+        let msgs = vec![ChatMessage {
+            role: "user".into(),
+            content: json!("hi"),
+        }];
+        let tools_a = json!([{"name": "search"}]);
+        let tools_b = json!([{"name": "browse"}]);
+        assert!(!cache.observe_and_check_compact("s", &msgs, Some(&tools_a)));
+        cache.put("s".into(), 1, RouteDecision::bypass("m1"));
+        assert!(cache.get("s", 1).is_some());
+        // Same messages, different tools → compacted.
+        assert!(cache.observe_and_check_compact("s", &msgs, Some(&tools_b)));
+        assert!(cache.get("s", 1).is_none());
+
+        cache.put("s".into(), 1, RouteDecision::bypass("m2"));
+        cache.put("other".into(), 1, RouteDecision::bypass("m3"));
+        cache.clear_session("s");
+        assert!(cache.get("s", 1).is_none());
+        assert!(cache.get("other", 1).is_some());
+
+        // Empty session never compacts.
+        assert!(!cache.observe_and_check_compact("", &msgs, None));
+    }
+
+    #[test]
+    fn context_prefix_fp_stable_and_tools_sensitive() {
+        let msgs = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: json!("sys"),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: json!("u"),
+            },
+        ];
+        let a = context_prefix_fp(&msgs, None);
+        let b = context_prefix_fp(&msgs, None);
+        assert_eq!(a, b);
+        let with_tools = context_prefix_fp(&msgs, Some(&json!({"fn": 1})));
+        assert_ne!(a, with_tools);
+        // Non-system messages alone do not affect the fingerprint.
+        let user_only = vec![ChatMessage {
+            role: "user".into(),
+            content: json!("other"),
+        }];
+        assert_eq!(
+            context_prefix_fp(&user_only, None),
+            context_prefix_fp(&[], None)
+        );
     }
 
     #[test]
