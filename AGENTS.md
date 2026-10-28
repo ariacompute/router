@@ -51,6 +51,17 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 ## 进行中需求
 阶段 **R**（T50–T56）已落地。**T81** upgrade、**T82–T84** AFM-D 决策器（`router: afm-d`）已落地。
 
+## Trust stores (eMudhra/emSign CA key compromise, 2026-10)
+
+- **Rust（aria-router 二进制）**：`http` crate 经 `reqwest` + `rustls-tls` 做 provider API 调用与
+  `bin` 的 `upgrade` 从 GitHub/Gitee Releases 下载发布。其信任库是编译进二进制的 **`webpki-roots`**，
+  已在 `Cargo.lock` 升 `1.0.9 -> 1.0.10`（`cargo update -p webpki-roots --precise 1.0.10`），并在
+  `http/Cargo.toml` 显式钉住 `webpki-roots = "1.0.10"`（1.0.10+ 移除 rustls 信任库中的 emSign 根）。
+  二进制不走系统 bundle，故锁升级是决定性修复；新发布（被 playground 的 sandbox 镜像拉取）将自带修复。
+- **dashboard（React/Vite 静态资源）**：构建期 `npm install` 走 Node 的系统 ca-certificates；运行时
+  SPA 由 Rust 二进制托管，无运行时信任库。构建环境保持系统 ca-certificates 最新即可。
+- `scripts/check-emudhra.sh`：离线按 emSign 根（信任锚）指纹扫描运行环境 CA bundle。
+
 ## 注意事项
 - 黄金路径：keyword → static；retention sticky；agent → `submit_route`；afm-d → System One。
 - 四维：Models / Compute / Location / Preference。不做 Envoy / HaluGate / Prometheus。

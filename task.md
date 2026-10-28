@@ -362,3 +362,24 @@
 - [x] System One client → `RouteDecision`；无 endpoint first-eligible；单测
 - [x] `route_afm_d` + topology；workspace `aria-router-afm-d`
 - [x] README / README_cn；`cargo test` 全绿
+
+## eMudhra / emSign 证书私钥泄露响应（2026-10）
+
+背景：eMudhra(emSign) 8 张中间 CA 私钥极弱（P-384 私钥标量 <256），可被反推伪造任意域名证书；
+Rust(webpki-roots) 等自带信任库需升级。router 是 Rust 工作区，出向 TLS 来自 provider API 调用与
+`bin` 的 `upgrade` 从 GitHub/Gitee 下载发布；dashboard 为 Vite 构建的静态资源（运行时由二进制托管）。
+
+### 1. Rust（aria-router 二进制）
+- `Cargo.lock`：`webpki-roots` 1.0.9 -> 1.0.10（`cargo update -p webpki-roots --precise 1.0.10`）。
+  1.0.10+ 在 rustls 信任库中移除 emSign 根；`http` crate 的 `reqwest`+`rustls-tls` 出向校验依赖它。
+- `http/Cargo.toml`：显式钉住 `webpki-roots = "1.0.10"`，防止锁漂移回受影响版本。
+- 注意：二进制信任库编译进产物（webpki-roots），不走系统 bundle；新发布（被 playground sandbox
+  镜像拉取）将自带修复，故锁升级是决定性的。
+- 核验：`cargo tree -i webpki-roots` 须 >= 1.0.10。
+
+### 2. Dashboard（React/Vite，构建期）
+- 仅构建期 `npm install` 经 Node 系统 ca-certificates 出向 TLS；运行时 SPA 静态托管，无运行时信任库。
+  构建环境保持系统 ca-certificates 最新即可，无需仓库内固定。
+
+### 3. 检测与验证
+- 新增 `scripts/check-emudhra.sh`：离线按 emSign 根（信任锚）指纹扫描 CA bundle，规避代理假阳性。

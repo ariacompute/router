@@ -37,6 +37,11 @@ argon2 = { workspace = true }
 password-hash = { workspace = true }
 subtle = { workspace = true }
 reqwest = { workspace = true }
+# eMudhra/emSign CA key compromise (2026-10): webpki-roots 1.0.10+ removes the
+# compromised emSign roots from the rustls trust store used by reqwest's rustls-tls
+# (provider API calls and the bin upgrade download from GitHub/Gitee). Pin it here so
+# the lock cannot drift back to an affected version.
+webpki-roots = "1.0.10"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
