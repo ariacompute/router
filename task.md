@@ -438,8 +438,15 @@ Rust(webpki-roots) 等自带信任库需升级。router 是 Rust 工作区，出
 - [x] `bin` 的 `read_secret` 仅被 Unix 掩码输入路径调用，Windows 非测试构建报 `function is never used`
       （release 矩阵的 `clippy --all-targets -D warnings` 会直接失败）。改为 `#[cfg(any(unix, test))]`：
       生产构建只在 Unix 存在，测试仍可在所有平台覆盖退格/终止符分支。
+- [x] `bin/tests/cli.rs::setup_prompts_through_stdio_without_a_tty`：`CliIo::is_tty` 在非 Unix 上
+      无条件返回 `true`（历史占位），Windows CI 的 stdin 是管道却仍被当成终端，setup 于是把所有
+      默认项都当成交互提示（base_url / key / model ids 全被 `password1` 吃掉，最后报
+      「password must be at least 8 characters」）。改为跨平台的 `std::io::IsTerminal`
+      （`io::stdin().is_terminal()`），删掉 `is_tty_fd`；管道 stdin 一定走非交互默认值。
+      掩码读取仍仅在 Unix 生效（termios），其余平台读普通行。
 
-验证：Linux 全量测试 + clippy + 覆盖率门禁仍为 100.00%（19592/19592 行）。
+验证：Linux 全量测试 + clippy + 覆盖率门禁仍为 100.00%（19589/19589 行，删掉 `is_tty_fd` 与
+Windows 假分支后行数略降）。
 
 ## T87 — 绑定套件 Kotlin 编译在 CI 失败（已完成）
 

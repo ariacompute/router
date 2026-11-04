@@ -9,7 +9,7 @@ use aria_router_http::{
     data_router, mgmt_router, mgmt_router_serve_dashboard, AppState, KeyStore, LocalUserStore,
 };
 use clap::{ArgAction, Args, Parser, Subcommand};
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -154,9 +154,10 @@ impl CliIo for StdIo {
     fn prompt_secret(&mut self, label: &str) -> io::Result<String> {
         eprint!("{label}");
         io::stderr().flush()?;
+        // Masked echo needs termios; other platforms read a plain line below.
         #[cfg(unix)]
         {
-            if is_tty_fd(libc::STDIN_FILENO) {
+            if io::stdin().is_terminal() {
                 let secret = read_password_masked()?;
                 eprintln!();
                 return Ok(secret);
@@ -167,25 +168,16 @@ impl CliIo for StdIo {
         Ok(line.trim_end_matches(['\r', '\n']).to_string())
     }
 
+    /// Real terminal detection on every platform. This must not assume a tty:
+    /// piped stdin (CI, scripts) has to fall through to the non-interactive
+    /// defaults instead of blocking on prompts.
     fn is_tty(&self) -> bool {
-        #[cfg(unix)]
-        {
-            is_tty_fd(libc::STDIN_FILENO)
-        }
-        #[cfg(not(unix))]
-        {
-            true
-        }
+        io::stdin().is_terminal()
     }
 
     fn serve_shutdown(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(std::future::pending())
     }
-}
-
-#[cfg(unix)]
-fn is_tty_fd(fd: libc::c_int) -> bool {
-    unsafe { libc::isatty(fd) != 0 }
 }
 
 /// Read a secret from the terminal with echo disabled, printing `*` per
