@@ -510,3 +510,79 @@ host 套件暴露）。
 
 验证：`cargo test --workspace --all-features`、`clippy -D warnings`、`scripts/coverage.sh`
 （100.00%，19658 行）全绿。
+
+---
+
+## 候选池（未排期 · 待人审）
+
+> 对应 [`requirements.md` §7](requirements.md) 与 [`docs/hiroute-vs-aria-router.md`](docs/hiroute-vs-aria-router.md) §6。
+> **本节不是实施清单**：条目均为「候选 / 待人工审核 / 未排期 / 不进入实施」，编号 `C1–C9` 与规格 §7 一一对应。
+> 依 Harness 约定，`requirements.md` 须经人工逐项审核通过后，方可据其生成 / 执行 `task.md`；**本节不得被当作待办勾选，也不占用、不重排 T0–T89**。上文 T0–T89 的勾选状态与内容一律不变。
+
+| 候选 | 方向 | 规格 §7 | 对比文档 | 现状摘要 |
+|---|---|---|---|---|
+| C1 | 显式化逐步重判边界 | §7.2 C1 | 矩阵 #1 / §6 | `prefix_reuse` + sticky 只做「粘住」，无重判边界 |
+| C2 | afm-d 三问题模板 | §7.2 C2 | 矩阵 #4 / §4.3 / §6 | `questions` 固定 1 个 `route` choice |
+| C3 | 低分保护状态机 | §7.2 C3 | 矩阵 #7 / §6 | 一次性离散降档，无保护 / 解除 |
+| C4 | 信任度调档 + 证据门槛 + 回放发布 | §7.2 C4 | 矩阵 #6 #13 #14 / §6 | 有 reroute 与 cost，无档位 / 建议 / 发布 |
+| C5 | Dashboard 模型表现页 | §7.2 C5 | 矩阵 #12 / §6 | 有 Cost / CostByCompetence，依赖 C6 |
+| C6 | 执行证据字段接通生产路径 | §7.2 C6 | 矩阵 #11 #18 / §6 | 4 个证据字段恒 `None`；**C3 / C5 前置** |
+| C7 | API Key 花费额度 | §7.2 C7 | 矩阵 #26 / §6 | cost 只记账；**与 §2.1 硬 quota 非目标冲突，需先裁决** |
+| C8 | backend 候选链 / 同名模型 failover | §7.2 C8 | 矩阵 #9 #27 / §6 | 单取最大权重，无 retry / failover |
+| C9 | 策略一致性指标与离线复现 | §7.2 C9 | 矩阵 #35–#38 / §6 | bench 无 consistency 指标，corpus 为 tiny fixtures |
+
+**文档口径一致性待办（非候选需求）**：[`docs/hiroute-vs-aria-router.md`](docs/hiroute-vs-aria-router.md) §7 登记了 README 中英三方对比表中若干 ✅ 与源码状态不符的判定；属文档修订，不入候选池、不在本节排期。
+
+**未排期声明**：本节不含任何待办勾选项、验收记录或提交记录。人审通过前，不产生任何实施任务。
+
+---
+
+## 阶段 T — 实施计划（计划稿 · 待人审激活）
+
+> 依据 [`requirements.md` §7](requirements.md)（C1–C9 候选池）与 [§8](requirements.md)（U1 独立需求），可执行任务级细节见 [`docs/implementation-plan.md`](docs/implementation-plan.md)。
+>
+> **状态声明**：本章是**实施计划（计划稿 · 待人审激活）**，**不是实施清单**。用表格列编号，**不含勾选式待办、验收记录或提交记录**。
+> 依 Harness 约定，`requirements.md` 须经人工逐项审核（M0 门禁 G1–G11，含 C7 与 §2.1 的裁决、U1 的 G11）通过后方可进入编码；**在此之前不激活任何任务**。
+> 上文「候选池（未排期 · 待人审）」的未排期声明仅约束 `C1–C9`；本章是需求方另行立项的计划稿，与候选池互不隶属。T0–T89 的勾选状态与文字、候选池任何一行、阶段 P/Q 的 2 条 bench live 遗留验证均保持原样。
+> 编号 `T90–T99` 不占用、不重排既有编号；既有的 T18 重复与 T30 / T60–T80 缺口不在本章修补。
+
+### T.1 任务编号对照（计划稿）
+
+| 任务 | 对应 | 里程碑 | 前置 | 目标 | 主要目标文件 | 验收摘要 |
+|:----:|:----:|:------:|------|------|--------------|----------|
+| T90 | C1 | M2 | M0 | 显式化逐步重判边界 | `http/src/lib.rs`、`core/src/lib.rs`、`http/src/memory.rs`、`config/src/lib.rs` | 三类边界有判定规则与响应头；无法识别同 turn 时 fail closed |
+| T91 | C2 | M2 | M0 | afm-d 三问题模板 | `afm_d/src/lib.rs`、`config/src/lib.rs` | 默认单 `route` choice 不变；三问归一为 typed `RouteDecision` |
+| T92 | C3 | M3 | T95、G9 | 低分保护状态机 | `decision/src/lib.rs`、`core/src/lib.rs`、`http/src/replay.rs` | 保护与解除成对；旧低分不重复生效；无评分维持 fail closed |
+| T93 | C4 | M3 | T95、T92 | 信任度调档 + 证据门槛 + 回放后发布 | `config/src/lib.rs`、`http/src/lib.rs`、`http/src/replay.rs`、`dashboard/` | 证据不足不产生建议；回放只估算不改写线上；发布需显式动作 |
+| T94 | C5 | M3 | T95 | Dashboard「模型表现」页 | `dashboard/src/App.tsx`、`pages/`、`http/src/cost.rs` | 空态显示「无数据」而非 0；估算口径须标注 |
+| T95 | C6 | M1 | M0 | 执行证据字段接通生产路径 | `http/src/replay.rs`、`http/src/lib.rs` | 4 个证据字段生产可查；关闭 replay 无开销；JSONL 向后兼容 |
+| T96 | C7 | M4 | **G6 裁决通过** | API Key 花费额度 | `http/src/keys.rs`、`http/src/cost.rs`、`http/src/ratelimit.rs` | 预留—结算闭环；耗尽错误可区分；另设累计存储 |
+| T97 | C8 | M2 | M0、G10 | backend 候选链 / 同名模型 failover | `provider/src/lib.rs`、`config/src/lib.rs` | 单 backend 默认行为不变；耗尽 fail closed；流开始后不切换 |
+| T98 | C9 | M2 | M0 | 策略一致性指标与离线复现 | `bench/`（Python，report-only） | 新指标有单测；离线可复算；不可达记 `skipped` |
+| T99 | U1 | M6 | **G11 通过** | impeccable 渲染审计与视觉优化 | `dashboard/`、`scripts/`、`PRODUCT.md`、`.github/workflows/ci.yml` | `--static` / `--dom` 0 primary findings；护栏与构建全绿；功能等价 |
+
+### T.2 里程碑（计划稿）
+
+| 里程碑 | 内容 | 任务 |
+|:------:|------|:----:|
+| **M0** | 门禁：§7.5 人审检查项 + §7.3 边界裁决（G1–G11）；未通过不激活任何任务 | — |
+| **M1** | 地基：执行证据接通生产路径 | T95 |
+| **M2** | 低耦合并行：互不重叠的四项（T98 纯 Python，不碰运行时） | T90、T91、T97、T98 |
+| **M3** | 决策反馈闭环：T92 → T93；T94 并行 | T92、T93、T94 |
+| **M4** | 运维额度（需 G6 裁决） | T96 |
+| **M5** | 全量验收：100% 行覆盖、`clippy -D warnings`、bench 单测、dashboard 构建、bindings 回归 | 全部 |
+| **M6** | UI 渲染质量独立里程碑；与 T93 / T94 共改 `dashboard/`，**合并批次优先**，否则设计骨架先行 | T99 |
+
+### T.3 四处回指
+
+| 处 | 内容 | 状态 |
+|----|------|:----:|
+| [`requirements.md` §7.2](requirements.md) | `C1`–`C9` 候选条目（原文） | 待人审、未排期 |
+| [`requirements.md` §8](requirements.md) | `U1` 独立需求 | 计划稿 · 待人审激活 |
+| [`docs/implementation-plan.md`](docs/implementation-plan.md) §5 | 10 张任务卡 `T90`–`T99` ↔ `C1`–`C9` / `U1`，含目标文件、单测、验证命令、验收与风险 | 计划稿 · 待人审激活 |
+| 本章 T.1 / T.2 | 编号、里程碑、依赖、验收摘要（表格） | 计划稿 · 待人审激活 |
+| 上文候选池 | 仅作回指目标，**不新增勾选、不改一行** | 待人审、未排期 |
+
+**编号映射**：`T90↔C1`、`T91↔C2`、`T92↔C3`、`T93↔C4`、`T94↔C5`、`T95↔C6`、`T96↔C7`、`T97↔C8`、`T98↔C9`、`T99↔U1`。
+
+**计划稿声明**：本章不含待办勾选项、验收记录或提交记录。M0 通过前，不产生任何实施任务、不进入编码；审核通过后另行按 Harness 流程生成 / 执行实施清单。

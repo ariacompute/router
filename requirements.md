@@ -499,3 +499,205 @@ python -m bench routing \
   --corpus bench/corpus/routing_gateway_hard.json \
   --timeout 300 --report ./out/agent_vs_vsr_routing.json
 ```
+
+---
+
+## 7. HiRoute 对标候选需求（候选 · 待人工审核 · 未排期 · 不进入实施）
+
+> **状态声明（勿略过）**：本章是 [`docs/hiroute-vs-aria-router.md`](docs/hiroute-vs-aria-router.md) 差距分析的产物，**仅为候选输入**。
+> 依本文件开头「须经人工逐项审核，审核通过后方可据其生成 / 执行 `task.md`」与 `AGENTS.md` 的 Harness 约定：
+>
+> - 本章**未经人审**，不构成实施依据；`task.md` 不得据此生成待办任务或排期；
+> - 编号用 `C1–C9`（Candidate），**不占用、不重排** T0–T89；
+> - 本章**不修改** §1 阶段表、§1.2 硬不变量、§2 功能边界、§2.1 非目标以及 §3–§6 的任何既有条款；
+> - 「现状依据」为 2026-11-04 的源码核实结果，可能与 README 既有三方对比表的结论式判定不同，见 §7.4；
+> - HiRoute 的准确率与成本数字均为其特定研究口径（事后复核子集、衡量策略符合度而非任务完成率、API 等价估算），见对比文档 §1.2，**一律不作为验收目标值**。
+
+### 7.1 资料与编号
+
+| 项 | 内容 |
+|---|---|
+| 主线 | 微信文章《HIROUTE 新版本发布：结合自己的真实工作选择最佳模型》 |
+| 补齐 | HiRoute GitHub README、决策扩展 README、System One 论文与复现材料、智能模型路由指南、Code map（完整链接见对比文档 §8） |
+| 对照 | 对比文档 §3 矩阵 #1–#39、§4 差异解读、§5 独有优势、§6 可借鉴方向 |
+| 编号 | `C<n>` 在「对比文档 §6」「本章」「[`task.md`](task.md) 候选池」三处一一对应 |
+
+### 7.2 候选条目
+
+#### C1 — 显式化逐步重判边界
+
+- **来源**：矩阵 #1；[W] 每步重新判断、[D3] 切换只发生在新消息 / 上下文压缩 / 重建。
+- **现状依据**：`http/src/lib.rs:1328-1418` 的 `prefix_reuse` + session sticky（`x-aria-session` / body `session`）+ `retention.ttl_turns` 提供「粘住模型」，但无「该重新判断」与「沿用决策」的显式边界。
+- **影响面**：`http` / `config`；需新增边界定义与可观测字段。
+- **前置 / 风险**：§1.2「一次请求禁止串跑多种决策器」——重判只允许发生在**跨请求**边界，不得变成单请求内多决策器。
+- **验收草案（待人审）**：给出新用户消息 / 上下文压缩 / 工具续跑三类边界的判定规则与响应头；正常用例覆盖冻结与重判，异常用例覆盖无法识别同 turn 时 fail closed。
+
+#### C2 — afm-d 三问题模板
+
+- **来源**：矩阵 #4、对比文档 §4.3；[W][D1] 三问（上一步胜任度 / 这一步难度 / 问题是否延续）。
+- **现状依据**：engine 契约 `questions: Map<String, Value>` 已允许多键（工作区同级 `engine` 仓 `core/src/systemone.rs:11-15`，非本仓路径），但 `afm_d/src/lib.rs:560-597` 只发 1 个 `route` choice；`decision_from_systemone()`（`599-646`）只解析 `/answers/route.choice`；`track` 不进请求体，tier 快捷键与 256 条 FIFO 缓存会跳过 System One。
+- **影响面**：`afm_d`（与 engine 契约对齐）；不改 C ABI。
+- **前置 / 风险**：§1.2「检测 ≠ 执行」「Agent / AFM-D 输出必须是 typed `RouteDecision`」——三问答案须归一为单个 `RouteDecision`，并明确 `confidence` / `min_confidence` 语义。
+- **验收草案（待人审）**：模板可选且默认保持单 `route` 问题，不破坏现有配置；正常用例覆盖三问归一，异常用例覆盖某问缺失 / 越权 choice / 超时时 fail closed 或走 `fallback`。
+
+#### C3 — 低分保护状态机
+
+- **来源**：矩阵 #7；[D1][D3] 评分须新鲜、完整、同类目、同计划版本、同评估标准；问题延续 < 0.5 解除保护，仅解除历史约束，难度仍决定组；未评分 ≠ 0 分，旧低分不重复生效。
+- **现状依据**：`decision/src/lib.rs:121+` 的 `apply_competence()` 为一次性离散降档；`CompetenceTracker`（`core/src/lib.rs:377+`）；replay 的 `stage_competence` 生产恒 `None`。
+- **影响面**：`decision` / `http` / `config` / `core`。
+- **前置 / 风险**：依赖 C6 先接通评分来源；不得让保护覆盖 Location 类硬约束（§1.2）。
+- **验收草案（待人审）**：保护触发与解除成对用例；旧低分不重复生效、部分评分不触发；无评分时维持现有 fail closed 行为。
+
+#### C4 — 信任度连续调档 + 证据门槛 + 回放后发布
+
+- **来源**：矩阵 #6 #13 #14；[W] 上调 / 下调门槛，[D3] 近 7 天已发布版本的历史分配估算（非预测）与 `publish` 冻结语义。
+- **现状依据**：已有 `min_confidence`、`priority` / `confidence` 决策策略、`router_replay` 的 reroute（`http/src/lib.rs:266-320`，单轮 / `prompt_preview` 前 200 字 / entrypoint 取第一个）与 `PUT /v1/router/config` 热重载；无档位、无建议、无发布流程。
+- **影响面**：`config` / `http` / `dashboard`；新增配置键须走 `deny_unknown_fields` 与 `validate`。
+- **前置 / 风险**：发布流程会改变「配置即刻生效」的现有语义；建议只是建议，发布前不得改变路由。
+- **验收草案（待人审）**：档位阈值可配、证据不足时不产生建议、回放只估算不改写线上路由、发布需显式动作；异常用例覆盖空 replay 与跨 entrypoint 记录。
+
+#### C5 — Dashboard「模型表现」页
+
+- **来源**：矩阵 #12；[W][D3] 阶段评分、新模型承担比例、费用估算与按分支 / 组 / 模型的分列。
+- **现状依据**：Dashboard 已有 Cost / CostByCompetence 页；`http/src/cost.rs:168-245` 六因子账本与 6 个分桶；`/v1/router/cost/by-competence` 存在但生产证据字段恒 `None`。
+- **影响面**：`dashboard` + 管理面 JSON API。
+- **前置 / 风险**：依赖 C6；不得引入 Grafana / Prometheus（§2.1）。
+- **验收草案（待人审）**：无证据时显示「无数据」而非 0；按 model / tier 分列；不改动既有 Cost 页口径。
+
+#### C6 — 执行证据字段接通生产路径
+
+- **来源**：矩阵 #11 #18；[D3] 会话路由时间线。
+- **现状依据**：`http/src/replay.rs:32-48` 的 `task_category` / `tool_outcomes` / `accepted_output` / `stage_competence` 在生产路径恒 `None`（`http/src/lib.rs:1276-1280, 1698-1702`），仅单测赋值；`selected_group` 仅由模型名推 tier（`core/src/lib.rs:402`）。
+- **影响面**：`http` / `core` / replay 存储（可选 `persist_path` JSONL 结构）。
+- **前置 / 风险**：字段语义须先定义；不写入凭据与完整原始请求体，与现有 `prompt_preview` 截断惯例一致。
+- **验收草案（待人审）**：生产路径可产生可查证据；关闭 replay 时无额外开销；异常用例覆盖工具调用失败与 SSE 中断时的字段状态；JSONL 向后兼容。
+
+#### C7 — API Key 花费额度
+
+- **来源**：矩阵 #26；[W] 一次性 / 按日历周期补充 / 多 Key 共享，转发前预留、完成后结算，按转发流量估算（非供应商余额），用完跳过该 Key。
+- **现状依据**：`http/src/cost.rs:7` 内存账本 4096 事件上限、`by_key` 只记账；`http/src/keys.rs` 无 quota / spend / budget / credit / balance 字段；软 429 是速率限制（`http/src/ratelimit.rs`）。
+- **影响面**：`keys` / `cost` / 数据面鉴权路径。
+- **前置 / 风险**：**§2.1 明确「硬 quota（软限流 429 允许）」为非目标**，须先裁决是否调整边界；金额口径为转发流量估算。
+- **验收草案（待人审）**：预留—结算闭环；额度耗尽时跳过该 Key 且返回可区分错误；SSE 流中断的结算补偿；额度数值不写入日志。
+
+#### C8 — backend 候选链 / 同名模型 failover
+
+- **来源**：矩阵 #9 #27；[D3] regular 候选耗尽 → 同类 primary relay，[W] 订阅 + API 同名模型自动接续。
+- **现状依据**：`provider/src/lib.rs:260-265` 取权重最大的单个 backend，无 retry、无 backend 级 failover；全仓 `*.rs` 无 `failover`；`fallback` 仅决策器错误路径回退到单个已声明模型。
+- **影响面**：`provider` / `config`（`backend_refs` 语义可能变化）。
+- **前置 / 风险**：§1.2「无合格路径 fail closed」；须明确重试上限、幂等，以及响应开始后不切换模型。
+- **验收草案（待人审）**：按序尝试与耗尽失败；异常用例覆盖首个 backend 超时 / 非 2xx / 流中途断开；不改变现有单 backend 配置的默认行为。
+
+#### C9 — 策略一致性指标与离线复现
+
+- **来源**：矩阵 #35–#38；[D2] 论文手稿、双语数据集、`reproduce.py`、冻结问题定义与局限声明。
+- **现状依据**：`bench/cli.py:42-198` 共 8 个子命令；`bench/accuracy/runner.py:36-48` 有 `overall_accuracy` + per-tier recall + 混淆矩阵但需连 live router；`bench/corpus/README.md:3` 明示 bundled tiny fixtures、非官方 DRACO 或完整 MMLU-Pro；bench Python 中无等价 `consistency` 指标。
+- **影响面**：`bench`（Python，report-only）；不改运行时。
+- **前置 / 风险**：指标须声明为「符合声明策略」而非任务完成率；外部数据集下载失败沿用现有 skip 约定，不伪造分数。
+- **验收草案（待人审）**：新增指标有单测（`python -m unittest discover -s bench/tests -t .`）；离线模式可对已保存决策记录复算；报告标注语料来源与排除清单。
+
+### 7.3 需先行裁决的边界冲突
+
+| 候选 | 冲突点 | 需裁决的问题 |
+|---|---|---|
+| C1 | §1.2「一次请求禁止串跑多种决策器」 | 重判仅指跨请求边界，是否需写入硬不变量说明 |
+| C2 | §1.2「检测 ≠ 执行」「输出必须是 typed `RouteDecision`」 | 三问答案归一规则与 `min_confidence` 语义 |
+| C3 / C4 | §1.2「Preference 不得覆盖 Location」 | 评分 / 信任度属 Preference，须保证不越过硬剪枝 |
+| C7 | §2.1「硬 quota（软限流 429 允许）」为非目标 | 是否调整非目标边界，或仅做「记账不拦截」的软额度 |
+| C8 | §1.2「无合格路径 fail closed」 | 按序重试与 fail closed 的边界 |
+
+### 7.4 文档口径一致性待办（非候选需求）
+
+[`docs/hiroute-vs-aria-router.md`](docs/hiroute-vs-aria-router.md) §7 登记了 `README.md` / `README_cn.md` 既有三方对比表中若干 ✅ 与源码状态不符的判定（硬约束剪枝范围、Bounded failover、执行证据留存链、长周期委托、Takeaway 的单向表述）。属**文档修订**，不入候选池、不在本章排期；本章按最小改动原则不修改 README 本身。
+
+### 7.5 人审检查项
+
+1. 逐条确认 C1–C9 是否在产品边界内，尤其 C7 与 §2.1 的冲突。
+2. 确认 §1.2 硬不变量在任何候选下都不被破坏。
+3. 确认 C6 为 C3 / C5 的前置，排序合理。
+4. 确认 HiRoute 的准确率与成本数字未被写成验收目标值。
+5. 审核通过后，另行按 Harness 流程生成 / 执行 `task.md`；在此之前本章保持「未排期」。
+
+---
+
+## 8. Router Web UI：impeccable 渲染审计与视觉优化（U1 · 计划稿 · 待人审激活）
+
+> **状态声明**：本章是与 §7 **并列、互不隶属**的独立需求，编号 **U1**，不占用 `C1–C9`、不改动 §1–§7 任何条款。
+> 与 [`docs/implementation-plan.md`](docs/implementation-plan.md) 的任务卡 T99 / 里程碑 M6、[`task.md`](task.md) 阶段 T 的 T99 三处对应，统一标注「**计划稿 · 待人审激活**」。
+> 依本文件第 3 行与 `AGENTS.md` 的 Harness 约定，**本章仍须人工逐项审核**，审核通过前不进入编码、不成为已激活待办；§7 候选池的「未排期」状态不因本章变化。
+> 参考实现来自工作区同级 `playground` / `serve` 仓的已落地 impeccable 工具链（只读参考，不修改）；本仓当前 **无任何 impeccable 文件**。
+
+### 8.1 目标与定位
+
+- 在 `dashboard/`（管理面同端口 React SPA）落地 **impeccable 4.8.0** 渲染审计工具链，按审计结论**完成视觉重做**，并建立回归护栏。
+- 作用对象是 §2.1 / §1.1 阶段 F-dashboard 已交付的 SPA 页面与样式；**不改变 dashboard 功能行为**：API 契约、SSE 流式、路由响应头面板、localStorage 会话侧栏、`--no-dashboard` 语义均保持。
+- 本节只定义需求边界与验收；可执行级的目标文件、单测用例、验证命令与合并顺序见 [`docs/implementation-plan.md`](docs/implementation-plan.md) §5 的 T99 任务卡。
+
+### 8.2 工具链形态（实施阶段新增）
+
+| 产物 | 内容 |
+|------|------|
+| `PRODUCT.md` | `impeccable:product-schema 1` 设计契约，**按 router 运维面板定位重写**，不照抄 playground 的四个 playground / 13 语言描述 |
+| `dashboard/.impeccable/config.json` | 检测器引擎映射；playground 仅配 `.vue → html`，**本仓为 `.tsx`，支持情况须先核实**（§8.8） |
+| `scripts/audit-ui.sh` | 五种模式 `--static` / `--dom` / `--url` / `--browser` / `--list-rules`；runner 按 **npm / node_modules** 适配（playground 用 bun，不可照抄） |
+| `docs/impeccable-audit.md` | 基线记录：Tooling 表、Detection modes、findings → 修复 → 残余项、复跑命令 |
+| `dashboard/tests/style.spec.*` / `render-snapshot.spec.*` | 静态样式护栏 + jsdom 渲染快照 |
+
+- CLI 版本与环境变量口径对齐参考实现：`impeccable` 4.8.0、`IMPECCABLE_VERSION` / `IMPECCABLE_BIN` / `IMPECCABLE_BROWSER` / `PREVIEW_PORT` / `AUDIT_BASE_URL` / `AUDIT_ROUTES` / `AUDIT_THEMES` / `AUDIT_OUT_DIR`（`detect-out`）/ `AUDIT_PAGE_TIMEOUT`。
+- `--static` 为源码级扫描（退出码 0/2，无需浏览器）；`--dom` 用 jsdom 渲染后 DOM 跑元素级规则（无需浏览器，看不到 layout）；`--url` 用真实 Chrome/Chromium/Edge 渲染态扫描（权威，需浏览器）。
+- `detect-out/` 须加入 `.gitignore`。
+
+### 8.3 页面矩阵（按本仓实际，不照抄 playground）
+
+- **13 条路由**（`dashboard/src/App.tsx:166-181`）：`/login`、`/register`、`/`、`/account`、`/cost`、`/cost-competence`、`/keys`、`/users`（admin）、`/config`、`/topology`、`/providers`、`/replay`、`/playground`。
+- **主题**：`light` / `dark`（`dashboard/src/theme.ts`、`components/ThemeSwitch.tsx`）。
+- **无语言维度**：`dashboard/src` 无 i18n（仅 `Account.tsx` 的 `toLocaleString()` 用于日期格式化），文案硬编码英文；`dashboard/index.html:2` 的 `<html lang="en">` 属审计关注项。
+- 审计矩阵 = 13 路由 × 双主题；**不得**引入 playground 的 5 路由 × 双主题 × 13 语言口径。
+
+### 8.4 视觉重做范围
+
+- 作用文件：4 个 CSS（`dashboard/src/index.css`、`App.module.css`、`pages/page.module.css`、`components/playground/playground.module.css`）、`App.tsx` 与相关 `pages/*` / `components/*`、`dashboard/index.html`、`dashboard/vite.config.ts`。
+- 设计契约方向（以 `PRODUCT.md` 定稿为准）：单色、直角、功能文案字号下限、WCAG AA 对比度、禁渐变与不一致圆角、动效只用 transform/opacity、本地字体栈替代外部 CDN。
+- 已可预见的审计 findings：`dashboard/index.html:7-12` 引用外部 Google Fonts CDN、`:2` 硬编码 `lang="en"`，处理结论须写入 `docs/impeccable-audit.md`。
+- **功能等价是硬约束**：视觉重做不得改动 `dashboard/src/api.ts` 的请求契约与 `x-aria-router-*` 响应头展示逻辑。
+
+### 8.5 测试护栏与 CI
+
+- `dashboard/package.json` 现仅 `dev` / `build` / `preview`，**无 test / lint / a11y 脚本、无 vitest / jsdom / testing-library**；须新增 `test`、`audit`、`audit:dom`、`audit:url`、`audit:browser`、`audit:rules` 与相应 devDependency（**需 G11 裁决**）。
+- 护栏覆盖：字号下限、对比度、`radius`、禁渐变 / uppercase / letter-spacing、动效属性白名单；快照覆盖 13 路由 × 双主题。
+- **CI 现状**：`.github/workflows/` 无任何 dashboard 构建 / 检查 job；dashboard 目前仅由 `http/build.rs:5,74-77` 隐式触发 `npm --prefix dashboard run build`，且失败仅告警（CI 可能静默跳过）。本需求须新增显式 job，把 `npm --prefix dashboard ci && npm --prefix dashboard run build` 与护栏测试设为必过。
+
+### 8.6 验收
+
+**正常路径**
+
+1. `npm --prefix dashboard ci && npm --prefix dashboard run build` 与新增 `test` 全绿。
+2. `./scripts/audit-ui.sh --static` 0 primary findings；`--dom` 全路由 × 双主题 0 primary findings；`--url` 在有 Chrome 的机器执行并把结果写入 `docs/impeccable-audit.md`。
+3. 视觉重做后 13 个页面在双主题下功能等价，API 契约与 SSE 行为不变。
+
+**异常路径**
+
+1. `audit-ui.sh` 未知参数报错退出；`--browser` 找不到浏览器时退出 1 并给安装提示；`--static` 退出码 0/2；`--dom` 无浏览器可运行；`PREVIEW_PORT` 占用时拒绝复用；扫描超时有明确日志。
+2. CI 无浏览器时 `--url` 记录 `skipped`，**不伪造成功**。
+3. 样式护栏任一 token / 字号 / 效果回归即失败；快照缺失或为空即失败。
+
+### 8.7 与 §7 候选池及 C5 的关系
+
+- U1 **不占用 `C` 编号**，不进入 §7 候选池；§7 的 `C1–C9`、状态声明与「未排期」标注一字不改。
+- U1 与 C4 / C5 共改 `dashboard/src/App.tsx` / `api.ts`，与 C5 在 4 个 CSS 上重叠最大。**首选把 C4/C5 的 dashboard 部分与 U1 合并为同一批次**；若分批，则 U1 的设计 token / 工具链 / CI 骨架先行，再由 C4 → C5 在新设计系统上加页面，避免 C5 新页 CSS 被 U1 重做推翻。详见 `docs/implementation-plan.md` §3、§4。
+- U1 不依赖 C1–C9 的 Rust 运行时改动；可与 M2 的低耦合任务并行。
+
+### 8.8 风险与待核实项（人审时逐项确认）
+
+| # | 待核实 / 风险 | 处理 |
+|---|---------------|------|
+| 1 | **impeccable 静态引擎对 `.tsx`/JSX 的支持未核实**（参考实现只映射 `.vue → html`） | 列为 U1 首个调查项；降级方案：静态扫描限定 `.css` + `index.html`，元素级规则交给 `--dom` / `--url` |
+| 2 | 新增前端 devDependency 影响 `npm ci` 与 CI 时间 | G11 裁决；不允许则 U1 降级为「一次性检查 + 最小修复」并重新入审 |
+| 3 | `--url` 依赖真实浏览器 | CI 无浏览器按 `skipped` 记录，不伪造成功 |
+| 4 | 设计契约须按 router 运维面板定位重写 | 不照抄 playground 的产品描述 |
+| 5 | CI 当前无 dashboard job、构建失败仅告警 | 新增显式必过 job |
+| 6 | `detect-out` 未 ignore、外部字体 CDN 与 `lang` 硬编码 | 与审计 findings 一并处理 |
+
+### 8.9 非范围（本次交付）
+
+本需求章节、任务卡 T99 与 `task.md` T99 均为**文档计划**。以下属人审通过后的实施阶段，**本次交付不创建、不安装、不修改**：`PRODUCT.md`、`scripts/audit-ui.sh`、`dashboard/.impeccable/config.json`、`docs/impeccable-audit.md`、`dashboard/tests/*`、`dashboard/package.json` 的依赖与 scripts、4 个 CSS 与组件、`.github/workflows/ci.yml`、`.gitignore`。
