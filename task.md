@@ -421,3 +421,39 @@ Rust(webpki-roots) 等自带信任库需升级。router 是 Rust 工作区，出
   - `ffi` 的两个 stream 测试共享全局 `STREAM_CALLED`，并行执行互相污染（改为经回调 `user` 传各自计数器）
   - `afm_d::systemone_timeout_is_reported` 的 `timeout_ms = 1` 会在 TCP 建连前就超时，桩服务的 `accept()`
     永远等不到连接、`server.await` 无界等待导致偶发挂死（改为 100ms 预算 + 500ms 桩延迟 + 2s 有界 join）
+
+## T86 — Windows x86_64 测试兼容（已完成）
+
+`cargo test --workspace` 在 `windows-latest`（release 矩阵）暴露 2 个失败 + 1 个 `dead_code` 警告：
+
+- [x] `upgrade::tests::install_cli_requires_binary_and_replaces_target`：把目标设为目录时，Linux 的最终
+      `rename` 报 `EISDIR`，Windows 的 `MoveFileEx` 报 access-denied（`PermissionDenied`）。断言改为
+      **编译期常量** `REPLACE_DIR_ERR`（`#[cfg(windows)]` / `#[cfg(not(windows))]`），避免运行时双分支
+      在单一平台上产生未覆盖行；同时补一条「目录未被改写」的断言。
+- [x] `upgrade::tests::upgrades_cli_and_ffi_end_to_end`：测试固定用 `.tar.gz` 与 `aria-router` /
+      `lib/libaria-router_ffi.so` 造包，而 Windows 的 CLI 资产是 `.zip`、包内二进制是 `aria-router.exe`、
+      FFI 成员是 `aria-router_ffi.dll`（见 `release.yml`），于是 `extract_archive` 按扩展名走 zip 解压并报
+      `Could not find EOCD`。改为 `cli_archive()` / `ffi_archive_member()` 两个编译期选择的辅助函数，
+      归档格式与包内文件名都取自被测代码的平台常量，断言也用同一常量。
+- [x] `bin` 的 `read_secret` 仅被 Unix 掩码输入路径调用，Windows 非测试构建报 `function is never used`
+      （release 矩阵的 `clippy --all-targets -D warnings` 会直接失败）。改为 `#[cfg(any(unix, test))]`：
+      生产构建只在 Unix 存在，测试仍可在所有平台覆盖退格/终止符分支。
+
+验证：Linux 全量测试 + clippy + 覆盖率门禁仍为 100.00%（19592/19592 行）。
+
+## T87 — 绑定套件 Kotlin 编译在 CI 失败（已完成）
+
+`Bindings Host / Host binding suites` 在 `ubuntu-latest` 上跑 `:compileKotlin` 时崩在
+`org.jetbrains.kotlin.com.intellij.util.lang.JavaVersion.parse`：Kotlin 2.0.21 内嵌的 IntelliJ
+版本解析不认识 runner 默认 JDK 的运行时版本串（JDK 23+），Gradle 又用自身 JVM 启动 Kotlin
+编译守护进程，于是整条链在 JDK 25 上不可用（`publish-maven.yml` 早已钉 Temurin 17，故只有
+host 套件暴露）。
+
+- [x] `.github/workflows/bindings-host.yml`：新增 `actions/setup-java@v4`（temurin 17 + `cache: gradle`），
+      让 Gradle 与 Kotlin 编译守护进程都跑在 `kotlin { jvmToolchain(17) }` 的目标 JDK 上。
+- [x] `.github/workflows/ci.yml` 的 `bindings` job 同样加 `setup-java`，避免两个入口口径漂移。
+- [x] `scripts/run-binding-tests.sh`：Kotlin 步骤前打印 `java -version`，若主版本 > 22 直接失败并提示
+      「把 JAVA_HOME 指向 JDK 17/21」，不再把 40 行编译器栈当唯一线索（不吞错、不打哑谜）。
+- 验证：`bash -n` 通过；版本串解析对 `17.0.11` / `25` / `21.0.3` / `1.8.0_402` 均正确；
+      两个 workflow 的 YAML 结构解析通过。本机只有 JDK 17 且 Gradle 依赖拉取不可用，
+      故 Kotlin 编译本身未在本机执行，由 CI 复跑确认。

@@ -52,6 +52,8 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 ## 进行中需求
 阶段 **R**（T50–T56）已落地。**T81** upgrade、**T82–T84** AFM-D 决策器（`router: afm-d`）已落地。
 **T85** 工程质量升级（依赖升级 + 100% 行覆盖门禁 + CI）已落地，见 `task.md` / `docs/coverage-exclusions.md`。
+**T86** Windows x86_64 测试兼容（平台常量 + 归档格式）已落地。
+**T87** 绑定套件 Kotlin 编译失败（CI 钉 JDK 17）已落地。
 
 ## Trust stores (eMudhra/emSign CA key compromise, 2026-10)
 

@@ -241,6 +241,11 @@ fn set_termios(fd: libc::c_int, t: &libc::termios) -> io::Result<()> {
 
 /// Byte loop shared by the masked prompt: `*` echo, backspace handling, and
 /// stop conditions that do not require a real terminal.
+///
+/// Only the Unix terminal path calls it in a normal build; the tests exercise it
+/// on every platform, so `test` keeps it reachable there (no dead-code warning
+/// on Windows).
+#[cfg(any(unix, test))]
 fn read_secret<R: io::Read, W: io::Write>(
     input: &mut R,
     echo: &mut W,

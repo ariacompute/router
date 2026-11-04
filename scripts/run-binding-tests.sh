@@ -65,6 +65,20 @@ elif [[ -x "$ROOT/bindings/kotlin/gradlew" ]]; then
 fi
 if [[ -n "$GRADLE_BIN" && -f bindings/kotlin/build.gradle ]]; then
   echo "== kotlin =="
+  # Kotlin 2.0.x cannot parse runtime version strings it does not know
+  # (java.lang.IllegalArgumentException in JavaVersion.parse), and Gradle runs
+  # the Kotlin compile daemon on its own JVM. Fail with an actionable message
+  # instead of a compiler stack trace. CI pins Temurin 17 via setup-java.
+  if command -v java >/dev/null; then
+    JAVA_VERSION_LINE="$(java -version 2>&1 | head -1)"
+    echo "java: $JAVA_VERSION_LINE"
+    JAVA_MAJOR="$(printf '%s\n' "$JAVA_VERSION_LINE" | sed -E 's/.*version "([0-9]+).*/\1/')"
+    if [[ "$JAVA_MAJOR" =~ ^[0-9]+$ ]] && (( JAVA_MAJOR > 22 )); then
+      echo "error: Kotlin 2.0.21 in bindings/kotlin needs JDK <= 22 (found $JAVA_MAJOR);" >&2
+      echo "       point JAVA_HOME at a JDK 17 or 21 toolchain and re-run." >&2
+      exit 1
+    fi
+  fi
   (cd bindings/kotlin && "$GRADLE_BIN" test)
 else
   echo "== kotlin skipped (gradle/java not found) =="

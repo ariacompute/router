@@ -91,6 +91,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # Kotlin 2.0.x fails to parse newer runtime version strings
+      # (JavaVersion.parse), so Gradle and the Kotlin compile daemon must run on
+      # the JDK the module targets (`kotlin { jvmToolchain(17) }`).
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
       - uses: Swatinem/rust-cache@v2
       - name: Run binding host tests
         run: |

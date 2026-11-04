@@ -777,6 +777,37 @@ mod tests {
         )
     }
 
+    /// FFI library name as it appears inside the release archive, matching
+    /// `install_ffi`'s platform list and `release.yml`. Compile-time selected so
+    /// only the target's spelling exists.
+    #[cfg(windows)]
+    fn ffi_archive_member() -> &'static str {
+        "aria-router_ffi.dll"
+    }
+    #[cfg(not(windows))]
+    fn ffi_archive_member() -> &'static str {
+        "libaria-router_ffi.so"
+    }
+
+    /// The CLI archive is a `.zip` on Windows and a `.tar.gz` elsewhere, and the
+    /// packaged binary carries the platform suffix (`aria-router.exe`).
+    #[cfg(windows)]
+    fn cli_archive(bytes: &[u8]) -> Vec<u8> {
+        zip_archive(&[(CLI_BIN_NAME, bytes)])
+    }
+    #[cfg(not(windows))]
+    fn cli_archive(bytes: &[u8]) -> Vec<u8> {
+        tar_gz(&[(CLI_BIN_NAME, bytes)])
+    }
+
+    /// Error kind reported when the install target is a directory: Linux fails
+    /// the final rename with `EISDIR`, Windows cannot replace a directory with
+    /// `MoveFileEx` and reports access-denied.
+    #[cfg(windows)]
+    const REPLACE_DIR_ERR: io::ErrorKind = io::ErrorKind::PermissionDenied;
+    #[cfg(not(windows))]
+    const REPLACE_DIR_ERR: io::ErrorKind = io::ErrorKind::IsADirectory;
+
     #[test]
     fn upgrades_cli_and_ffi_end_to_end() {
         with_home(|home| {
@@ -784,8 +815,9 @@ mod tests {
             block_on(async move {
                 let version = "9.9.9";
                 let (cli_name, ffi_name) = archive_names(version);
-                let cli_bytes = tar_gz(&[("aria-router", b"#!/bin/sh\necho new\n")]);
-                let ffi_bytes = tar_gz(&[("lib/libaria-router_ffi.so", b"ELF")]);
+                let cli_payload: &[u8] = b"#!/bin/sh\necho new\n";
+                let cli_bytes = cli_archive(cli_payload);
+                let ffi_bytes = tar_gz(&[(ffi_archive_member(), b"ELF")]);
                 let base = spawn_release_server(
                     version,
                     Some("v9.9.9"),
@@ -809,14 +841,14 @@ mod tests {
                 .await
                 .unwrap();
 
-                assert_eq!(fs::read(&dest).unwrap(), b"#!/bin/sh\necho new\n");
+                assert_eq!(fs::read(&dest).unwrap(), cli_payload);
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
                     let mode = fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
                     assert_eq!(mode, 0o755);
                 }
-                let lib = lib_dir().unwrap().join("libaria-router_ffi.so");
+                let lib = lib_dir().unwrap().join(ffi_archive_member());
                 assert_eq!(fs::read(&lib).unwrap(), b"ELF");
                 // Unknown asset names are reported as 404 by the fake release API.
                 let missing = download_url(
@@ -1026,7 +1058,8 @@ mod tests {
         let as_dir = dir.path().join("dir-target");
         fs::create_dir_all(&as_dir).unwrap();
         let err = install_cli_to(&extract, &as_dir).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::IsADirectory);
+        assert_eq!(err.kind(), REPLACE_DIR_ERR, "unusable target: {err:?}");
+        assert!(as_dir.is_dir(), "the directory must be left untouched");
         // No temp file left behind.
         let leftovers: Vec<_> = fs::read_dir(dest.parent().unwrap())
             .unwrap()
