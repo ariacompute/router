@@ -350,8 +350,18 @@ mod tests {
 
     #[test]
     fn connect_mode_models_route_and_complete() {
+        // Accept then close: a portable "upstream down" that fails at once.
+        // A closed port is not portable — some platforms block on the connect
+        // instead of refusing, and the SDK client sets no timeout.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || loop {
+            let (sock, _) = listener.accept().unwrap();
+            drop(sock);
+        });
+
         let mut r = Router::new();
-        r.connect("http://127.0.0.1:1");
+        r.connect(&endpoint);
         assert_eq!(r.models().unwrap(), serde_json::json!({"data": []}));
         assert_eq!(r.last_route(), serde_json::json!({}));
         // Connection refused → Upstream, not a silent empty result.

@@ -987,11 +987,45 @@ mod tests {
 
     #[tokio::test]
     async fn llm_timeout_is_reported() {
-        // Unroutable port: the send fails fast with an extension error.
-        let err = agent_with("http://127.0.0.1:1", None)
+        use tokio::io::AsyncReadExt;
+
+        // Accept the connection but never answer: only the deadline can fire.
+        // (A closed port is not a portable signal — Windows may hang on the
+        // connect until the deadline and surface `Timeout` instead of a
+        // connection error, which is what made this test flaky.)
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Hand the accepted socket to the test so it stays open (no EOF) while
+        // the client waits for a response; holding it in a channel avoids a
+        // never-completing future in the stub.
+        let (hold_tx, hold_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf).await;
+            let _ = hold_tx.send(sock);
+        });
+
+        let mut task = task_for(vec![card("local/a")], 1);
+        task.timeout_ms = 100;
+        let err = agent_with(&format!("http://127.0.0.1:{}", addr.port()), None)
+            .route(task, &ToolRuntime::default())
+            .await
+            .expect_err("timeout");
+        assert!(matches!(err, RouterError::Timeout(_)), "{err}");
+        // Closing the receiver drops the held socket; the stub already finished.
+        drop(hold_rx);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn llm_bad_endpoint_is_reported_as_extension_error() {
+        // An unparseable endpoint fails while the request is built, on every
+        // platform and without any network.
+        let err = agent_with("not a url", None)
             .route(task_for(vec![card("local/a")], 1), &ToolRuntime::default())
             .await
-            .expect_err("connection refused");
+            .expect_err("bad endpoint");
         assert!(matches!(err, RouterError::Extension(_)), "{err}");
     }
 

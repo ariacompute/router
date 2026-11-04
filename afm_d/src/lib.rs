@@ -1597,17 +1597,27 @@ mod tests {
 
     #[tokio::test]
     async fn systemone_connection_error_mentions_endpoint() {
+        // Accept then close: a portable "upstream is down" that fails at once.
+        // A closed port is not portable — some platforms block on the connect
+        // until the deadline and return `Timeout`, which carries no endpoint.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            drop(sock);
+        });
+
         let mut task = base_task(vec![card("local/a"), card("local/b")]);
         task.state = json!("User message: unreachable systemone probe unique theta");
         let err = AfmDDecisioner {
-            endpoint: Some("127.0.0.1:1".into()),
+            endpoint: Some(addr.clone()),
         }
         .route(task)
         .await
-        .expect_err("connection refused");
+        .expect_err("connection failure");
         let msg = err.to_string();
         assert!(msg.contains("afm-d systemone"), "{msg}");
-        assert!(msg.contains("127.0.0.1:1"), "{msg}");
+        assert!(msg.contains(&addr), "{msg}");
     }
 
     #[tokio::test]

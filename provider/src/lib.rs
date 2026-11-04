@@ -612,9 +612,22 @@ providers:
         assert_eq!(pool.failures_map().get("m").copied(), Some(0));
     }
 
+    /// Loopback socket that accepts one connection and closes it: a portable
+    /// "upstream is down" that fails immediately. A closed port is not portable
+    /// (some platforms block on the connect until the 300 s client timeout).
+    async fn closing_endpoint() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            drop(sock);
+        });
+        addr.to_string()
+    }
+
     #[tokio::test]
     async fn forward_connection_failure_records_failure() {
-        let doc = doc_with_backend("127.0.0.1:1");
+        let doc = doc_with_backend(&closing_endpoint().await);
         let pool = PoolState::default();
         let err = forward(&doc, "m", &chat_req(), &[], &pool)
             .await
@@ -636,7 +649,7 @@ providers:
 
     #[tokio::test]
     async fn forward_sse_connection_failure_records_failure() {
-        let doc = doc_with_backend("127.0.0.1:1");
+        let doc = doc_with_backend(&closing_endpoint().await);
         let pool = PoolState::default();
         let err = forward_sse_stream(&doc, "m", &chat_req(), &[], &pool)
             .await

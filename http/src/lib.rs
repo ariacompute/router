@@ -2473,8 +2473,17 @@ global:
         let (status, _, _) = call(&app, "POST", "/v1/chat/completions", Some(body), &[]).await;
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
 
-        // Upstream unreachable → 502 from the catch-all error arm.
-        let doc = RouterDocument::from_yaml_str(&tiny_yaml("127.0.0.1:1")).unwrap();
+        // Upstream broken → 502 from the catch-all error arm. Accept and close
+        // immediately: a closed port does not necessarily fail fast (Windows CI
+        // blocked on the connect until the client timeout, which would map to
+        // 504 instead).
+        let closing = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closing_addr = closing.local_addr().unwrap();
+        let _closing = tokio::spawn(async move {
+            let (sock, _) = closing.accept().await.unwrap();
+            drop(sock);
+        });
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&closing_addr.to_string())).unwrap();
         let (st, _dir) = isolated_state(doc);
         let (status, _, _) = call(
             &data_router(st),

@@ -464,3 +464,27 @@ host 套件暴露）。
 - 验证：`bash -n` 通过；版本串解析对 `17.0.11` / `25` / `21.0.3` / `1.8.0_402` 均正确；
       两个 workflow 的 YAML 结构解析通过。本机只有 JDK 17 且 Gradle 依赖拉取不可用，
       故 Kotlin 编译本身未在本机执行，由 CI 复跑确认。
+
+## T88 — Windows 上依赖「连接被拒」的用例不稳定（已完成）
+
+`agent::tests::llm_timeout_is_reported` 在 `windows-latest` 失败：用例拨 `http://127.0.0.1:1`
+期望连接被拒（`Extension`），但该 runner 上 connect 没有快速失败，而是在 2s 截止时间后才由
+`tokio::time::timeout` 报 `Timeout`，断言失配（panic 打印的正是 `timeout: builtin agent`）。
+同一类「拨关闭端口当错误源」的用例都可能这样，且部分客户端根本没有超时。
+
+- [x] `agent`：拆成两个确定性用例。
+      `llm_timeout_is_reported` 改为本地监听器 accept 后不回包（socket 经 oneshot 移交测试函数持有，
+      既保持连接又不留永不完成的 future），100ms 预算 → 断言 `RouterError::Timeout`；
+      新增 `llm_bad_endpoint_is_reported_as_extension_error`，用无法解析的 endpoint 在**请求构造期**
+      失败（无网络、跨平台一致）→ 断言 `RouterError::Extension`。
+- [x] `afm_d::systemone_connection_error_mentions_endpoint`：改用 accept 后立即关闭的本地监听器，
+      错误仍在 `send()` 阶段产生（消息里继续带 endpoint），但不再依赖平台的 connect 语义。
+- [x] `provider::forward_connection_failure_records_failure` / `forward_sse_connection_failure_records_failure`：
+      同上，新增 `closing_endpoint()` 辅助函数；否则 Windows 上会一直等到 provider 客户端 300s 超时。
+- [x] `http::rate_limit_and_upstream_failure_statuses` 的「upstream 不可达 → 502」：改用 accept 后
+      关闭的监听器；阻塞到 300s 会被映射成 504，断言本来就是 502。
+- [x] `bindings/rust::connect_mode_models_route_and_complete`：SDK 的 reqwest 客户端没有超时，
+      关闭端口可能永久悬挂；改为 accept-后-关闭的监听器（后台线程循环 accept）。
+
+验证：`cargo test --workspace --all-features`、`clippy -D warnings`、`scripts/coverage.sh`
+（100.00%，19636 行）全绿；上述用例在 Linux 均为毫秒级完成。
