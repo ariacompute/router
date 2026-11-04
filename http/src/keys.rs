@@ -1584,9 +1584,12 @@ mod tests {
 
     #[test]
     fn persist_reports_unwritable_paths() {
-        let mut store = KeyStore::empty(std::path::PathBuf::from(
-            "/proc/definitely-missing/keys.json",
-        ));
+        // A regular file as a path component cannot be a directory on any
+        // platform (`/proc/...` was Linux-only, and is writable on Windows).
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("not-a-dir");
+        std::fs::write(&blocker, b"x").unwrap();
+        let mut store = KeyStore::empty(blocker.join("keys.json"));
         let err = store.create("ci").unwrap_err();
         assert!(matches!(err, RouterError::Io(_)), "{err}");
     }

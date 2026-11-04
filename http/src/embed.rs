@@ -51,26 +51,28 @@ fn dashboard_router(
 }
 
 async fn serve_embedded(uri: Uri) -> Response {
-    let key = normalize(uri.path());
-    if let Some(data) = lookup(&key) {
-        return bytes_response(data, content_type(&key));
-    }
-    // SPA fallback: unknown paths without a file extension serve index.html;
-    // missing asset files (with an extension) return 404.
-    if key.contains('.') {
-        return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("not found"))
-            .unwrap();
-    }
-    bytes_response(DASHBOARD_INDEX, "text/html; charset=utf-8")
+    asset_response(&normalize(uri.path()), DASHBOARD_FILES, DASHBOARD_INDEX)
 }
 
-fn lookup(key: &str) -> Option<&'static [u8]> {
-    DASHBOARD_FILES
-        .iter()
-        .find(|f| f.path == key)
-        .map(|f| f.data)
+/// Resolve one request key against an asset table. Split out from
+/// `serve_embedded` so the resolution rules are testable independently of
+/// whether this build actually embedded `dashboard/dist` (a build without npm
+/// ships an empty table).
+fn asset_response(key: &str, files: &[EmbeddedFile], index: &'static [u8]) -> Response {
+    if let Some(file) = files.iter().find(|f| f.path == key) {
+        return bytes_response(file.data, content_type(file.path));
+    }
+    // SPA fallback: the entry point and extension-less routes serve index.html;
+    // missing *assets* (anything else with an extension) are 404. `index.html`
+    // is checked explicitly because a build without embedded assets still owes
+    // the entry point a response instead of "missing file".
+    if key == "index.html" || !key.contains('.') {
+        return bytes_response(index, "text/html; charset=utf-8");
+    }
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(Body::from("not found"))
+        .unwrap()
 }
 
 fn normalize(path: &str) -> String {
@@ -166,6 +168,53 @@ mod tests {
         assert_eq!(percent_decode("%2F"), "/");
         assert_eq!(percent_decode("%41"), "A");
         assert_eq!(percent_decode("%4"), "%4");
+    }
+
+    #[tokio::test]
+    async fn asset_response_serves_assets_spa_routes_and_404() {
+        // A synthetic table keeps the resolution rules independent of whether
+        // this build embedded `dashboard/dist` (a build without npm ships none).
+        static FILES: &[EmbeddedFile] = &[
+            EmbeddedFile {
+                path: "index.html",
+                data: b"<html>idx</html>",
+            },
+            EmbeddedFile {
+                path: "assets/app.js",
+                data: b"console.log(1)",
+            },
+        ];
+
+        async fn read(res: Response) -> (StatusCode, String) {
+            let status = res.status();
+            let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+                .await
+                .unwrap();
+            (status, String::from_utf8_lossy(&bytes).into_owned())
+        }
+
+        let (status, text) = read(asset_response("index.html", FILES, b"<html>none</html>")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(text.contains("idx"), "{text}");
+
+        let (status, text) = read(asset_response("assets/app.js", FILES, b"")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(text, "console.log(1)");
+
+        // Extension-less routes fall back to the entry point.
+        let (status, text) = read(asset_response("keys", FILES, b"<html>none</html>")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(text.contains("none"), "{text}");
+
+        // A build without embedded assets (no npm on the builder) still answers
+        // the entry point instead of reporting a missing file.
+        let (status, text) = read(asset_response("index.html", &[], b"<html>none</html>")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(text.contains("none"), "{text}");
+
+        // A missing asset stays 404, even in a build without an embedded index.
+        let (status, _) = read(asset_response("assets/missing.js", FILES, b"")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     fn state() -> (Arc<AppState>, tempfile::TempDir) {

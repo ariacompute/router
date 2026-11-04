@@ -488,3 +488,25 @@ host 套件暴露）。
 
 验证：`cargo test --workspace --all-features`、`clippy -D warnings`、`scripts/coverage.sh`
 （100.00%，19636 行）全绿；上述用例在 Linux 均为毫秒级完成。
+
+## T89 — dashboard 与 keys 的 Windows 失败（已完成）
+
+- [x] `embed::tests::dashboard_router_serves_disk_then_embedded_then_api_only`：Windows runner 没有 npm，
+      `http/build.rs` 退回空嵌入（`DASHBOARD_FILES = &[]`、`DASHBOARD_HAS = false`）。而该用例显式用
+      `embedded = true` 请求 `/`，`serve_embedded` 归一化得到 `index.html`、命中「带扩展名即视为缺失资源」
+      规则 → 404，断言 200 失败。
+      修法：把解析规则抽成纯函数 `asset_response(key, files, index)`，并把 `index.html` 显式列为
+      **入口点**（无扩展名路由与入口点都回 index），不再因为「没有嵌入资源」把入口点当成缺失文件；
+      `serve_embedded` 只做 `normalize` + 委托。规则因此与构建产物无关。
+      新增 `asset_response_serves_assets_spa_routes_and_404` 用例，用**自造资产表**覆盖
+      「命中资源 / 无扩展名路由 / 空表入口点 / 缺失资源 404」四条规则——即使构建没有嵌入任何资源，
+      这些行也一定被覆盖（本地与 CI 覆盖率口径不再依赖是否装了 npm）。
+      验证方式：临时移走 `dashboard/dist` 并把 `npm` 换成 `exit 1` 的假程序，重建后 `http` 全部 188 个
+      用例通过（即 Windows 的构建条件），恢复 dist 后再次通过。
+- [x] `keys::tests::persist_reports_unwritable_paths`：原用例用 `/proc/definitely-missing/keys.json`，
+      这是 Linux 专属路径，Windows 上会落到当前盘符下并可创建成功（`create` 返回 `Ok`）。
+      改为「把一个普通文件当作父目录」：`<tmp>/not-a-dir/keys.json`，`create_dir_all` 在两个平台都失败，
+      断言 `RouterError::Io` 保持不变。
+
+验证：`cargo test --workspace --all-features`、`clippy -D warnings`、`scripts/coverage.sh`
+（100.00%，19658 行）全绿。
