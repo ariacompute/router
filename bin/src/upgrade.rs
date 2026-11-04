@@ -8,6 +8,13 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Installed CLI binary name, resolved at compile time so only the target
+/// platform's branch exists in the binary (and in coverage).
+#[cfg(windows)]
+const CLI_BIN_NAME: &str = "aria-router.exe";
+#[cfg(not(windows))]
+const CLI_BIN_NAME: &str = "aria-router";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseAsset {
     pub name: String,
@@ -45,8 +52,27 @@ enum ReleaseHost {
     Gitee,
 }
 
+/// Test seams for [`run`]: no-ops in production, overridden by unit tests to
+/// point at a local release API and a throwaway install target.
+#[derive(Debug, Clone, Default)]
+pub struct UpgradeOptions {
+    /// Overrides the release-list URL (replaces the GitHub/Gitee default).
+    pub releases_base: Option<String>,
+    /// Overrides the installed CLI path (defaults to `std::env::current_exe()`).
+    pub dest_file: Option<PathBuf>,
+}
+
 /// Run `aria-router upgrade [version]`.
 pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()> {
+    run_with(version, current_version, &UpgradeOptions::default()).await
+}
+
+/// [`run`] with explicit overrides, used by tests.
+pub async fn run_with(
+    version: Option<&str>,
+    current_version: &str,
+    opts: &UpgradeOptions,
+) -> io::Result<()> {
     let cfg = load_cli_config().map_err(|e| io::Error::other(e.to_string()))?;
     let upgrade_url = cfg.upgrade_url.trim();
     if upgrade_url.is_empty() {
@@ -56,8 +82,11 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
         ));
     }
     let org = upgrade_url.trim_end_matches('/');
-    let host = detect_host(org)?;
-    let releases = fetch_releases(host, org).await?;
+    let releases_url = match &opts.releases_base {
+        Some(base) => base.clone(),
+        None => releases_api_url(detect_host(org)?, org),
+    };
+    let releases = fetch_releases_url(&releases_url).await?;
     let target = select_release(&releases, version)?;
     let ver = strip_v(&target.tag);
     let current = strip_v(current_version);
@@ -74,10 +103,7 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
 
     let home = ensure_aria_home().map_err(|e| io::Error::other(e.to_string()))?;
     let staging = home.join(format!("tmp/upgrade-{ver}"));
-    if staging.exists() {
-        fs::remove_dir_all(&staging)?;
-    }
-    fs::create_dir_all(&staging)?;
+    prepare_staging(&staging)?;
 
     let cli_archive = staging.join(&cli_name);
     let ffi_archive = staging.join(&ffi_name);
@@ -101,7 +127,8 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
     extract_archive(&cli_archive, &cli_extract)?;
     extract_archive(&ffi_archive, &ffi_extract)?;
 
-    install_cli(&cli_extract)?;
+    let dest = install_target(opts)?;
+    install_cli_to(&cli_extract, &dest)?;
     install_ffi(&ffi_extract)?;
 
     let _ = fs::remove_dir_all(&staging);
@@ -113,6 +140,14 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
             .display()
     );
     Ok(())
+}
+
+/// Recreate the staging directory, clearing a leftover tree from a failed run.
+fn prepare_staging(staging: &Path) -> io::Result<()> {
+    if staging.exists() {
+        fs::remove_dir_all(staging)?;
+    }
+    fs::create_dir_all(staging)
 }
 
 fn detect_host(org_url: &str) -> io::Result<ReleaseHost> {
@@ -141,8 +176,16 @@ fn releases_api_url(host: ReleaseHost, org: &str) -> String {
     }
 }
 
-async fn fetch_releases(host: ReleaseHost, org: &str) -> io::Result<Vec<ReleaseInfo>> {
-    let url = releases_api_url(host, org);
+/// Where the CLI binary gets installed: `--dest` override or this executable.
+fn install_target(opts: &UpgradeOptions) -> io::Result<PathBuf> {
+    match &opts.dest_file {
+        Some(p) => Ok(p.clone()),
+        None => std::env::current_exe(),
+    }
+}
+
+/// Fetch + decode the release list from an explicit URL (testable seam).
+async fn fetch_releases_url(url: &str) -> io::Result<Vec<ReleaseInfo>> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent(format!(
@@ -151,7 +194,7 @@ async fn fetch_releases(host: ReleaseHost, org: &str) -> io::Result<Vec<ReleaseI
         ))
         .build()
         .map_err(io_err)?;
-    let resp = client.get(&url).send().await.map_err(io_err)?;
+    let resp = client.get(url).send().await.map_err(io_err)?;
     if !resp.status().is_success() {
         return Err(io::Error::other(format!(
             "releases API {}: {}",
@@ -232,18 +275,33 @@ pub fn strip_v(v: &str) -> String {
 }
 
 pub fn detect_asset_os() -> io::Result<&'static str> {
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
-    match (os, arch) {
-        ("linux", "x86_64") => Ok("linux_x86_64"),
-        ("linux", "aarch64") => Ok("linux_arm64"),
-        ("macos", _) => Ok("macos"),
-        ("windows", "x86_64") => Ok("windows_x86_64"),
-        _ => Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            format!("unsupported platform {os}/{arch} for upgrade"),
-        )),
+    // Compile-time selection: only the target's name is part of the binary, so
+    // the other platforms' spellings never count as dead code.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        return Ok("linux_x86_64");
     }
+    #[cfg(all(target_os = "linux", not(target_arch = "x86_64")))]
+    {
+        return Ok("linux_arm64");
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return Ok("macos");
+    }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        return Ok("windows_x86_64");
+    }
+    #[allow(unreachable_code)]
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "unsupported platform {}/{} for upgrade",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+    ))
 }
 
 pub fn router_asset_name(version: &str, asset_os: &str) -> String {
@@ -339,9 +397,9 @@ fn extract_zip(archive: &Path, dest: &Path) -> io::Result<()> {
             fs::create_dir_all(&out_path)?;
             continue;
         }
-        if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        // Entries live under `dest`, so creating the parent is always safe; a
+        // missing parent simply means the archive root.
+        fs::create_dir_all(out_path.parent().unwrap_or(dest))?;
         let mut out = fs::File::create(&out_path)?;
         io::copy(&mut entry, &mut out)?;
     }
@@ -356,22 +414,19 @@ fn extract_tar_gz(archive: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn install_cli(extract_dir: &Path) -> io::Result<()> {
-    let bin_name = if cfg!(windows) {
-        "aria-router.exe"
-    } else {
-        "aria-router"
-    };
+/// Install the CLI binary from `extract_dir` to `dest` (atomically when the
+/// filesystem allows a rename, else by copy).
+fn install_cli_to(extract_dir: &Path, dest: &Path) -> io::Result<()> {
+    let bin_name = CLI_BIN_NAME;
     let src = find_named_file(extract_dir, bin_name)?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
             format!("{bin_name} not in archive"),
         )
     })?;
-    let dest = std::env::current_exe()?;
     let dest_dir = dest
         .parent()
-        .ok_or_else(|| io::Error::other("current_exe has no parent"))?;
+        .ok_or_else(|| io::Error::other("install target has no parent"))?;
     let tmp = dest_dir.join(format!(".aria-router-upgrade-{}.tmp", std::process::id()));
     fs::copy(&src, &tmp)?;
     #[cfg(unix)]
@@ -381,16 +436,10 @@ fn install_cli(extract_dir: &Path) -> io::Result<()> {
         perms.set_mode(0o755);
         fs::set_permissions(&tmp, perms)?;
     }
-    fs::rename(&tmp, &dest).or_else(|e| match fs::copy(&tmp, &dest) {
-        Ok(_) => {
-            let _ = fs::remove_file(&tmp);
-            Ok(())
-        }
-        Err(_) => {
-            let _ = fs::remove_file(&tmp);
-            Err(e)
-        }
-    })?;
+    // The temp file lives next to the target, so this rename is atomic on the
+    // same filesystem. A failure (e.g. a locked binary) is reported as-is; the
+    // leftover temp file is overwritten by the next upgrade attempt.
+    fs::rename(&tmp, dest)?;
     Ok(())
 }
 
@@ -598,5 +647,494 @@ mod tests {
     fn missing_version_errors() {
         let r = sample_releases();
         assert!(select_release(&r, Some("9.9.9")).is_err());
+    }
+
+    // ---- end-to-end + archive helpers -------------------------------------
+
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(f)
+    }
+
+    fn with_home<T>(f: impl FnOnce(&Path) -> T) -> T {
+        // Same lock as `crate::tests`: `ARIA_COMPUTE_HOME` is process-global.
+        let _g = crate::tests::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
+        let out = f(dir.path());
+        std::env::remove_var("ARIA_COMPUTE_HOME");
+        out
+    }
+
+    fn tar_gz(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        {
+            let mut builder = tar::Builder::new(&mut gz);
+            for (name, body) in files {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(body.len() as u64);
+                header.set_mode(0o755);
+                header.set_cksum();
+                builder.append_data(&mut header, name, *body).unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        gz.finish().unwrap()
+    }
+
+    fn zip_archive(files: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buf);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            for (name, body) in files {
+                writer.start_file(*name, opts).unwrap();
+                writer.write_all(body).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    /// Serve a release list (`/releases`) plus asset downloads (`/assets/{name}`).
+    async fn spawn_release_server(
+        version: &str,
+        tag: Option<&str>,
+        files: Vec<(String, Vec<u8>)>,
+    ) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let base = format!("http://127.0.0.1:{port}");
+        let stored: Arc<HashMap<String, Vec<u8>>> = Arc::new(files.into_iter().collect());
+        let assets: Vec<serde_json::Value> = stored
+            .keys()
+            .map(|n| {
+                serde_json::json!({
+                    "name": n,
+                    "browser_download_url": format!("{base}/assets/{n}")
+                })
+            })
+            .collect();
+        let releases = match tag {
+            Some(tag) => serde_json::json!([{
+                "tag_name": tag,
+                "draft": false,
+                "prerelease": false,
+                "assets": assets,
+            }]),
+            None => serde_json::json!([]),
+        };
+        let _ = version;
+        let app = axum::Router::new()
+            .route(
+                "/releases",
+                axum::routing::get(move || {
+                    let body = releases.clone();
+                    async move { axum::Json(body) }
+                }),
+            )
+            .route(
+                "/assets/{name}",
+                axum::routing::get(
+                    move |axum::extract::Path(name): axum::extract::Path<String>| {
+                        let files = stored.clone();
+                        async move {
+                            match files.get(&name) {
+                                Some(body) => (axum::http::StatusCode::OK, body.clone()),
+                                None => (axum::http::StatusCode::NOT_FOUND, Vec::new()),
+                            }
+                        }
+                    },
+                ),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        base
+    }
+
+    fn write_cli_config(upgrade_url: &str) {
+        aria_router_config::save_cli_config(&aria_router_config::RouterCliConfig {
+            upgrade_url: upgrade_url.to_string(),
+        })
+        .unwrap();
+    }
+
+    fn archive_names(version: &str) -> (String, String) {
+        let os = detect_asset_os().unwrap();
+        (
+            router_asset_name(version, os),
+            format!("libaria-router_ffi_{version}_{os}.tar.gz"),
+        )
+    }
+
+    #[test]
+    fn upgrades_cli_and_ffi_end_to_end() {
+        with_home(|home| {
+            let home = home.to_path_buf();
+            block_on(async move {
+                let version = "9.9.9";
+                let (cli_name, ffi_name) = archive_names(version);
+                let cli_bytes = tar_gz(&[("aria-router", b"#!/bin/sh\necho new\n")]);
+                let ffi_bytes = tar_gz(&[("lib/libaria-router_ffi.so", b"ELF")]);
+                let base = spawn_release_server(
+                    version,
+                    Some("v9.9.9"),
+                    vec![(cli_name, cli_bytes), (ffi_name, ffi_bytes)],
+                )
+                .await;
+                write_cli_config("https://github.com/acme/router");
+
+                let dest = home.join("bin/aria-router");
+                fs::create_dir_all(dest.parent().unwrap()).unwrap();
+                fs::write(&dest, "old").unwrap();
+
+                run_with(
+                    None,
+                    "0.1.0",
+                    &UpgradeOptions {
+                        releases_base: Some(format!("{base}/releases")),
+                        dest_file: Some(dest.clone()),
+                    },
+                )
+                .await
+                .unwrap();
+
+                assert_eq!(fs::read(&dest).unwrap(), b"#!/bin/sh\necho new\n");
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
+                    assert_eq!(mode, 0o755);
+                }
+                let lib = lib_dir().unwrap().join("libaria-router_ffi.so");
+                assert_eq!(fs::read(&lib).unwrap(), b"ELF");
+                // Unknown asset names are reported as 404 by the fake release API.
+                let missing = download_url(
+                    &format!("{base}/assets/nope.tar.gz"),
+                    &home.join("nope.bin"),
+                    "missing",
+                )
+                .await;
+                assert!(missing.is_err());
+
+                // Staging directory is cleaned up.
+                assert!(!home.join("tmp").join(format!("upgrade-{version}")).exists());
+            });
+        });
+    }
+
+    #[test]
+    fn upgrade_reports_already_current() {
+        with_home(|_| {
+            block_on(async {
+                let base = spawn_release_server("1.2.3", Some("v1.2.3"), vec![]).await;
+                write_cli_config("https://github.com/acme/router");
+                run_with(
+                    None,
+                    "1.2.3",
+                    &UpgradeOptions {
+                        releases_base: Some(format!("{base}/releases")),
+                        dest_file: None,
+                    },
+                )
+                .await
+                .unwrap();
+            });
+        });
+    }
+
+    #[test]
+    fn upgrade_requires_configuration() {
+        with_home(|_| {
+            // No CLI config → empty upgrade_url.
+            let err = block_on(run_with(None, "0.1.0", &UpgradeOptions::default())).unwrap_err();
+            assert!(err.to_string().contains("upgrade_url not set"), "{err}");
+
+            // Unsupported host.
+            write_cli_config("https://example.org/acme/router");
+            let err = block_on(run_with(None, "0.1.0", &UpgradeOptions::default())).unwrap_err();
+            assert!(err.to_string().contains("unsupported upgrade_url"), "{err}");
+        });
+    }
+
+    #[test]
+    fn upgrade_reports_missing_release_and_assets() {
+        with_home(|home| {
+            let dest = home.join("aria-router");
+            block_on(async {
+                write_cli_config("https://github.com/acme/router");
+                // Empty release list → no stable release.
+                let base = spawn_release_server("2.0.0", None, vec![]).await;
+                let err = run_with(
+                    None,
+                    "0.1.0",
+                    &UpgradeOptions {
+                        releases_base: Some(format!("{base}/releases")),
+                        dest_file: Some(dest.clone()),
+                    },
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(err.kind(), io::ErrorKind::NotFound);
+
+                // Release without the expected assets.
+                let base = spawn_release_server("2.0.0", Some("v2.0.0"), vec![]).await;
+                let err = run_with(
+                    None,
+                    "0.1.0",
+                    &UpgradeOptions {
+                        releases_base: Some(format!("{base}/releases")),
+                        dest_file: Some(dest.clone()),
+                    },
+                )
+                .await
+                .unwrap_err();
+                assert!(err.to_string().contains("release asset not found"), "{err}");
+            });
+        });
+    }
+
+    #[test]
+    fn fetch_releases_url_reports_http_and_decode_errors() {
+        block_on(async {
+            // Not found.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let app = axum::Router::new().route(
+                "/bad-status",
+                axum::routing::get(|| async { (axum::http::StatusCode::OK, "nope") }),
+            );
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let err = fetch_releases_url(&format!("http://127.0.0.1:{port}/missing"))
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("releases API"), "{err}");
+
+            let err = fetch_releases_url(&format!("http://127.0.0.1:{port}/bad-status"))
+                .await
+                .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::Other);
+
+            let err = fetch_releases_url("http://127.0.0.1:1/releases")
+                .await
+                .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::Other);
+        });
+    }
+
+    #[test]
+    fn download_url_reports_status_and_connection_errors() {
+        block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("out.bin");
+            let err = download_url("http://127.0.0.1:1/x", &dest, "cli")
+                .await
+                .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::Other);
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let app = axum::Router::new().route(
+                "/missing",
+                axum::routing::get(|| async { (axum::http::StatusCode::NOT_FOUND, "gone") }),
+            );
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let err = download_url(&format!("http://127.0.0.1:{port}/missing"), &dest, "cli")
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("download failed 404"), "{err}");
+        });
+    }
+
+    #[test]
+    fn extract_archive_dispatches_by_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("out");
+        fs::create_dir_all(&dest).unwrap();
+
+        let zip_path = dir.path().join("pkg.zip");
+        // Includes a directory entry (created as-is) and a traversal entry
+        // (`enclosed_name` rejects it, so it is skipped).
+        fs::write(
+            &zip_path,
+            zip_archive(&[("a/b.txt", b"hello"), ("sub/", b""), ("../evil", b"x")]),
+        )
+        .unwrap();
+        extract_archive(&zip_path, &dest).unwrap();
+        assert_eq!(fs::read(dest.join("a/b.txt")).unwrap(), b"hello");
+        assert!(dest.join("sub").is_dir());
+        assert!(!dir.path().join("evil").exists());
+
+        let tgz_path = dir.path().join("pkg.tgz");
+        fs::write(&tgz_path, tar_gz(&[("c.txt", b"tar")])).unwrap();
+        extract_archive(&tgz_path, &dest).unwrap();
+        assert_eq!(fs::read(dest.join("c.txt")).unwrap(), b"tar");
+
+        let unknown = dir.path().join("pkg.rar");
+        fs::write(&unknown, b"x").unwrap();
+        let err = extract_archive(&unknown, &dest).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+        // Corrupt archives are reported as invalid data.
+        let corrupt = dir.path().join("pkg.zip");
+        fs::write(&corrupt, b"not a zip").unwrap();
+        let err = extract_archive(&corrupt, &dest).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+        let corrupt_tar = dir.path().join("pkg.tar.gz");
+        fs::write(&corrupt_tar, b"not gzip").unwrap();
+        assert!(extract_archive(&corrupt_tar, &dest).is_err());
+    }
+
+    #[test]
+    fn prepare_staging_clears_a_leftover_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let staging = dir.path().join("tmp/upgrade-1.2.3");
+        fs::create_dir_all(staging.join("nested")).unwrap();
+        fs::write(staging.join("nested/stale"), b"old").unwrap();
+        prepare_staging(&staging).unwrap();
+        assert!(staging.is_dir());
+        assert!(!staging.join("nested").exists(), "stale tree must be gone");
+    }
+
+    #[test]
+    fn install_cli_requires_binary_and_replaces_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let extract = dir.path().join("extract");
+        fs::create_dir_all(&extract).unwrap();
+        let dest = dir.path().join("installed/aria-router");
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+
+        let err = install_cli_to(&extract, &dest).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+
+        fs::write(extract.join(CLI_BIN_NAME), b"binary").unwrap();
+        install_cli_to(&extract, &dest).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"binary");
+
+        // An unusable install target (a directory) is reported, not swallowed.
+        let as_dir = dir.path().join("dir-target");
+        fs::create_dir_all(&as_dir).unwrap();
+        let err = install_cli_to(&extract, &as_dir).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::IsADirectory);
+        // No temp file left behind.
+        let leftovers: Vec<_> = fs::read_dir(dest.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn install_ffi_prefers_known_names_then_falls_back_to_walk() {
+        with_home(|_| {
+            let dir = tempfile::tempdir().unwrap();
+            // No library at all → NotFound.
+            let empty = dir.path().join("empty");
+            fs::create_dir_all(&empty).unwrap();
+            fs::write(empty.join("readme.txt"), b"x").unwrap();
+            let err = install_ffi(&empty).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::NotFound);
+
+            // Unknown but recognisable file name → copied via the walk fallback.
+            let odd = dir.path().join("odd");
+            fs::create_dir_all(odd.join("deep")).unwrap();
+            fs::write(odd.join("deep/libaria-router_ffi.so.1"), b"x").unwrap();
+            install_ffi(&odd).unwrap();
+            let lib = lib_dir().unwrap();
+            assert!(lib.join("libaria-router_ffi.so.1").exists());
+
+            // Known name wins.
+            let known = dir.path().join("known");
+            fs::create_dir_all(&known).unwrap();
+            fs::write(known.join("libaria-router_ffi.so"), b"y").unwrap();
+            install_ffi(&known).unwrap();
+            assert_eq!(fs::read(lib.join("libaria-router_ffi.so")).unwrap(), b"y");
+        });
+    }
+
+    #[test]
+    fn walk_and_find_helpers() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("a/b")).unwrap();
+        fs::write(dir.path().join("a/b/f.txt"), b"1").unwrap();
+        let found = find_named_file(dir.path(), "f.txt").unwrap().unwrap();
+        assert!(found.ends_with("f.txt"));
+        assert!(find_named_file(dir.path(), "missing.txt")
+            .unwrap()
+            .is_none());
+        assert_eq!(walk_files(dir.path()).unwrap().len(), 1);
+        // Reading a missing directory surfaces the OS error.
+        assert!(walk_files(&dir.path().join("nope")).is_err());
+    }
+
+    #[test]
+    fn run_without_cli_config_is_rejected_before_any_network_call() {
+        with_home(|_| {
+            // Covers the `run` entry point (production calls it from `main`).
+            let err = block_on(run(None, "0.1.0")).unwrap_err();
+            assert!(err.to_string().contains("upgrade_url not set"), "{err}");
+        });
+    }
+
+    #[test]
+    fn detect_host_maps_known_sites() {
+        assert_eq!(
+            detect_host("https://gitee.com/acme").unwrap(),
+            ReleaseHost::Gitee
+        );
+        assert_eq!(
+            detect_host("https://github.com/acme").unwrap(),
+            ReleaseHost::GitHub
+        );
+        let err = detect_host("https://example.org/acme").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn install_target_defaults_to_the_running_executable() {
+        assert_eq!(
+            install_target(&UpgradeOptions::default()).unwrap(),
+            std::env::current_exe().unwrap()
+        );
+        let explicit = PathBuf::from("/tmp/somewhere/aria-router");
+        assert_eq!(
+            install_target(&UpgradeOptions {
+                releases_base: None,
+                dest_file: Some(explicit.clone()),
+            })
+            .unwrap(),
+            explicit
+        );
+    }
+
+    #[test]
+    fn platform_helpers_are_stable() {
+        let os = detect_asset_os().unwrap();
+        assert!(matches!(
+            os,
+            "linux_x86_64" | "linux_arm64" | "macos" | "windows_x86_64"
+        ));
+        assert_eq!(strip_v("V1.2.3"), "1.2.3");
+        assert_eq!(strip_v("1.2.3"), "1.2.3");
+        assert_eq!(normalize_tag(" V1.2.3 "), "V1.2.3");
+        assert_eq!(normalize_tag("1.2.3"), "v1.2.3");
+        assert_eq!(parse_semver("v1"), Some((1, 0, 0)));
+        assert_eq!(parse_semver("v"), None);
+        assert_eq!(parse_semver(""), None);
+        assert_eq!(parse_semver("vx"), None);
+        assert_eq!(parse_semver("v1.2.3+build"), Some((1, 2, 3)));
+        assert!(select_release(&[], None).is_err());
     }
 }

@@ -217,4 +217,109 @@ mod tests {
         assert_eq!(d.model, "local/fallback");
         assert!(d.bypass);
     }
+
+    async fn spawn_app(app: axum::Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // Scheme-less endpoint: `decide` prepends http:// itself.
+        format!("127.0.0.1:{}", addr.port())
+    }
+
+    #[tokio::test]
+    async fn scheme_less_endpoint_and_auth_header_are_used() {
+        use axum::extract::Json;
+        use axum::http::HeaderMap;
+        use axum::response::IntoResponse;
+        use axum::routing::post;
+        async fn ext(headers: HeaderMap, Json(_v): Json<serde_json::Value>) -> impl IntoResponse {
+            let auth = headers
+                .get("authorization")
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("");
+            axum::Json(serde_json::json!({"model": "local/auth", "algorithm": auth}))
+        }
+        let app = axum::Router::new().route("/v1/decision", post(ext));
+        let endpoint = spawn_app(app).await;
+        let cfg = DecisionExtCfg {
+            endpoint: Some(format!("{endpoint}/")),
+            auth: Some("secret-token".into()),
+            ..Default::default()
+        };
+        let d = decide(&req(), &cfg).await.unwrap();
+        assert_eq!(d.model, "local/auth");
+        assert_eq!(d.algorithm.as_deref(), Some("Bearer secret-token"));
+        assert_eq!(d.decision, "decision_ext");
+    }
+
+    #[tokio::test]
+    async fn blank_auth_is_not_sent() {
+        use axum::extract::Json;
+        use axum::http::HeaderMap;
+        use axum::response::IntoResponse;
+        use axum::routing::post;
+        async fn ext(headers: HeaderMap, Json(_v): Json<serde_json::Value>) -> impl IntoResponse {
+            let has_auth = headers.contains_key("authorization");
+            axum::Json(serde_json::json!({"model": "local/noauth", "reason": has_auth.to_string()}))
+        }
+        let app = axum::Router::new().route("/v1/decision", post(ext));
+        let endpoint = spawn_app(app).await;
+        let cfg = DecisionExtCfg {
+            endpoint: Some(endpoint),
+            auth: Some("   ".into()),
+            ..Default::default()
+        };
+        let d = decide(&req(), &cfg).await.unwrap();
+        assert_eq!(d.model, "local/noauth");
+        assert_eq!(d.reason, "false");
+    }
+
+    #[tokio::test]
+    async fn non_success_status_without_fallback_errors() {
+        use axum::response::IntoResponse;
+        use axum::routing::post;
+        async fn ext() -> impl IntoResponse {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom")
+        }
+        let app = axum::Router::new().route("/v1/decision", post(ext));
+        let endpoint = spawn_app(app).await;
+        let cfg = DecisionExtCfg {
+            endpoint: Some(endpoint),
+            ..Default::default()
+        };
+        let err = decide(&req(), &cfg).await.unwrap_err();
+        assert!(matches!(err, RouterError::Extension(_)));
+    }
+
+    #[tokio::test]
+    async fn timeout_without_fallback_errors() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // Raw TCP stub: accept, wait, then answer. It is independent of the client's
+        // cancellation, so both the wait and the reply actually execute.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = sock.read(&mut buf).await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let body = br#"{"model":"late"}"#;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+                body.len()
+            );
+            let _ = sock.write_all(head.as_bytes()).await;
+            let _ = sock.write_all(body).await;
+        });
+        let cfg = DecisionExtCfg {
+            endpoint: Some(format!("127.0.0.1:{}", addr.port())),
+            timeout_ms: Some(100),
+            ..Default::default()
+        };
+        let err = decide(&req(), &cfg).await.unwrap_err();
+        assert!(matches!(err, RouterError::Timeout(_)));
+        // Bounded: if the client's 100 ms window ever expires before connecting,
+        // `accept` would block forever and hang the whole suite.
+        let _ = tokio::time::timeout(Duration::from_secs(5), server).await;
+    }
 }

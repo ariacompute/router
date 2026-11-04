@@ -225,13 +225,17 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = dir.join("fast-response-require-key.yaml");
-        let p1 = std::path::Path::new("../../bindings/testdata/fast-response.yaml");
-        let p2 = std::path::Path::new("bindings/testdata/fast-response.yaml");
-        let fixture = if p1.exists() {
-            std::fs::read_to_string(p1).unwrap()
-        } else {
-            std::fs::read_to_string(p2).unwrap()
-        };
+        // Test cwd differs between `cargo test -p` and workspace runs.
+        let candidates = [
+            std::path::Path::new("../../bindings/testdata/fast-response.yaml"),
+            std::path::Path::new("bindings/testdata/fast-response.yaml"),
+            std::path::Path::new("testdata/fast-response.yaml"),
+        ];
+        let path = candidates
+            .iter()
+            .find(|p| p.exists())
+            .expect("fast-response fixture");
+        let fixture = std::fs::read_to_string(path).unwrap();
         let yaml = fixture.replace("require_api_key: false", "require_api_key: true");
         std::fs::write(&cfg, &yaml).unwrap();
         r.init(cfg.to_str().unwrap()).unwrap();
@@ -244,5 +248,268 @@ mod tests {
         let s = out.to_string();
         assert!(s.contains("hello-from-router"), "{s}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn fixture_path() -> &'static std::path::Path {
+        let candidates = [
+            std::path::Path::new("../../bindings/testdata/fast-response.yaml"),
+            std::path::Path::new("bindings/testdata/fast-response.yaml"),
+            std::path::Path::new("testdata/fast-response.yaml"),
+        ];
+        candidates
+            .iter()
+            .find(|p| p.exists())
+            .copied()
+            .expect("fast-response fixture")
+    }
+
+    fn write_fixture(dir: &std::path::Path, name: &str, require_key: bool) -> std::path::PathBuf {
+        let mut yaml = std::fs::read_to_string(fixture_path()).unwrap();
+        if require_key {
+            yaml = yaml.replace("require_api_key: false", "require_api_key: true");
+        }
+        let path = dir.join(name);
+        std::fs::write(&path, yaml).unwrap();
+        path
+    }
+
+    fn restore_home(prev: Option<String>) {
+        match prev {
+            Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
+            None => std::env::remove_var("ARIA_COMPUTE_HOME"),
+        }
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "aria-router-sdk-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn default_router_is_uninitialized() {
+        let r = Router::default();
+        assert_eq!(r.models().unwrap(), serde_json::json!({"data": []}));
+        assert_eq!(r.last_route(), serde_json::json!({}));
+        let err = r
+            .complete(serde_json::json!([]), serde_json::json!({}))
+            .unwrap_err();
+        assert!(matches!(err, RouterError::InvalidParam(_)), "{err}");
+    }
+
+    #[test]
+    fn init_empty_and_tilde_paths() {
+        let dir = temp_dir("home");
+        std::fs::write(
+            dir.join("router.yml"),
+            std::fs::read(fixture_path()).unwrap(),
+        )
+        .unwrap();
+        let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
+        std::env::set_var("ARIA_COMPUTE_HOME", &dir);
+        let mut r = Router::new();
+        r.init("").unwrap();
+        assert_eq!(
+            r.setup_status().base_url,
+            "",
+            "init must not touch setup state"
+        );
+        // Both restore arms (var was present / absent) must behave.
+        restore_home(Some(dir.to_string_lossy().into_owned()));
+        restore_home(prev);
+
+        // `~/` expansion goes through resolve_home_path.
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from)
+            .expect("home dir");
+        let sub = home
+            .join(".ariacompute")
+            .join("tmp")
+            .join(format!("sdk-tilde-{}", std::process::id()));
+        std::fs::create_dir_all(&sub).unwrap();
+        let cfg = sub.join("tilde.yaml");
+        std::fs::write(&cfg, std::fs::read(fixture_path()).unwrap()).unwrap();
+        let rel = cfg
+            .strip_prefix(&home)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let mut r = Router::new();
+        r.init(&format!("~/{rel}")).unwrap();
+        let _ = std::fs::remove_dir_all(&sub);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn connect_mode_models_route_and_complete() {
+        let mut r = Router::new();
+        r.connect("http://127.0.0.1:1");
+        assert_eq!(r.models().unwrap(), serde_json::json!({"data": []}));
+        assert_eq!(r.last_route(), serde_json::json!({}));
+        // Connection refused → Upstream, not a silent empty result.
+        let err = r
+            .complete(
+                serde_json::json!([{"role":"user","content":"hi"}]),
+                serde_json::json!({}),
+            )
+            .unwrap_err();
+        assert!(matches!(err, RouterError::Upstream(_)), "{err}");
+    }
+
+    #[test]
+    fn in_process_complete_with_and_without_token() {
+        let dir = temp_dir("inproc");
+        let cfg = write_fixture(&dir, "fast.yaml", false);
+        let mut r = Router::new();
+        r.init(cfg.to_str().unwrap()).unwrap();
+        let out = r
+            .complete(
+                serde_json::json!([{"role":"user","content":"hi"}]),
+                serde_json::json!({"model":"ariacompute/semantic-auto","max_tokens":11}),
+            )
+            .unwrap();
+        assert!(out.to_string().contains("hello-from-router"));
+
+        // An explicit token goes through the authorized data-plane path; an
+        // unknown key surfaces the upstream 401 body instead of a silent success.
+        r.setup(&SetupUpdates {
+            base_url: None,
+            token: Some("sk-unknown".into()),
+        })
+        .unwrap();
+        let err = r
+            .complete(
+                serde_json::json!([{"role":"user","content":"hi"}]),
+                serde_json::json!({}),
+            )
+            .unwrap_err();
+        assert!(matches!(err, RouterError::Upstream(_)), "{err}");
+        assert!(err.to_string().contains("unauthorized"), "{err}");
+
+        // Key-requiring config without a token stays on the SDK bypass path.
+        let cfg2 = write_fixture(&dir, "require.yaml", true);
+        r.init(cfg2.to_str().unwrap()).unwrap();
+        r.setup_clear();
+        let out = r
+            .complete(
+                serde_json::json!([{"role":"user","content":"hi"}]),
+                serde_json::json!({}),
+            )
+            .unwrap();
+        assert!(out.to_string().contains("hello-from-router"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct Stub {
+        endpoint: String,
+        rt: tokio::runtime::Runtime,
+        stop: Option<tokio::sync::oneshot::Sender<()>>,
+        handle: Option<tokio::task::JoinHandle<()>>,
+    }
+
+    impl Stub {
+        fn start() -> Self {
+            let app = axum::Router::new().route(
+                "/v1/chat/completions",
+                axum::routing::post(
+                    |headers: axum::http::HeaderMap,
+                     axum::Json(body): axum::Json<Value>| async move {
+                        axum::Json(serde_json::json!({
+                            "auth": headers
+                                .get("authorization")
+                                .and_then(|h| h.to_str().ok())
+                                .unwrap_or(""),
+                            "model": body.get("model").cloned().unwrap_or(Value::Null),
+                        }))
+                    },
+                ),
+            );
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let (addr, stop, handle) = rt.block_on(async {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+                let handle = tokio::spawn(async move {
+                    axum::serve(listener, app)
+                        .with_graceful_shutdown(async {
+                            let _ = rx.await;
+                        })
+                        .await
+                        .unwrap();
+                });
+                (addr, tx, handle)
+            });
+            Self {
+                endpoint: format!("http://{addr}"),
+                rt,
+                stop: Some(stop),
+                handle: Some(handle),
+            }
+        }
+
+        fn shutdown(mut self) {
+            let tx = self.stop.take().expect("stop");
+            let handle = self.handle.take().expect("handle");
+            let _ = tx.send(());
+            let _ = self.rt.block_on(handle);
+        }
+    }
+
+    #[test]
+    fn remote_complete_and_base_url_fallbacks() {
+        let stub = Stub::start();
+        let mut r = Router::new();
+        // `connect` takes precedence over `setup.base_url`.
+        r.connect(&stub.endpoint);
+        r.setup(&SetupUpdates {
+            base_url: Some("http://127.0.0.1:1".into()),
+            token: Some("sk-remote".into()),
+        })
+        .unwrap();
+        let out = r
+            .complete(
+                serde_json::json!([{"role":"user","content":"hi"}]),
+                serde_json::json!({"model":"remote/model"}),
+            )
+            .unwrap();
+        assert_eq!(out["auth"], "Bearer sk-remote");
+        assert_eq!(out["model"], "remote/model");
+
+        // Without `connect`, setup.base_url is used.
+        let mut r = Router::new();
+        r.setup(&SetupUpdates {
+            base_url: Some(stub.endpoint.clone()),
+            token: None,
+        })
+        .unwrap();
+        let out = r
+            .complete(
+                serde_json::json!([{"role":"user","content":"hi"}]),
+                serde_json::json!({}),
+            )
+            .unwrap();
+        assert_eq!(out["auth"], "");
+        assert_eq!(out["model"], "ariacompute/semantic-auto");
+
+        // Empty setup.base_url + no connect → "not initialized".
+        let mut r = Router::new();
+        r.setup(&SetupUpdates {
+            base_url: Some(String::new()),
+            token: None,
+        })
+        .unwrap();
+        let err = r
+            .complete(serde_json::json!([]), serde_json::json!({}))
+            .unwrap_err();
+        assert!(matches!(err, RouterError::InvalidParam(_)), "{err}");
+        stub.shutdown();
     }
 }

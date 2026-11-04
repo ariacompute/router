@@ -944,21 +944,24 @@ impl RouterDocument {
 
     fn validate_routing(&self, routing: &Routing) -> Result<(), RouterError> {
         for (key, val) in &routing.signals.extra {
-            if LEARNED_SIGNAL_KEYS.contains(&key.as_str()) {
-                let referenced = routing.decisions.iter().any(|d| {
-                    d.rules
-                        .conditions
-                        .iter()
-                        .any(|c| c.kind == *key || c.kind.replace('_', "-") == *key)
-                });
-                if referenced && !val.is_null() {
-                    // Stage C: learned types are known but require ml feature / weights.
-                    // Validation of "referenced without implementation" happens at runtime
-                    // unless empty. Empty extra is ok; non-empty extra still allowed to parse.
-                    let _ = referenced;
-                }
-            } else if !key.is_empty() {
+            let learned = LEARNED_SIGNAL_KEYS.contains(&key.as_str());
+            if !learned && !key.is_empty() {
                 return Err(RouterError::Config(format!("unknown signal family {key}")));
+            }
+            if !learned {
+                continue;
+            }
+            let referenced = routing.decisions.iter().any(|d| {
+                d.rules
+                    .conditions
+                    .iter()
+                    .any(|c| c.kind == *key || c.kind.replace('_', "-") == *key)
+            });
+            if referenced && !val.is_null() {
+                // Stage C: learned types are known but require ml feature / weights.
+                // Validation of "referenced without implementation" happens at runtime
+                // unless empty. Empty extra is ok; non-empty extra still allowed to parse.
+                let _ = referenced;
             }
         }
         for d in &routing.decisions {
@@ -1237,6 +1240,13 @@ pub fn gateway_template_yaml(kind: &str) -> Result<&'static str, RouterError> {
 /// of hardcoding TokenHub model names in the CLI.
 pub fn template_provider_model_ids(kind: &str) -> Result<(String, String, String), RouterError> {
     let doc = RouterDocument::from_yaml_str(gateway_template_yaml(kind)?)?;
+    provider_model_ids_from(&doc, kind)
+}
+
+fn provider_model_ids_from(
+    doc: &RouterDocument,
+    kind: &str,
+) -> Result<(String, String, String), RouterError> {
     let id = |logical: &str| -> Result<String, RouterError> {
         doc.provider(logical)
             .map(|m| m.provider_model_id.clone())
@@ -1487,17 +1497,28 @@ mod tests {
     /// Serialize env mutation and always restore `ARIA_COMPUTE_HOME`.
     fn with_aria_compute_home<T>(f: impl FnOnce(&Path) -> T) -> T {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
         let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
+        with_aria_compute_home_locked(prev, f)
+    }
+
+    /// Body of [`with_aria_compute_home`] with an explicit previous value, so the
+    /// "restore a pre-existing override" branch is testable without env races.
+    fn with_aria_compute_home_locked<T>(prev: Option<String>, f: impl FnOnce(&Path) -> T) -> T {
+        let dir = tempfile::tempdir().unwrap();
         std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(dir.path())));
-        match prev {
-            Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
-            None => std::env::remove_var("ARIA_COMPUTE_HOME"),
-        }
+        restore_env(prev);
         match out {
             Ok(v) => v,
             Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    /// Restore `ARIA_COMPUTE_HOME` to a previously captured value.
+    fn restore_env(prev: Option<String>) {
+        match prev {
+            Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
+            None => std::env::remove_var("ARIA_COMPUTE_HOME"),
         }
     }
 
@@ -2200,6 +2221,616 @@ recipes:
             let cleared = clear_cli_config().unwrap();
             assert!(cleared.is_some());
             assert!(load_cli_config().unwrap().upgrade_url.is_empty());
+            // Second clear is a no-op that returns None.
+            assert!(clear_cli_config().unwrap().is_none());
         });
+    }
+
+    const MODELS_ONE: &str = r#"
+providers:
+  defaults: {default_model: m}
+  models:
+    - name: m
+      provider_model_id: echo
+      backend_refs: [{name: p, endpoint: 127.0.0.1:9}]
+"#;
+
+    fn doc_with(entrypoints: &str, recipes: &str) -> String {
+        format!("version: v0.3\n{MODELS_ONE}\nentrypoints:\n{entrypoints}\nrecipes:\n{recipes}\n")
+    }
+
+    fn expect_config_err(raw: &str, needle: &str) {
+        let err = RouterDocument::from_yaml_str(raw).unwrap_err();
+        assert!(matches!(err, RouterError::Config(_)), "{err}");
+        assert!(err.to_string().contains(needle), "{err}");
+    }
+
+    fn expect_unsupported(raw: &str, needle: &str) {
+        let err = RouterDocument::from_yaml_str(raw).unwrap_err();
+        assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
+        assert!(err.to_string().contains(needle), "{err}");
+    }
+
+    #[test]
+    fn serde_defaults_catalog_listener_replay_and_pricing() {
+        let doc = RouterDocument::from_yaml_str(&format!(
+            r#"
+version: v0.3
+listeners:
+  - {{}}
+{MODELS_ONE}
+entrypoints:
+  - {{model_names: [auto], router: semantic, recipe: r}}
+recipes:
+  - {{name: r, router: semantic, routing: {{decisions: []}}}}
+global:
+  model_catalog:
+    flash: {{}}
+  services:
+    router_replay: {{}}
+"#
+        ))
+        .unwrap();
+        assert_eq!(doc.listeners[0].name, "http");
+        assert_eq!(doc.listeners[0].address, "0.0.0.0");
+        assert_eq!(doc.listeners[0].port, 8899);
+        assert_eq!(doc.data_bind(), "0.0.0.0:8899");
+        assert_eq!(doc.global.model_catalog["flash"].kind, "hash");
+        assert!(doc.global.services.router_replay.enabled);
+        assert_eq!(doc.global.services.router_replay.max_items, 256);
+        assert!(doc.global.require_api_key);
+        assert!(doc.global.allow_register);
+        assert_eq!(doc.global.serve_site, "com");
+
+        // No listeners → default bind string.
+        let raw = format!("version: v0.3\n{MODELS_ONE}\nentrypoints: []\nrecipes: []\n");
+        let empty = RouterDocument::from_yaml_str(&raw).unwrap();
+        assert_eq!(empty.data_bind(), "0.0.0.0:8899");
+        assert!(empty
+            .learned_signal_referenced(&Recipe {
+                name: "x".into(),
+                router: RouterKind::Semantic,
+                routing: None,
+                agent: None,
+                afm_d: None,
+            })
+            .is_empty());
+    }
+
+    #[test]
+    fn pricing_backend_urls_and_ranking_cost() {
+        let doc = RouterDocument::from_yaml_str(&format!(
+            r#"
+version: v0.3
+{MODELS_ONE}
+entrypoints: []
+recipes: []
+"#
+        ))
+        .unwrap();
+        let mut model = doc.provider("m").unwrap().clone();
+        assert_eq!(model.ranking_cost(), 1.0);
+        model.pricing = Some(ModelPricing {
+            input_per_mtok: 1.5,
+            output_per_mtok: 3.0,
+        });
+        assert_eq!(model.ranking_cost(), 3.0);
+        model.pricing = Some(ModelPricing {
+            input_per_mtok: 2.5,
+            output_per_mtok: 0.0,
+        });
+        assert_eq!(model.ranking_cost(), 2.5);
+
+        let mut reference = model.backend_refs[0].clone();
+        assert_eq!(reference.url(), "http://127.0.0.1:9");
+        reference.base_url = "http://base.example/".into();
+        assert_eq!(reference.url(), "http://base.example");
+        reference.base_url.clear();
+        reference.endpoint = "https://up.example/".into();
+        assert_eq!(reference.url(), "https://up.example");
+        assert_eq!(reference.protocol, "http");
+        assert_eq!(reference.weight, 100);
+    }
+
+    #[test]
+    fn json_parsing_and_io_errors() {
+        let json = r#"{
+            "version": "v0.3",
+            "providers": {"defaults": {"default_model": "m"}, "models": []},
+            "entrypoints": [],
+            "recipes": []
+        }"#;
+        let doc = RouterDocument::from_json_str(json).unwrap();
+        assert_eq!(doc.version, "v0.3");
+        assert!(doc.to_yaml().unwrap().contains("v0.3"));
+        assert!(matches!(
+            RouterDocument::from_json_str("{not json"),
+            Err(RouterError::Config(_))
+        ));
+        assert!(matches!(
+            RouterDocument::load_path("/nonexistent/router.yml"),
+            Err(RouterError::Io(_))
+        ));
+        expect_config_err("version: v0.2\n", "version must be v0.3");
+    }
+
+    #[test]
+    fn entrypoint_validation_errors() {
+        expect_config_err(
+            &doc_with(
+                "  - {model_names: [a], router: semantic, recipe: missing}",
+                "  - {name: other, router: semantic, routing: {decisions: []}}",
+            ),
+            "not found",
+        );
+        expect_config_err(
+            &doc_with(
+                "  - {model_names: [a], router: semantic, recipe: r}",
+                "  - {name: r, router: agent, agent: {max_turns: 1}}",
+            ),
+            "entrypoint.router",
+        );
+    }
+
+    #[test]
+    fn semantic_recipe_validation_errors() {
+        expect_config_err(
+            &doc_with(
+                "  - {model_names: [a], router: semantic, recipe: r}",
+                "  - {name: r, router: semantic, routing: {decisions: []}, agent: {max_turns: 1}}",
+            ),
+            "must not contain agent",
+        );
+        expect_config_err(
+            &doc_with(
+                "  - {model_names: [a], router: semantic, recipe: r}",
+                "  - {name: r, router: semantic, routing: {decisions: []}, afm-d: {endpoint: x}}",
+            ),
+            "must not contain afm-d",
+        );
+        expect_config_err(
+            &doc_with(
+                "  - {model_names: [a], router: semantic, recipe: r}",
+                "  - {name: r, router: semantic}",
+            ),
+            "missing routing",
+        );
+    }
+
+    #[test]
+    fn agent_recipe_validation_errors() {
+        let ep = "  - {model_names: [a], router: agent, recipe: r}";
+        expect_config_err(
+            &doc_with(
+                ep,
+                "  - {name: r, router: agent, agent: {max_turns: 1}, afm-d: {endpoint: x}}",
+            ),
+            "must not contain afm-d",
+        );
+        expect_config_err(
+            &doc_with(
+                ep,
+                "  - {name: r, router: agent, agent: {max_turns: 1}, routing: {decisions: [{name: d, rules: {operator: AND, conditions: []}, modelRefs: [{model: m}]}]}}",
+            ),
+            "must not contain signals/decisions",
+        );
+        expect_config_err(
+            &doc_with(ep, "  - {name: r, router: agent}"),
+            "missing agent",
+        );
+        expect_config_err(
+            &doc_with(ep, "  - {name: r, router: agent, agent: {fallback: ghost}}"),
+            "fallback ghost not in providers",
+        );
+        expect_config_err(
+            &doc_with(ep, "  - {name: r, router: agent, agent: {max_turns: 0}}"),
+            "max_turns must be 1..=8",
+        );
+        expect_config_err(
+            &doc_with(ep, "  - {name: r, router: agent, agent: {max_turns: 9}}"),
+            "max_turns must be 1..=8",
+        );
+    }
+
+    #[test]
+    fn afm_d_recipe_validation_errors() {
+        let ep = "  - {model_names: [a], router: afm-d, recipe: r}";
+        expect_config_err(
+            &doc_with(
+                ep,
+                "  - {name: r, router: afm-d, afm-d: {endpoint: x}, agent: {max_turns: 1}}",
+            ),
+            "must not contain agent",
+        );
+        expect_config_err(
+            &doc_with(
+                ep,
+                "  - {name: r, router: afm-d, afm-d: {endpoint: x}, routing: {decisions: [{name: d, rules: {operator: AND, conditions: []}, modelRefs: [{model: m}]}]}}",
+            ),
+            "must not contain signals/decisions",
+        );
+        expect_config_err(
+            &doc_with(ep, "  - {name: r, router: afm-d}"),
+            "missing afm-d",
+        );
+        expect_config_err(
+            &doc_with(ep, "  - {name: r, router: afm-d, afm-d: {fallback: ghost}}"),
+            "fallback ghost not in providers",
+        );
+        expect_config_err(
+            &doc_with(
+                ep,
+                "  - {name: r, router: afm-d, afm-d: {min_confidence: 2.0}}",
+            ),
+            "min_confidence must be 0..=1",
+        );
+
+        // Track ceiling: decoder allows 16 text providers.
+        let mut models = String::from("providers:\n  models:\n");
+        for i in 0..17 {
+            models.push_str(&format!(
+                "    - name: m{i}\n      backend_refs: [{{name: p, endpoint: 127.0.0.1:9}}]\n"
+            ));
+        }
+        let raw = format!(
+            "version: v0.3\n{models}entrypoints:\n{ep}\nrecipes:\n  - {{name: r, router: afm-d, afm-d: {{track: decoder}}}}\n"
+        );
+        expect_config_err(&raw, "allows at most 16 text providers");
+
+        // Encoder ceiling is much higher, so the same pool is accepted.
+        let raw = raw.replace("track: decoder", "track: encoder");
+        let doc = RouterDocument::from_yaml_str(&raw).unwrap();
+        assert_eq!(
+            doc.recipes[0].afm_d.as_ref().unwrap().track,
+            Some(AfmDTrack::Encoder)
+        );
+    }
+
+    #[test]
+    fn routing_validation_errors() {
+        let ep = "  - {model_names: [a], router: semantic, recipe: r}";
+        expect_config_err(
+            &doc_with(
+                ep,
+                "  - {name: r, router: semantic, routing: {decisions: [], signals: {weird: {}}}}",
+            ),
+            "unknown signal family",
+        );
+        // An empty signal-family key is ignored instead of rejected: it carries no
+        // meaning and YAML maps can produce it from templated configs.
+        let doc = RouterDocument::from_yaml_str(&doc_with(
+            ep,
+            "  - {name: r, router: semantic, routing: {decisions: [], signals: {\"\": {}}}}",
+        ))
+        .unwrap();
+        assert_eq!(doc.recipes.len(), 1);
+        expect_unsupported(
+            &doc_with(
+                ep,
+                "  - {name: r, router: semantic, routing: {decisions: [{name: d, rules: {operator: AND, conditions: []}, modelRefs: [{model: m}], algorithm: mystery}]}}",
+            ),
+            "unknown algorithm",
+        );
+        expect_config_err(
+            &doc_with(
+                ep,
+                "  - {name: r, router: semantic, routing: {decisions: [{name: d, rules: {operator: AND, conditions: []}, modelRefs: [{model: m}], emits: [{kind: retention}]}]}}",
+            ),
+            "missing retention block",
+        );
+        expect_unsupported(
+            &doc_with(
+                ep,
+                "  - {name: r, router: semantic, routing: {decisions: [{name: d, rules: {operator: AND, conditions: []}, modelRefs: [{model: m}], emits: [{kind: telemetry}]}]}}",
+            ),
+            "unknown emit kind",
+        );
+        expect_config_err(
+            &doc_with(
+                ep,
+                "  - {name: r, router: semantic, routing: {decisions: [{name: d, rules: {operator: AND, conditions: []}, modelRefs: [{model: m}], emits: [{kind: retention, retention: {drop: true, ttl_turns: 2}}]}]}}",
+            ),
+            "conflicts with positive ttl_turns",
+        );
+        expect_config_err(
+            &doc_with(
+                ep,
+                "  - {name: r, router: semantic, routing: {decisions: [{name: d, rules: {operator: AND, conditions: []}, modelRefs: [{model: m}], emits: [{kind: retention, retention: {ttl_turns: 1}}, {kind: retention, retention: {ttl_turns: 2}}]}]}}",
+            ),
+            "duplicate emit retention",
+        );
+        expect_unsupported(
+            &doc_with(
+                ep,
+                "  - {name: r, router: semantic, routing: {decisions: [], decision_ext: {track: encoder}}}",
+            ),
+            "requires a non-empty `endpoint`",
+        );
+        expect_unsupported(
+            &doc_with(
+                ep,
+                "  - {name: r, router: semantic, routing: {decisions: [], decision_ext: {endpoint: \"  \"}}}",
+            ),
+            "requires a non-empty `endpoint`",
+        );
+    }
+
+    #[test]
+    fn retention_lookup_ignores_non_retention_emits() {
+        let decision = DecisionCfg {
+            name: "d".into(),
+            description: None,
+            priority: 1,
+            rules: RuleNode::default(),
+            model_refs: vec![ModelRef { model: "m".into() }],
+            algorithm: None,
+            plugins: vec![],
+            locality: None,
+            emits: vec![EmitDirective {
+                kind: "other".into(),
+                retention: Some(RetentionDirective::default()),
+            }],
+        };
+        assert!(decision.retention().is_none());
+        assert_eq!(AfmDTrack::Encoder.to_string(), "encoder");
+        assert_eq!(AfmDTrack::Decoder.to_string(), "decoder");
+    }
+
+    #[test]
+    fn patch_setup_models_ignores_unexpected_shapes() {
+        let opts = SetupModelOpts {
+            base_url: Some("http://x".into()),
+            api_key_env: Some("KEY".into()),
+            api_key: Some("sk".into()),
+            small_provider_model_id: Some("s".into()),
+            mid_provider_model_id: Some("m".into()),
+            large_provider_model_id: Some("l".into()),
+            agent_endpoint: Some("http://agent".into()),
+            agent_model: Some("am".into()),
+            agent_fallback: Some("ariacompute/ariamodel-small".into()),
+            afm_d_endpoint: Some("http://afm".into()),
+            afm_d_fallback: Some("ariacompute/ariamodel-large".into()),
+        };
+
+        // Non-mapping root is a no-op.
+        let mut scalar = serde_yaml::Value::String("nope".into());
+        patch_setup_models(&mut scalar, &opts);
+        assert_eq!(scalar, serde_yaml::Value::String("nope".into()));
+
+        // Odd shapes inside models/refs/recipes are skipped, unknown model names untouched.
+        let raw = r#"
+providers:
+  models:
+    - just-a-string
+    - name: ariacompute/ariamodel-small
+      backend_refs:
+        - not-a-mapping
+        - name: p
+    - name: unknown-model
+recipes:
+  - just-a-string
+  - name: agent-recipe
+    router: agent
+  - name: afm-recipe
+    router: afm-d
+"#;
+        let mut doc: serde_yaml::Value = serde_yaml::from_str(raw).unwrap();
+        patch_setup_models(&mut doc, &opts);
+        let models = doc
+            .get("providers")
+            .and_then(|p| p.get("models"))
+            .and_then(|m| m.as_sequence())
+            .unwrap();
+        assert_eq!(
+            models[1]["provider_model_id"],
+            serde_yaml::Value::String("s".into())
+        );
+        assert_eq!(
+            models[1]["backend_refs"][1]["base_url"],
+            serde_yaml::Value::String("http://x".into())
+        );
+        assert!(models[2].get("provider_model_id").is_none());
+
+        // A document without a `recipes` sequence stops after patching models.
+        let mut no_recipes: serde_yaml::Value =
+            serde_yaml::from_str("providers:\n  models:\n    - name: ariacompute/ariamodel-mid\n")
+                .unwrap();
+        patch_setup_models(&mut no_recipes, &opts);
+        let mid = &no_recipes["providers"]["models"][0];
+        assert_eq!(
+            mid["provider_model_id"],
+            serde_yaml::Value::String("m".into())
+        );
+
+        // No agent/afm-d overrides → early return after models.
+        let mut doc_only_models: serde_yaml::Value =
+            serde_yaml::from_str("providers:\n  models: []\n").unwrap();
+        patch_setup_models(&mut doc_only_models, &SetupModelOpts::default());
+        assert!(doc_only_models.get("recipes").is_none());
+    }
+
+    #[test]
+    fn write_and_clear_default_config_roundtrip() {
+        with_aria_compute_home(|dir| {
+            let path = write_default_config("semantic", true).unwrap();
+            assert!(path.exists());
+            assert!(dir.join("router-keys.json").exists());
+            assert!(dir.join("router-users.json").exists());
+            // Refuses to clobber without overwrite.
+            let err = write_default_config("semantic", false).unwrap_err();
+            assert!(matches!(err, RouterError::Io(_)));
+            // Unknown template kind is invalid.
+            assert!(matches!(
+                write_default_config("bogus", true),
+                Err(RouterError::InvalidParam(_))
+            ));
+            // Agent + afm-d templates with overrides are written and self-validate.
+            let opts = SetupModelOpts {
+                base_url: Some("http://upstream:1".into()),
+                api_key_env: Some("GATEWAY_API_KEY".into()),
+                api_key: Some("sk-test".into()),
+                small_provider_model_id: Some("s".into()),
+                mid_provider_model_id: Some("m".into()),
+                large_provider_model_id: Some("l".into()),
+                agent_endpoint: Some("http://agent:2".into()),
+                agent_model: Some("am".into()),
+                agent_fallback: Some("ariacompute/ariamodel-small".into()),
+                afm_d_endpoint: Some("http://afm:3".into()),
+                afm_d_fallback: Some("ariacompute/ariamodel-large".into()),
+            };
+            write_default_config_with_opts("agent", true, true, false, &opts).unwrap();
+            write_default_config_with_opts("afm-d", true, false, true, &opts).unwrap();
+            let raw = std::fs::read_to_string(default_config_path().unwrap()).unwrap();
+            assert!(raw.contains("http://afm:3"));
+            assert!(raw.contains("allow_register: true"));
+
+            let cleared = clear_default_config().unwrap();
+            assert!(!cleared.exists());
+            // Clearing again is still Ok.
+            assert!(!clear_default_config().unwrap().exists());
+        });
+    }
+
+    #[test]
+    fn home_and_path_resolution() {
+        with_aria_compute_home(|dir| {
+            assert_eq!(aria_home().unwrap(), dir);
+            assert!(default_config_path().unwrap().ends_with("router.yml"));
+            assert!(default_keys_path().unwrap().ends_with("router-keys.json"));
+            assert!(default_users_path().unwrap().ends_with("router-users.json"));
+            assert!(default_cli_config_path()
+                .unwrap()
+                .ends_with("router-cli.yml"));
+            assert!(ensure_aria_home().unwrap().join("tmp").is_dir());
+            // Empty override falls back to `$HOME/.ariacompute`.
+            assert_eq!(resolve_keys_path("").unwrap(), default_keys_path().unwrap());
+            assert_eq!(
+                resolve_users_path(" ").unwrap(),
+                default_users_path().unwrap()
+            );
+            assert_eq!(
+                resolve_keys_path("/abs/keys.json").unwrap(),
+                PathBuf::from("/abs/keys.json")
+            );
+            assert_eq!(
+                resolve_keys_path("rel/keys.json").unwrap(),
+                dir.join("rel/keys.json")
+            );
+            let home_relative = resolve_keys_path("~/keys.json").unwrap();
+            assert!(home_relative.ends_with("keys.json"));
+            assert!(!home_relative.starts_with(dir));
+        });
+
+        // Empty ARIA_COMPUTE_HOME is treated as unset.
+        {
+            let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
+            std::env::set_var("ARIA_COMPUTE_HOME", "");
+            let home = aria_home().unwrap();
+            assert!(home.ends_with(".ariacompute"));
+            restore_env(prev);
+        }
+    }
+
+    #[test]
+    fn template_lookup_and_provider_ids() {
+        assert!(gateway_template_yaml("").unwrap().contains("version: v0.3"));
+        assert!(gateway_template_yaml("semantic").is_ok());
+        assert!(gateway_template_yaml("agent")
+            .unwrap()
+            .contains("router: agent"));
+        assert!(gateway_template_yaml("afm-d")
+            .unwrap()
+            .contains("router: afm-d"));
+        assert!(matches!(
+            gateway_template_yaml("bogus"),
+            Err(RouterError::InvalidParam(_))
+        ));
+        for kind in ["semantic", "agent", "afm-d"] {
+            let (small, mid, large) = template_provider_model_ids(kind).unwrap();
+            assert!(!small.is_empty());
+            assert!(!mid.is_empty());
+            assert!(!large.is_empty());
+        }
+        // A template without upstream ids fails closed with a config error.
+        let doc = RouterDocument::from_yaml_str(
+            "version: v0.3\nproviders:\n  models:\n    - name: ariacompute/ariamodel-small\n",
+        )
+        .unwrap();
+        let err = provider_model_ids_from(&doc, "test").unwrap_err();
+        assert!(matches!(err, RouterError::Config(_)), "{err}");
+        assert!(
+            err.to_string().contains("missing provider_model_id"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn env_helper_propagates_panic() {
+        // `resume_unwind` path of the env helper.
+        let res = std::panic::catch_unwind(|| with_aria_compute_home(|_| panic!("boom")));
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn env_helper_restores_previous_override() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        with_aria_compute_home_locked(Some("/tmp/aria-prev-home".into()), |dir| {
+            assert!(dir.exists());
+        });
+        assert_eq!(
+            std::env::var("ARIA_COMPUTE_HOME").unwrap(),
+            "/tmp/aria-prev-home"
+        );
+        std::env::remove_var("ARIA_COMPUTE_HOME");
+    }
+
+    #[test]
+    fn aria_home_falls_back_to_home_dir_without_override() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
+        std::env::remove_var("ARIA_COMPUTE_HOME");
+        let resolved = aria_home();
+        restore_env(prev);
+        let home = resolved.expect("home dir resolves on supported platforms");
+        assert!(home.ends_with(".ariacompute"), "{}", home.display());
+    }
+
+    #[test]
+    fn validation_accepts_agent_and_afm_d_without_optional_limits() {
+        // `max_turns` absent: the range check is skipped entirely.
+        let agent_ep = "  - {model_names: [a], router: agent, recipe: r}";
+        for recipe in [
+            "  - {name: r, router: agent, agent: {}}",
+            "  - {name: r, router: agent, agent: {max_turns: 2}}",
+        ] {
+            let doc = RouterDocument::from_yaml_str(&doc_with(agent_ep, recipe)).unwrap();
+            assert_eq!(doc.recipes.len(), 1);
+        }
+
+        // A `min_confidence` inside 0..=1 passes the range check.
+        let afm_ep = "  - {model_names: [a], router: afm-d, recipe: r}";
+        let doc = RouterDocument::from_yaml_str(&doc_with(
+            afm_ep,
+            "  - {name: r, router: afm-d, afm-d: {min_confidence: 0.5}}",
+        ))
+        .unwrap();
+        assert_eq!(doc.recipes.len(), 1);
+    }
+
+    #[test]
+    fn patch_setup_models_tolerates_missing_providers_and_models() {
+        let opts = SetupModelOpts {
+            api_key: Some("sk-x".into()),
+            ..SetupModelOpts::default()
+        };
+        let mut no_providers: serde_yaml::Value = serde_yaml::from_str("version: v0.3\n").unwrap();
+        patch_setup_models(&mut no_providers, &opts);
+        assert!(no_providers.get("providers").is_none());
+
+        let mut no_models: serde_yaml::Value =
+            serde_yaml::from_str("providers:\n  defaults: {}\n").unwrap();
+        patch_setup_models(&mut no_models, &opts);
+        assert!(no_models["providers"].get("models").is_none());
     }
 }

@@ -288,6 +288,13 @@ recipes:
     }
 
     #[test]
+    fn hard_filter_without_modality_constraint_keeps_matches() {
+        let d = hf_doc();
+        let got = hard_filter(&d, &["local_text".into(), "cloud_text".into()], None, None);
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
     fn hard_filter_drops_unknown_names() {
         let d = hf_doc();
         let got = hard_filter(&d, &["ghost".into()], None, None);
@@ -336,5 +343,48 @@ recipes:
         let d = doc();
         let err = select(&d, &decision("knn"), &cards(), &RuntimeStats::default()).unwrap_err();
         assert!(matches!(err, RouterError::Unsupported(_)));
+    }
+
+    #[test]
+    fn unknown_algorithm_unsupported() {
+        // Not a known-but-unimplemented name: falls through to the catch-all arm.
+        let d = doc();
+        let err = select(&d, &decision("mystery"), &cards(), &RuntimeStats::default()).unwrap_err();
+        assert!(matches!(err, RouterError::Unsupported(_)));
+    }
+
+    #[test]
+    fn empty_eligible_fails_closed() {
+        let d = doc();
+        let err = select(&d, &decision("static"), &[], &RuntimeStats::default()).unwrap_err();
+        assert!(matches!(err, RouterError::FailClosed(_)));
+    }
+
+    #[test]
+    fn empty_model_refs_uses_every_eligible_model() {
+        let d = doc();
+        let mut dec = decision("static");
+        dec.model_refs.clear();
+        let got = select(&d, &dec, &cards(), &RuntimeStats::default()).unwrap();
+        assert_eq!(got, "a");
+    }
+
+    #[test]
+    fn model_refs_outside_pool_fails_closed() {
+        let d = doc();
+        let mut dec = decision("static");
+        dec.model_refs = vec![aria_router_config::ModelRef {
+            model: "ghost".into(),
+        }];
+        let err = select(&d, &dec, &cards(), &RuntimeStats::default()).unwrap_err();
+        assert!(matches!(err, RouterError::FailClosed(_)));
+    }
+
+    #[test]
+    fn elo_without_snapshot_falls_back_to_global_table() {
+        let d = doc();
+        // No snapshot → both ratings come from the process-wide table (default 1000).
+        let got = select(&d, &decision("ratings"), &cards(), &RuntimeStats::default()).unwrap();
+        assert!(got == "a" || got == "b");
     }
 }

@@ -382,4 +382,24 @@ mod tests {
         );
         assert!(v["estimated_savings_usd"].as_f64().unwrap() >= 0.0);
     }
+
+    #[test]
+    fn empty_ledger_report_avoids_division_by_zero() {
+        let ledger = CostLedger::default();
+        // recent_n is clamped to >= 1, so 0 is a valid "give me the latest one".
+        let r = ledger.report(0);
+        assert_eq!(r["totals"]["requests"], 0);
+        assert_eq!(r["totals"]["distinct_users"], 0);
+        assert_eq!(r["totals"]["sessions"], 0);
+        assert_eq!(r["totals"]["turns"], 0);
+        assert_eq!(r["totals"]["priced_fraction"], 0.0);
+        assert_eq!(r["factors"]["sessions_per_user"], 0.0);
+        assert_eq!(r["factors"]["turns_per_session"], 0.0);
+        assert_eq!(r["factors"]["requests_per_turn"], 0.0);
+        assert_eq!(r["factors"]["tokens_per_request"], 0.0);
+        assert_eq!(r["factors"]["price_per_mtok"], 0.0);
+        assert_eq!(r["recent"].as_array().unwrap().len(), 0);
+        assert_eq!(ledger.summary()["requests"], 0);
+        assert_eq!(ledger.by_competence_tier()["actual_cost_usd"], 0.0);
+    }
 }

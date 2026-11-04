@@ -38,11 +38,9 @@ impl SessionMemory {
             g.order.push_back(session.to_string());
         }
         g.by_session.insert(session.to_string(), state);
-        while g.by_session.len() > cfg.max_sessions {
+        while g.by_session.len() > cfg.max_sessions && !g.order.is_empty() {
             if let Some(old) = g.order.pop_front() {
                 g.by_session.remove(&old);
-            } else {
-                break;
             }
         }
     }
@@ -83,11 +81,9 @@ impl SessionMemory {
                 last_user_turn: user_turn,
             },
         );
-        while g.by_session.len() > cfg.max_sessions {
+        while g.by_session.len() > cfg.max_sessions && !g.order.is_empty() {
             if let Some(old) = g.order.pop_front() {
                 g.by_session.remove(&old);
-            } else {
-                break;
             }
         }
     }

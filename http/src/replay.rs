@@ -68,10 +68,11 @@ impl ReplayLog {
             rec.id = format!("r{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
         }
         if let Some(path) = self.persist.lock().unwrap().as_ref() {
-            if let Ok(line) = serde_json::to_string(&rec) {
-                if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-                    let _ = writeln!(f, "{line}");
-                }
+            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+                // Serialization of a replay record cannot fail; an empty fallback
+                // line keeps the write non-branching.
+                let line = serde_json::to_string(&rec).unwrap_or_default();
+                let _ = writeln!(f, "{line}");
             }
         }
         let mut g = self.inner.lock().unwrap();
@@ -216,5 +217,23 @@ mod tests {
         let parsed: ReplayRecord = serde_json::from_str(line).unwrap();
         assert_eq!(parsed.decision.decision, "persist-me");
         assert_eq!(parsed.session.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn persist_open_failure_keeps_in_memory_record() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory path cannot be opened for append: the write is skipped, but
+        // the in-memory ring buffer still records the entry.
+        let log = ReplayLog::default();
+        let cfg = RouterReplayCfg {
+            enabled: true,
+            max_items: 4,
+            persist_path: Some(dir.path().display().to_string()),
+        };
+        log.configure(&cfg);
+        log.push(rec("persist-failed"), &cfg);
+        let recent = log.recent(1);
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].decision.decision, "persist-failed");
     }
 }

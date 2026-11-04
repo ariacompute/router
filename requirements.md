@@ -320,6 +320,12 @@ C API（`include/aria_router.h`）：
 - F：`PUT /v1/router/config` 非法 YAML 不改文档；合法 tiny YAML 热重载；topology 对 semantic-tiny / agent-tiny 有预期节点；`POST /v1/router/chat` 走 keyword / canned-agent 黄金路径；`GET /v1/router/models` 含 entrypoint；`stream:true` 返回 `text/event-stream` 且透传至少 1 chunk；响应含扩展 `x-aria-router-*`；Dashboard Playground：多轮气泡 + 模型下拉 + Header 面板 + markdown + 本地会话侧栏；`--no-dashboard` 时 `/` 不提供 SPA。
 - G：带 `usage` 的 mock chat 计入账本；无 usage → estimate；无 pricing → `cost=0` 且 `priced=false`；`require_api_key: true` 无 Bearer 聊天与 PUT providers → 401；合法 key → 200 且 `by_key` 有 id；吊销后 401；Cost JSON 含六因子键。
 - H：register→login；`allow_register=false` 拒注册；无用户 register→503；session 门控 keys；OAuth 为 keys `kind=oauth`；`sk-bf-` Bearer → `by_serve_user`；engine 单一 `router_api_key`（双前缀）。
+- T（测试与覆盖率）：`cargo test --workspace --all-features` 全绿，每项功能含正常 + 异常路径用例；
+  `scripts/coverage.sh` 门禁为 **100% 行覆盖**（`--workspace --all-features`，仅豁免 `build.rs`），
+  口径为合并后的 lcov `DA:` 记录（见 `docs/coverage-exclusions.md` 的统计口径说明与豁免清单）；
+  豁免项必须文件级、可审计并写明原因，禁止用 `#[cfg]` 散落屏蔽「凑覆盖率」；
+  `.github/workflows/ci.yml` 在 `pull_request` 与 `push main` 上跑 fmt / clippy（`-D warnings`）/
+  test（`--all-features`）/ coverage（复用同一脚本）/ bindings 五个 job 且全绿。
 
 ## 5. 目录
 

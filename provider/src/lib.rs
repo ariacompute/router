@@ -45,16 +45,22 @@ impl std::fmt::Debug for PoolState {
 
 impl PoolState {
     pub fn record(&self, model: &str, ms: f32, ok: bool) {
-        if let Ok(mut m) = self.latency_ms.lock() {
-            let prev = m.get(model).copied().unwrap_or(ms);
-            m.insert(model.to_string(), prev * 0.7 + ms * 0.3);
-        }
-        if let Ok(mut f) = self.failures.lock() {
-            if ok {
-                f.insert(model.to_string(), 0);
-            } else {
-                *f.entry(model.to_string()).or_insert(0) += 1;
-            }
+        let mut m = self
+            .latency_ms
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev = m.get(model).copied().unwrap_or(ms);
+        m.insert(model.to_string(), prev * 0.7 + ms * 0.3);
+        drop(m);
+
+        let mut f = self
+            .failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if ok {
+            f.insert(model.to_string(), 0);
+        } else {
+            *f.entry(model.to_string()).or_insert(0) += 1;
         }
     }
 
@@ -84,16 +90,12 @@ pub async fn forward(
     let url = format!("{}/v1/chat/completions", backend.url());
     let mut body =
         serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert(
-            "model".into(),
-            Value::String(if provider.provider_model_id.is_empty() {
-                model.to_string()
-            } else {
-                provider.provider_model_id.clone()
-            }),
-        );
-    }
+    let upstream_model = if provider.provider_model_id.is_empty() {
+        model.to_string()
+    } else {
+        provider.provider_model_id.clone()
+    };
+    body["model"] = Value::String(upstream_model);
     let mut builder = pool.client.post(&url).json(&body);
     if let Some(key) = api_key(backend) {
         builder = builder.bearer_auth(key);
@@ -154,17 +156,13 @@ pub async fn forward_sse_stream(
     let url = format!("{}/v1/chat/completions", backend.url());
     let mut body =
         serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert(
-            "model".into(),
-            Value::String(if provider.provider_model_id.is_empty() {
-                model.to_string()
-            } else {
-                provider.provider_model_id.clone()
-            }),
-        );
-        obj.insert("stream".into(), Value::Bool(true));
-    }
+    let upstream_model = if provider.provider_model_id.is_empty() {
+        model.to_string()
+    } else {
+        provider.provider_model_id.clone()
+    };
+    body["model"] = Value::String(upstream_model);
+    body["stream"] = Value::Bool(true);
     let mut builder = pool.client.post(&url).json(&body);
     if let Some(key) = api_key(backend) {
         builder = builder.bearer_auth(key);
@@ -517,6 +515,232 @@ providers:
         let backend = mock_server_status(500).await;
         let doc = doc_with_backend(&backend);
         let err = forward(&doc, "m", &chat_req(), &[], &PoolState::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RouterError::Upstream(_)));
+    }
+
+    #[test]
+    fn pool_state_debug_lists_stats() {
+        let p = PoolState::default();
+        p.record("m", 5.0, false);
+        let s = format!("{p:?}");
+        assert!(s.contains("PoolState"));
+        assert!(s.contains("failures"));
+    }
+
+    #[test]
+    fn backend_api_key_empty_and_env_variants() {
+        // Empty inline key falls through to api_key_env (absent) → None.
+        let b = backend_with(r#"api_key: "" "#);
+        assert_eq!(backend_api_key(&b), None);
+
+        // Non-empty process env var is used.
+        let name = "ARIA_TEST_PROVIDER_KEY_7f3c";
+        std::env::set_var(name, "env-secret");
+        let b = backend_with(&format!("api_key_env: {name}"));
+        assert_eq!(backend_api_key(&b), Some("env-secret".into()));
+        // Empty env value is ignored.
+        std::env::set_var(name, "");
+        assert_eq!(backend_api_key(&b), None);
+        std::env::remove_var(name);
+    }
+
+    fn doc_with_empty_provider_model_id(backend: &str) -> RouterDocument {
+        RouterDocument::from_yaml_str(&format!(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: m
+  models:
+    - name: m
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: only
+          endpoint: {backend}
+          weight: 1
+          api_key: sk-test-key
+"#,
+            backend = backend
+        ))
+        .unwrap()
+    }
+
+    async fn mock_server_headers() -> String {
+        use axum::extract::Json;
+        use axum::http::HeaderMap;
+        use axum::response::IntoResponse;
+        use axum::routing::post;
+        async fn echo(headers: HeaderMap, Json(v): Json<serde_json::Value>) -> impl IntoResponse {
+            axum::Json(json!({
+                "model": v.get("model").cloned().unwrap_or(json!("")),
+                "auth": headers.get("authorization").and_then(|h| h.to_str().ok()).unwrap_or(""),
+                "trace": headers.get("x-trace").and_then(|h| h.to_str().ok()).unwrap_or(""),
+            }))
+        }
+        let app = axum::Router::new().route("/v1/chat/completions", post(echo));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("127.0.0.1:{}", addr.port())
+    }
+
+    #[tokio::test]
+    async fn forward_uses_model_name_when_provider_id_absent_and_sends_headers() {
+        let backend = mock_server_headers().await;
+        let doc = doc_with_empty_provider_model_id(&backend);
+        let pool = PoolState::default();
+        let res = forward(
+            &doc,
+            "m",
+            &chat_req(),
+            &[("x-trace".to_string(), "trace-1".to_string())],
+            &pool,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res["model"], "m");
+        assert_eq!(res["auth"], "Bearer sk-test-key");
+        assert_eq!(res["trace"], "trace-1");
+        assert_eq!(pool.failures_map().get("m").copied(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn forward_connection_failure_records_failure() {
+        let doc = doc_with_backend("127.0.0.1:1");
+        let pool = PoolState::default();
+        let err = forward(&doc, "m", &chat_req(), &[], &pool)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RouterError::Upstream(_)));
+        assert_eq!(pool.failures_map().get("m").copied(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn forward_sse_upstream_500_returns_upstream_error() {
+        let backend = mock_server_status(500).await;
+        let doc = doc_with_backend(&backend);
+        let err = forward_sse_stream(&doc, "m", &chat_req(), &[], &PoolState::default())
+            .await
+            .map(|_| ())
+            .expect_err("upstream 500 must be an error");
+        assert!(matches!(err, RouterError::Upstream(_)));
+    }
+
+    #[tokio::test]
+    async fn forward_sse_connection_failure_records_failure() {
+        let doc = doc_with_backend("127.0.0.1:1");
+        let pool = PoolState::default();
+        let err = forward_sse_stream(&doc, "m", &chat_req(), &[], &pool)
+            .await
+            .map(|_| ())
+            .expect_err("connection failure must be an error");
+        assert!(matches!(err, RouterError::Upstream(_)));
+        assert_eq!(pool.failures_map().get("m").copied(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn forward_sse_sends_model_id_auth_and_headers() {
+        let backend = mock_server().await;
+        let doc = doc_with_empty_provider_model_id(&backend);
+        let text = forward_sse_text(
+            &doc,
+            "m",
+            &chat_req(),
+            &[("x-trace".to_string(), "trace-1".to_string())],
+            &PoolState::default(),
+        )
+        .await
+        .unwrap();
+        assert!(text.contains("\"m\""));
+        assert!(text.contains("[DONE]"));
+    }
+
+    #[tokio::test]
+    async fn sse_stream_reports_completion_and_double_poll() {
+        use futures_util::StreamExt;
+        let backend = mock_server().await;
+        let doc = doc_with_backend(&backend);
+        let mut stream = forward_sse_stream(&doc, "m", &chat_req(), &[], &PoolState::default())
+            .await
+            .unwrap();
+        assert!(!stream.succeeded());
+        assert_eq!(stream.model(), "m");
+        while let Some(item) = stream.next().await {
+            item.unwrap();
+        }
+        assert!(stream.succeeded());
+        assert!(stream.accumulated().contains("[DONE]"));
+        assert!(stream.elapsed_ms() >= 0.0);
+        // A finished stream keeps returning `None` instead of polling upstream again.
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn sse_byte_stream_handles_pending_and_error_items() {
+        use futures_util::{FutureExt, StreamExt};
+
+        // A pending inner stream keeps `poll_next` in the Pending branch.
+        let pending: BoxByteStream = Box::pin(futures_util::stream::pending());
+        let mut stream = SseByteStream {
+            inner: pending,
+            buf: Vec::new(),
+            finished: false,
+            ok: true,
+            started: Instant::now(),
+            model: "m".into(),
+        };
+        assert!(stream.next().now_or_never().is_none());
+
+        // An error item marks the stream as failed and ends it.
+        let failing: BoxByteStream = Box::pin(futures_util::stream::iter(vec![Err(
+            RouterError::Upstream("boom".into()),
+        )]));
+        let mut stream = SseByteStream {
+            inner: failing,
+            buf: Vec::new(),
+            finished: false,
+            ok: true,
+            started: Instant::now(),
+            model: "m".into(),
+        };
+        assert!(stream.next().await.unwrap().is_err());
+        assert!(!stream.succeeded());
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn sse_stream_propagates_body_errors() {
+        use axum::body::Body;
+        use axum::http::header::CONTENT_TYPE;
+        use axum::routing::post;
+        let app = axum::Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                let chunks = futures_util::stream::iter(vec![
+                    Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"data: hi\n\n")),
+                    Err(std::io::Error::other("upstream aborted")),
+                ]);
+                axum::response::Response::builder()
+                    .status(200)
+                    .header(CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from_stream(chunks))
+                    .unwrap()
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let doc = doc_with_backend(&format!("127.0.0.1:{}", addr.port()));
+
+        let err = forward_sse_text(&doc, "m", &chat_req(), &[], &PoolState::default())
             .await
             .unwrap_err();
         assert!(matches!(err, RouterError::Upstream(_)));

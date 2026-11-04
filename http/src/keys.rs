@@ -643,6 +643,26 @@ impl KeyStore {
         }
     }
 
+    /// Register a pending OAuth link that points at an arbitrary serve URL, so
+    /// the callback exchange can be driven against a local mock server.
+    #[cfg(test)]
+    pub(crate) fn begin_link_at_for_test(&self, site_url: &str) -> String {
+        let mut rnd = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut rnd);
+        let state = hex::encode(rnd);
+        self.pending.lock().unwrap().insert(
+            state.clone(),
+            PendingLink {
+                site: "intl".into(),
+                site_url: site_url.to_string(),
+                expires_unix: now_unix() + LINK_STATE_TTL_SECS,
+                owner_user_id: None,
+                owner_email: None,
+            },
+        );
+        state
+    }
+
     pub fn oauth_set_site(&mut self, site: &str) -> Result<(), RouterError> {
         let (site, site_url, gateway_url) = normalize_site(site)?;
         if let Some(k) = self.active_oauth_mut() {
@@ -936,11 +956,10 @@ pub fn extract_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
     if let Some(v) = headers.get(axum::http::header::AUTHORIZATION) {
         if let Ok(s) = v.to_str() {
             let s = s.trim();
+            // `s` is already trimmed and the prefix ends with a space, so a
+            // non-empty `rest` is guaranteed here — no empty-token check needed.
             if let Some(rest) = s.strip_prefix("Bearer ") {
-                let t = rest.trim();
-                if !t.is_empty() {
-                    return Some(t.to_string());
-                }
+                return Some(rest.trim().to_string());
             }
         }
     }
@@ -959,6 +978,14 @@ pub fn extract_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn persist_without_parent_directory_reports_io_error() {
+        // A root path has no parent, so `persist` skips mkdir and fails on write.
+        let mut store = KeyStore::empty(std::path::PathBuf::from("/"));
+        let err = store.create("rootless").unwrap_err();
+        assert!(matches!(err, RouterError::Io(_)), "{err}");
+    }
 
     #[test]
     fn create_auth_revoke() {
@@ -1160,5 +1187,453 @@ mod tests {
         let acct = store.oauth_public();
         assert!(!acct.api_key_deleted);
         assert!(acct.api_key_configured);
+    }
+
+    fn linked_store(dir: &tempfile::TempDir) -> KeyStore {
+        let mut store = KeyStore::empty(dir.path().join("keys.json"));
+        let (_, state, _) = store.begin_link("com", None, None, None).unwrap();
+        let _ = store.take_pending(&state).unwrap();
+        store
+            .apply_exchange(ExchangeInput {
+                site: "https://ariacompute.com".into(),
+                site_url: "https://ariacompute.com".into(),
+                user: ServeUserInfo {
+                    id: serde_json::Value::String("serve-1".into()),
+                    email: Some("a@b.com".into()),
+                    role: None,
+                },
+                link_token: Some("lt".into()),
+                expires_at: None,
+                api_key: None,
+                owner_user_id: None,
+            })
+            .unwrap();
+        store
+    }
+
+    #[test]
+    fn list_public_and_owner_scoping() {
+        let dir = tempdir().unwrap();
+        let mut store = KeyStore::empty(dir.path().join("keys.json"));
+        let a = store.create_for("mine", Some("usr_1".into())).unwrap();
+        let b = store.create("theirs").unwrap();
+        assert_eq!(store.counts(), (2, 0));
+        let mine = store.list_public();
+        assert_eq!(mine.len(), 2);
+        assert_eq!(
+            mine.iter()
+                .find(|k| k.id == a.id)
+                .and_then(|k| k.owner_user_id.clone())
+                .as_deref(),
+            Some("usr_1")
+        );
+        // Owner scoping: non-admins only see their own keys.
+        assert_eq!(store.list_for_owner("usr_1", false).len(), 1);
+        assert_eq!(store.list_for_owner("usr_1", true).len(), 2);
+        assert!(store.list_for_owner("usr_2", false).is_empty());
+        // last_used_at is stamped on successful auth.
+        store.authenticate(&a.secret).unwrap();
+        let used = store
+            .list_public()
+            .into_iter()
+            .find(|k| k.id == a.id)
+            .unwrap();
+        assert!(used.last_used_at.is_some());
+
+        // Revoking an unknown key fails loudly; counts track revoked keys.
+        let err = store.revoke("key_nope").unwrap_err();
+        assert!(err.to_string().contains("unknown key id"), "{err}");
+        store.revoke(&b.id).unwrap();
+        assert_eq!(store.counts(), (1, 1));
+    }
+
+    #[test]
+    fn create_requires_name_and_owner_lookup() {
+        let dir = tempdir().unwrap();
+        let mut store = KeyStore::empty(dir.path().join("keys.json"));
+        let err = store.create("   ").unwrap_err();
+        assert!(err.to_string().contains("key name required"), "{err}");
+        let created = store.create_for("owned", Some("usr_9".into())).unwrap();
+        assert_eq!(
+            store.owner_of(&created.id).flatten().as_deref(),
+            Some("usr_9")
+        );
+        assert!(store.owner_of("key_missing").is_none());
+        let anonymous = store.create("anon").unwrap();
+        assert_eq!(store.owner_of(&anonymous.id), Some(None));
+    }
+
+    #[test]
+    fn authenticate_local_unknown_and_oauth_identity() {
+        let dir = tempdir().unwrap();
+        let mut store = KeyStore::empty(dir.path().join("keys.json"));
+        let err = store.authenticate("sk-aria_unknown").unwrap_err();
+        assert!(err.to_string().contains("invalid api key"), "{err}");
+        // An OAuth key with no linked account cannot authenticate.
+        let err = store.authenticate("sk-bf-not-linked").unwrap_err();
+        assert!(err.to_string().contains("OAuth key not linked"), "{err}");
+
+        store
+            .oauth_set_api_key("sk-bf-REVEAL12345678", Some("oauth-name"))
+            .unwrap();
+        let (id, name, owner) = store.authenticate("sk-bf-REVEAL12345678").unwrap();
+        assert!(id.starts_with("serve:"), "{id}");
+        assert_eq!(name, "oauth-name");
+        assert!(owner.is_none());
+        assert_eq!(
+            store.oauth_reveal_secret().as_deref(),
+            Some("sk-bf-REVEAL12345678")
+        );
+        assert_eq!(store.oauth_site_url(), None);
+        assert_eq!(store.oauth_link_token(), None);
+    }
+
+    #[test]
+    fn oauth_unlink_clear_and_site_updates() {
+        let dir = tempdir().unwrap();
+        let mut store = linked_store(&dir);
+        assert_eq!(
+            store.oauth_site_url().as_deref(),
+            Some("https://ariacompute.com")
+        );
+        assert_eq!(store.oauth_link_token().as_deref(), Some("lt"));
+
+        // Switching to the CN site rewrites site/site_url/gateway_url in place.
+        store.oauth_set_site("cn").unwrap();
+        let acct = store.oauth_public();
+        assert_eq!(acct.site.as_deref(), Some("cn"));
+        assert_eq!(acct.site_url.as_deref(), Some("https://ariacompute.cn"));
+        assert_eq!(
+            acct.gateway_url.as_deref(),
+            Some("https://gateway.ariacompute.cn")
+        );
+        // Invalid site fails closed.
+        let err = store.oauth_set_site("mars").unwrap_err();
+        assert!(err.to_string().contains("must be com|cn"), "{err}");
+
+        // oauth_clear_api_key only drops the secret + prefix.
+        store
+            .oauth_set_api_key("sk-bf-CLEARME1234567", Some("k"))
+            .unwrap();
+        assert!(store.oauth_api_key().is_some());
+        store.oauth_clear_api_key().unwrap();
+        assert!(store.oauth_api_key().is_none());
+        let acct = store.oauth_public();
+        assert_eq!(acct.api_key_prefix.as_deref(), Some(""));
+        assert!(acct.linked, "account stays linked");
+
+        // Mark/unmark deletion requires a linked account to exist.
+        store.oauth_mark_api_key_deleted().unwrap();
+        assert!(store.oauth_public().api_key_deleted);
+        store.oauth_unmark_api_key_deleted().unwrap();
+        assert!(!store.oauth_public().api_key_deleted);
+
+        // Unlinking revokes the OAuth row: several APIs then report "not linked".
+        store.oauth_clear().unwrap();
+        let cleared = store.oauth_public();
+        assert!(!cleared.linked);
+        assert_eq!(cleared.status, "not linked");
+        assert!(store.oauth_clear_api_key().is_err());
+        assert!(store.oauth_mark_api_key_deleted().is_err());
+        assert!(store.oauth_unmark_api_key_deleted().is_err());
+    }
+
+    #[test]
+    fn oauth_site_only_row_reports_key_only_status() {
+        let dir = tempdir().unwrap();
+        let mut store = KeyStore::empty(dir.path().join("keys.json"));
+        // `oauth_set_api_key` on an unlinked store creates a key-only row.
+        store
+            .oauth_set_api_key("sk-bf-ORPHAN1234567", None)
+            .unwrap();
+        let acct = store.oauth_public();
+        assert!(!acct.linked);
+        assert!(acct.api_key_configured);
+        assert_eq!(acct.status, "key only, not linked");
+        assert_eq!(acct.api_key_name.as_deref(), Some("aria-router"));
+        // A site can be attached to the same row afterwards.
+        store.oauth_set_site("ariacompute.cn").unwrap();
+        assert_eq!(store.oauth_public().site.as_deref(), Some("cn"));
+        assert_eq!(
+            store.oauth_site_url().as_deref(),
+            Some("https://ariacompute.cn")
+        );
+    }
+
+    #[test]
+    fn begin_link_omits_empty_email_and_name_and_expires_state() {
+        let dir = tempdir().unwrap();
+        let store = KeyStore::empty(dir.path().join("keys.json"));
+        let (url, state, site_url) = store
+            .begin_link("com", None, Some(String::new()), Some(String::new()))
+            .unwrap();
+        assert!(!url.contains("&email="), "{url}");
+        assert!(!url.contains("&name="), "{url}");
+        assert_eq!(site_url, "https://ariacompute.com");
+        assert_eq!(state.len(), 32);
+
+        // Expired pending state is rejected (and consumed).
+        store
+            .pending
+            .lock()
+            .unwrap()
+            .get_mut(&state)
+            .unwrap()
+            .expires_unix = now_unix() - 1;
+        let err = store.take_pending(&state).unwrap_err();
+        assert!(err.to_string().contains("oauth state expired"), "{err}");
+        let err = store.take_pending("unknown-state").unwrap_err();
+        assert!(err.to_string().contains("invalid oauth state"), "{err}");
+    }
+
+    #[test]
+    fn apply_exchange_tolerates_unknown_site_and_rejects_bad_key() {
+        let dir = tempdir().unwrap();
+        let mut store = KeyStore::empty(dir.path().join("keys.json"));
+        store
+            .apply_exchange(ExchangeInput {
+                site: "cn-mirror".into(),
+                site_url: "https://custom.example".into(),
+                user: ServeUserInfo {
+                    id: serde_json::Value::Number(7.into()),
+                    email: None,
+                    role: None,
+                },
+                link_token: None,
+                expires_at: Some("2030-01-01T00:00:00Z".into()),
+                api_key: None,
+                owner_user_id: None,
+            })
+            .unwrap();
+        let acct = store.oauth_public();
+        // Unknown site with "cn" in it is treated as the CN deployment.
+        assert_eq!(acct.site.as_deref(), Some("cn"));
+        assert_eq!(acct.site_url.as_deref(), Some("https://custom.example"));
+        assert!(acct.linked);
+
+        // A second exchange reuses the existing OAuth row instead of adding one.
+        store
+            .apply_exchange(ExchangeInput {
+                site: "intl".into(),
+                site_url: "https://ariacompute.com".into(),
+                user: ServeUserInfo {
+                    id: serde_json::Value::String("serve-2".into()),
+                    email: Some("b@c.io".into()),
+                    role: None,
+                },
+                link_token: Some("lt2".into()),
+                expires_at: None,
+                api_key: Some(("renamed".into(), "sk-bf-SECONDKEY12345".into())),
+                owner_user_id: Some("usr_2".into()),
+            })
+            .unwrap();
+        assert_eq!(
+            store.oauth_api_key().as_deref(),
+            Some("sk-bf-SECONDKEY12345")
+        );
+        assert_eq!(
+            store.oauth_public().api_key_name.as_deref(),
+            Some("renamed")
+        );
+        assert_eq!(store.oauth_owner_user_id().as_deref(), Some("usr_2"));
+
+        let err = store
+            .apply_exchange(ExchangeInput {
+                site: "intl".into(),
+                site_url: "https://ariacompute.com".into(),
+                user: ServeUserInfo {
+                    id: serde_json::Value::Null,
+                    email: None,
+                    role: None,
+                },
+                link_token: None,
+                expires_at: None,
+                api_key: Some(("bad".into(), "sk-aria_local".into())),
+                owner_user_id: None,
+            })
+            .unwrap_err();
+        assert!(matches!(err, RouterError::InvalidParam(_)), "{err}");
+    }
+
+    #[test]
+    fn normalize_site_and_gateway_endpoints() {
+        assert_eq!(normalize_site("intl").unwrap().0, "intl");
+        assert_eq!(normalize_site("COM").unwrap().1, "https://ariacompute.com");
+        assert_eq!(normalize_site("1").unwrap().0, "intl");
+        assert_eq!(normalize_site("ariacompute.com").unwrap().0, "intl");
+        assert_eq!(normalize_site("cn").unwrap().0, "cn");
+        assert_eq!(normalize_site("2").unwrap().0, "cn");
+        assert_eq!(normalize_site("ariacompute.cn").unwrap().0, "cn");
+        assert_eq!(
+            normalize_site("https://ariacompute.cn/x").unwrap().1,
+            "https://ariacompute.cn"
+        );
+        assert_eq!(
+            normalize_site("https://ariacompute.com/x").unwrap().2,
+            "https://gateway.ariacompute.com"
+        );
+        assert!(normalize_site("example.org").is_err());
+        assert_eq!(gateway_for_site("cn"), "https://gateway.ariacompute.cn");
+        assert_eq!(gateway_for_site("intl"), "https://gateway.ariacompute.com");
+        assert_eq!(pct_encode_for_test("a b/c"), "a%20b%2Fc");
+    }
+
+    fn pct_encode_for_test(s: &str) -> String {
+        KeyStore::pct_encode(s)
+    }
+
+    #[test]
+    fn validate_oauth_key_rejects_foreign_and_short_keys() {
+        let err = validate_oauth_key("sk-aria_abc").unwrap_err();
+        assert!(err.to_string().contains("Local router key"), "{err}");
+        let err = validate_oauth_key("plain-key").unwrap_err();
+        assert!(err.to_string().contains("must start with sk-bf-"), "{err}");
+        let err = validate_oauth_key("sk-bf-").unwrap_err();
+        assert!(err.to_string().contains("too short"), "{err}");
+    }
+
+    #[test]
+    fn extract_bearer_prefers_authorization_then_x_api_key() {
+        use axum::http::header::AUTHORIZATION;
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(AUTHORIZATION, "Bearer tok-1".parse().unwrap());
+        assert_eq!(extract_bearer(&h).as_deref(), Some("tok-1"));
+        h.insert(AUTHORIZATION, "Bearer   ".parse().unwrap());
+        assert!(extract_bearer(&h).is_none());
+        h.insert(AUTHORIZATION, "Basic abc".parse().unwrap());
+        h.insert("x-api-key", "fallback".parse().unwrap());
+        assert_eq!(extract_bearer(&h).as_deref(), Some("fallback"));
+        h.insert("x-api-key", "   ".parse().unwrap());
+        assert!(extract_bearer(&h).is_none());
+        // Non-UTF-8 header values are ignored rather than panicking.
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_bytes(b"\x80").unwrap(),
+        );
+        assert!(extract_bearer(&h).is_none());
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            AUTHORIZATION,
+            axum::http::HeaderValue::from_bytes(b"Bearer \x80").unwrap(),
+        );
+        assert!(extract_bearer(&h).is_none());
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            "x-api-key",
+            axum::http::HeaderValue::from_bytes(b"\x80").unwrap(),
+        );
+        assert!(extract_bearer(&h).is_none());
+    }
+
+    #[test]
+    fn load_skips_migration_when_oauth_row_exists() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        let mut store = linked_store(&dir);
+        store
+            .oauth_set_api_key("sk-bf-PERSIST1234567", None)
+            .unwrap();
+        // Legacy file present, but an active OAuth row already wins.
+        std::fs::write(
+            dir.path().join("router-serve.json"),
+            r#"{"site":"com","api_key":"sk-bf-LEGACY12345678"}"#,
+        )
+        .unwrap();
+        let reloaded = KeyStore::load(&path).unwrap();
+        assert_eq!(
+            reloaded.oauth_api_key().as_deref(),
+            Some("sk-bf-PERSIST1234567")
+        );
+        assert!(dir.path().join("router-serve.json").exists());
+    }
+
+    #[test]
+    fn legacy_migration_keeps_user_only_records() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("router-keys.json");
+        std::fs::write(
+            dir.path().join("router-serve.json"),
+            r#"{"site":"cn","user":{"id":"serve-9","email":"a@b.io"}}"#,
+        )
+        .unwrap();
+        let store = KeyStore::load(&path).unwrap();
+        let acct = store.oauth_public();
+        assert!(acct.linked);
+        // No api_key in the legacy file → nothing configured, name/prefix defaults.
+        assert!(!acct.api_key_configured);
+        assert_eq!(acct.api_key_name.as_deref(), Some("aria-router"));
+        assert_eq!(acct.api_key_prefix.as_deref(), Some(""));
+        assert_eq!(acct.status, "linked, no api key");
+    }
+
+    #[test]
+    fn legacy_migration_ignores_empty_files_and_bad_json() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("router-keys.json");
+        std::fs::write(dir.path().join("router-serve.json"), "{}").unwrap();
+        let store = KeyStore::load(&path).unwrap();
+        assert!(!store.oauth_public().linked);
+        // The legacy file is removed even when empty.
+        assert!(!dir.path().join("router-serve.json").exists());
+
+        std::fs::write(dir.path().join("router-serve.json"), "{not json").unwrap();
+        let err = KeyStore::load(&path).unwrap_err();
+        assert!(matches!(err, RouterError::Config(_)), "{err}");
+    }
+
+    #[test]
+    fn persist_reports_unwritable_paths() {
+        let mut store = KeyStore::empty(std::path::PathBuf::from(
+            "/proc/definitely-missing/keys.json",
+        ));
+        let err = store.create("ci").unwrap_err();
+        assert!(matches!(err, RouterError::Io(_)), "{err}");
+    }
+    #[test]
+    fn persist_creates_missing_parent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/deeper/router-keys.json");
+        let mut store = KeyStore::empty(path.clone());
+        store.create("k").unwrap();
+        assert!(path.is_file(), "persist must mkdir parents");
+    }
+
+    #[test]
+    fn apply_exchange_falls_back_for_unknown_site_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = KeyStore::empty(dir.path().join("keys.json"));
+        let info = |site: &str, url: &str| ExchangeInput {
+            site: site.into(),
+            site_url: url.into(),
+            user: ServeUserInfo {
+                id: serde_json::Value::String("s1".into()),
+                email: None,
+                role: None,
+            },
+            link_token: None,
+            expires_at: None,
+            api_key: None,
+            owner_user_id: None,
+        };
+        // `contains("cn")` selects the CN site, everything else the intl site.
+        store
+            .apply_exchange(info("https://serve.internal.cn", "https://a"))
+            .unwrap();
+        assert_eq!(store.oauth_public().site.as_deref(), Some("cn"));
+        store.oauth_clear().unwrap();
+        store
+            .apply_exchange(info("https://serve.internal", "https://b"))
+            .unwrap();
+        assert_eq!(store.oauth_public().site.as_deref(), Some("intl"));
+    }
+
+    #[test]
+    fn extract_bearer_rejects_empty_tokens() {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("authorization", "Bearer    ".parse().unwrap());
+        assert!(extract_bearer(&h).is_none());
+        h.insert("authorization", "Bearer tok".parse().unwrap());
+        assert_eq!(extract_bearer(&h).as_deref(), Some("tok"));
     }
 }

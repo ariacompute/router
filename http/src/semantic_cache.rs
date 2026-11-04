@@ -67,7 +67,6 @@ impl SemanticCache {
             return;
         }
         let mut g = self.inner.lock().unwrap();
-        let idx = g.entries.len();
         g.entries.push(Entry {
             vec: hash_embed(text, 64),
             model: model.to_string(),
@@ -75,21 +74,18 @@ impl SemanticCache {
             body,
             ttl_left: ttl_turns.max(1),
         });
-        g.order.push_back(idx);
-        while g.entries.len() > cfg.max_entries {
-            if let Some(old) = g.order.pop_front() {
-                if old < g.entries.len() {
-                    g.entries.remove(old);
-                    // Rebuild order indices — keep simple by clearing order on overflow trim.
-                    g.order.clear();
-                    for i in 0..g.entries.len() {
-                        g.order.push_back(i);
-                    }
-                    break;
-                }
-            } else {
-                break;
+        if g.entries.len() > cfg.max_entries {
+            // Entries are appended in order, so draining the head evicts the oldest
+            // first. Rebuild the order queue afterwards (indices shift).
+            let excess = g.entries.len() - cfg.max_entries;
+            g.entries.drain(..excess);
+            g.order.clear();
+            for i in 0..g.entries.len() {
+                g.order.push_back(i);
             }
+        } else {
+            let idx = g.entries.len() - 1;
+            g.order.push_back(idx);
         }
     }
 

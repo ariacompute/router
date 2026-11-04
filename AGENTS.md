@@ -41,6 +41,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 - `cargo run -p aria-router -- upgrade`
 - `cargo run -p aria-router -- serve --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090`
 - `npm --prefix dashboard ci && npm --prefix dashboard run build`
+- `./scripts/coverage.sh`（100% 行覆盖门禁，写 `lcov.info`；`report`/`html` 定位缺口）
 - `./scripts/run-binding-tests.sh`
 - `python -m unittest discover -s bench/tests -t .`
 - `python -m bench routing --router aria_router=… --router vllm_sr=… …`
@@ -50,6 +51,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 
 ## 进行中需求
 阶段 **R**（T50–T56）已落地。**T81** upgrade、**T82–T84** AFM-D 决策器（`router: afm-d`）已落地。
+**T85** 工程质量升级（依赖升级 + 100% 行覆盖门禁 + CI）已落地，见 `task.md` / `docs/coverage-exclusions.md`。
 
 ## Trust stores (eMudhra/emSign CA key compromise, 2026-10)
 

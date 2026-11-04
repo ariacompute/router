@@ -87,13 +87,16 @@ pub fn apply_request(
             }
             "response-cache" | "response_cache" => {
                 let key = cache_key(&req);
-                if let Ok(map) = host.cache.lock() {
-                    if let Some(hit) = map.get(&key) {
-                        return Ok(PluginOutcome::FastResponse(hit.clone()));
-                    }
+                let map = host
+                    .cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(hit) = map.get(&key) {
+                    return Ok(PluginOutcome::FastResponse(hit.clone()));
                 }
             }
-            "header-mutation" | "header_mutation" => {}
+            // header-mutation is applied at forward time (`extra_headers`); no
+            // request-side effect here.
             _ => {}
         }
     }
@@ -110,9 +113,11 @@ pub fn remember_response(
     if !has_response_cache(plugins) {
         return;
     }
-    if let Ok(mut map) = host.cache.lock() {
-        map.insert(cache_key(req), body.clone());
-    }
+    let mut map = host
+        .cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.insert(cache_key(req), body.clone());
 }
 
 fn cache_key(req: &ChatRequest) -> String {
@@ -141,6 +146,18 @@ mod tests {
     use super::*;
     use aria_router_core::{ChatMessage, ChatRequest};
 
+    /// Normalize both outcome variants into JSON so assertions exercise every arm.
+    fn describe(out: PluginOutcome) -> serde_json::Value {
+        match out {
+            PluginOutcome::Continue(r) => serde_json::json!({
+                "kind": "continue",
+                "role": r.messages.first().map(|m| m.role.clone()),
+                "max_tokens": r.max_tokens,
+            }),
+            PluginOutcome::FastResponse(v) => serde_json::json!({"kind": "fast", "body": v}),
+        }
+    }
+
     fn req(text: &str) -> ChatRequest {
         ChatRequest {
             model: "m".into(),
@@ -168,13 +185,10 @@ mod tests {
                 extra: [("max_tokens".into(), serde_json::json!(8))].into(),
             },
         ];
-        match apply_request(&host, &plugins, req("hi")).unwrap() {
-            PluginOutcome::Continue(r) => {
-                assert_eq!(r.messages[0].role, "system");
-                assert_eq!(r.max_tokens, Some(8));
-            }
-            _ => panic!("expected continue"),
-        }
+        let d = describe(apply_request(&host, &plugins, req("hi")).unwrap());
+        assert_eq!(d["kind"], "continue");
+        assert_eq!(d["role"], "system");
+        assert_eq!(d["max_tokens"], 8);
     }
 
     #[test]
@@ -184,12 +198,9 @@ mod tests {
             name: "fast-response".into(),
             extra: [("message".into(), serde_json::json!("blocked"))].into(),
         }];
-        match apply_request(&host, &plugins, req("hi")).unwrap() {
-            PluginOutcome::FastResponse(v) => {
-                assert_eq!(v["choices"][0]["message"]["content"], "blocked");
-            }
-            _ => panic!("expected fast"),
-        }
+        let d = describe(apply_request(&host, &plugins, req("hi")).unwrap());
+        assert_eq!(d["kind"], "fast");
+        assert_eq!(d["body"]["choices"][0]["message"]["content"], "blocked");
     }
 
     #[test]
@@ -201,10 +212,50 @@ mod tests {
             extra: Default::default(),
         }];
         remember_response(&host, &plugins, &r, &serde_json::json!({"cached": true}));
-        match apply_request(&host, &plugins, r).unwrap() {
-            PluginOutcome::FastResponse(v) => assert_eq!(v["cached"], true),
-            _ => panic!("expected cache hit"),
-        }
+        let d = describe(apply_request(&host, &plugins, r).unwrap());
+        assert_eq!(d["kind"], "fast");
+        assert_eq!(d["body"]["cached"], true);
+    }
+
+    #[test]
+    fn response_cache_miss_continues() {
+        let host = PluginHost::default();
+        let plugins = vec![PluginRef {
+            name: "response_cache".into(),
+            extra: Default::default(),
+        }];
+        let out = apply_request(&host, &plugins, req("never-cached")).unwrap();
+        assert!(matches!(out, PluginOutcome::Continue(_)));
+    }
+
+    #[test]
+    fn header_mutation_is_request_noop() {
+        let host = PluginHost::default();
+        let plugins = vec![PluginRef {
+            name: "header_mutation".into(),
+            extra: [("set".into(), serde_json::json!({"x-test": "1"}))].into(),
+        }];
+        let out = apply_request(&host, &plugins, req("hi")).unwrap();
+        assert!(matches!(out, PluginOutcome::Continue(_)));
+    }
+
+    #[test]
+    fn extra_headers_skips_missing_and_non_string_values() {
+        let plugins = vec![
+            PluginRef {
+                name: "header_mutation".into(),
+                extra: Default::default(),
+            },
+            PluginRef {
+                name: "header-mutation".into(),
+                extra: [("set".into(), serde_json::json!({"x-num": 1}))].into(),
+            },
+            PluginRef {
+                name: "system-prompt".into(),
+                extra: [("set".into(), serde_json::json!({"x-ignored": "v"}))].into(),
+            },
+        ];
+        assert!(extra_headers(&plugins).is_empty());
     }
 
     #[test]

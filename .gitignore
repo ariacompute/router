@@ -18,3 +18,4 @@ bindings/flutter/build/
 .codebuddy/
 out/
 bench/vllm-sr/.vllm-sr/
+lcov.info

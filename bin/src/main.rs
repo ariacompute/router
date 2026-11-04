@@ -65,7 +65,7 @@ enum Command {
     Version,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 struct SetupArgs {
     /// Show config status
     #[arg(long)]
@@ -122,46 +122,101 @@ struct SetupArgs {
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = run().await {
+    let cli = Cli::parse();
+    let mut io = StdIo;
+    if let Err(e) = run_with(cli, &mut io).await {
         eprintln!("{e}");
         std::process::exit(1);
     }
 }
 
-fn prompt(label: &str) -> io::Result<String> {
-    eprint!("{label}");
-    io::stderr().flush()?;
-    let mut line = String::new();
-    io::stdin().lock().read_line(&mut line)?;
-    Ok(line.trim().to_string())
+/// Terminal interaction seam: the real CLI uses stdin/stderr, tests inject a
+/// scripted implementation so every prompt branch is exercisable in-process.
+trait CliIo {
+    fn prompt(&mut self, label: &str) -> io::Result<String>;
+    fn prompt_secret(&mut self, label: &str) -> io::Result<String>;
+    fn is_tty(&self) -> bool;
+    /// Completes when the servers should stop. Production waits forever.
+    fn serve_shutdown(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 }
 
-/// Prompt for a secret: echo `*` per character (no plaintext). Falls back to
-/// plain read_line when stdin is not a TTY.
-fn prompt_password(label: &str) -> io::Result<String> {
-    eprint!("{label}");
-    io::stderr().flush()?;
-    #[cfg(unix)]
-    {
-        if unsafe { libc::isatty(libc::STDIN_FILENO) } != 0 {
-            let secret = read_password_masked()?;
-            eprintln!();
-            return Ok(secret);
+struct StdIo;
+
+impl CliIo for StdIo {
+    fn prompt(&mut self, label: &str) -> io::Result<String> {
+        eprint!("{label}");
+        io::stderr().flush()?;
+        let mut line = String::new();
+        io::stdin().lock().read_line(&mut line)?;
+        Ok(line.trim().to_string())
+    }
+
+    fn prompt_secret(&mut self, label: &str) -> io::Result<String> {
+        eprint!("{label}");
+        io::stderr().flush()?;
+        #[cfg(unix)]
+        {
+            if is_tty_fd(libc::STDIN_FILENO) {
+                let secret = read_password_masked()?;
+                eprintln!();
+                return Ok(secret);
+            }
+        }
+        let mut line = String::new();
+        io::stdin().lock().read_line(&mut line)?;
+        Ok(line.trim_end_matches(['\r', '\n']).to_string())
+    }
+
+    fn is_tty(&self) -> bool {
+        #[cfg(unix)]
+        {
+            is_tty_fd(libc::STDIN_FILENO)
+        }
+        #[cfg(not(unix))]
+        {
+            true
         }
     }
-    let mut line = String::new();
-    io::stdin().lock().read_line(&mut line)?;
-    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+
+    fn serve_shutdown(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        Box::pin(std::future::pending())
+    }
 }
 
 #[cfg(unix)]
+fn is_tty_fd(fd: libc::c_int) -> bool {
+    unsafe { libc::isatty(fd) != 0 }
+}
+
+/// Read a secret from the terminal with echo disabled, printing `*` per
+/// accepted character. Restores the original terminal attributes on drop.
+#[cfg(unix)]
 fn read_password_masked() -> io::Result<String> {
-    use std::io::Read;
-    use std::mem::MaybeUninit;
     use std::os::fd::AsRawFd;
 
     let stdin = io::stdin();
-    let fd = stdin.as_raw_fd();
+    let _restore = mask_termios(stdin.as_raw_fd())?;
+    let mut out = String::new();
+    read_secret(&mut stdin.lock(), &mut io::stderr(), &mut out)?;
+    Ok(out)
+}
+
+/// Restores the previous terminal attributes when dropped.
+#[cfg(unix)]
+struct Restore(libc::termios);
+
+#[cfg(unix)]
+impl Drop for Restore {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.0) };
+    }
+}
+
+/// Disable echo/canonical mode on `fd`, returning the previous settings.
+#[cfg(unix)]
+fn mask_termios(fd: libc::c_int) -> io::Result<Restore> {
+    use std::mem::MaybeUninit;
+
     let mut old = MaybeUninit::<libc::termios>::uninit();
     if unsafe { libc::tcgetattr(fd, old.as_mut_ptr()) } != 0 {
         return Err(io::Error::last_os_error());
@@ -171,23 +226,29 @@ fn read_password_masked() -> io::Result<String> {
     raw.c_lflag &= !(libc::ECHO | libc::ICANON);
     raw.c_cc[libc::VMIN] = 1;
     raw.c_cc[libc::VTIME] = 0;
-    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+    set_termios(fd, &raw)?;
+    Ok(Restore(old))
+}
+
+/// Apply terminal attributes (`tcsetattr`) to `fd`.
+#[cfg(unix)]
+fn set_termios(fd: libc::c_int, t: &libc::termios) -> io::Result<()> {
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, t) } != 0 {
         return Err(io::Error::last_os_error());
     }
+    Ok(())
+}
 
-    struct Restore(libc::termios);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            let _ = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.0) };
-        }
-    }
-    let _restore = Restore(old);
-
-    let mut out = String::new();
-    let mut stdin = stdin.lock();
+/// Byte loop shared by the masked prompt: `*` echo, backspace handling, and
+/// stop conditions that do not require a real terminal.
+fn read_secret<R: io::Read, W: io::Write>(
+    input: &mut R,
+    echo: &mut W,
+    out: &mut String,
+) -> io::Result<()> {
     let mut buf = [0u8; 1];
     loop {
-        let n = stdin.read(&mut buf)?;
+        let n = input.read(&mut buf)?;
         if n == 0 {
             break;
         }
@@ -195,19 +256,19 @@ fn read_password_masked() -> io::Result<String> {
             b'\n' | b'\r' => break,
             0x7f | 0x08 => {
                 if out.pop().is_some() {
-                    eprint!("\x08 \x08");
-                    io::stderr().flush()?;
+                    echo.write_all(b"\x08 \x08")?;
+                    echo.flush()?;
                 }
             }
             c if c >= 0x20 && c != 0x7f => {
                 out.push(c as char);
-                eprint!("*");
-                io::stderr().flush()?;
+                echo.write_all(b"*")?;
+                echo.flush()?;
             }
             _ => {}
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 fn resolve_config(config: Option<String>) -> Result<String, Box<dyn std::error::Error>> {
@@ -221,7 +282,12 @@ fn resolve_config(config: Option<String>) -> Result<String, Box<dyn std::error::
     Ok(path.display().to_string())
 }
 
-fn prompt_opt(label: &str, flag: Option<String>, interactive: bool) -> Option<String> {
+fn prompt_opt(
+    io: &mut dyn CliIo,
+    label: &str,
+    flag: Option<String>,
+    interactive: bool,
+) -> Option<String> {
     if let Some(v) = flag {
         let t = v.trim();
         return if t.is_empty() {
@@ -233,7 +299,7 @@ fn prompt_opt(label: &str, flag: Option<String>, interactive: bool) -> Option<St
     if !interactive {
         return None;
     }
-    let ans = prompt(label).unwrap_or_default();
+    let ans = io.prompt(label).unwrap_or_default();
     let t = ans.trim();
     if t.is_empty() {
         None
@@ -242,32 +308,22 @@ fn prompt_opt(label: &str, flag: Option<String>, interactive: bool) -> Option<St
     }
 }
 
-fn stdin_is_tty() -> bool {
-    #[cfg(unix)]
-    {
-        unsafe { libc::isatty(libc::STDIN_FILENO) != 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
-fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_setup(args: SetupArgs, io: &mut dyn CliIo) -> Result<(), Box<dyn std::error::Error>> {
     if args.status {
         return setup_status();
     }
     if args.clear {
-        return setup_clear();
+        return setup_clear(io);
     }
 
     let template_flag = args.template.is_some();
     let admin_flagged = args.admin_user.is_some() && args.admin_password.is_some();
     // Fully flagged setup (CI): keep gateway defaults unless model flags passed.
-    let prompt_models = stdin_is_tty() && !(template_flag && admin_flagged);
+    let prompt_models = io.is_tty() && !(template_flag && admin_flagged);
 
     let raw = args.template.unwrap_or_else(|| {
-        prompt("template [semantic|agent|afm-d] (default: semantic): ").unwrap_or_default()
+        io.prompt("template [semantic|agent|afm-d] (default: semantic): ")
+            .unwrap_or_default()
     });
     let kind = if raw.is_empty() {
         "semantic".to_string()
@@ -284,11 +340,13 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     let models = aria_router_config::SetupModelOpts {
         base_url: prompt_opt(
+            io,
             "gateway base_url [https://tokenhub.tencentmaas.com]: ",
             args.base_url,
             prompt_models,
         ),
         api_key_env: prompt_opt(
+            io,
             "api_key_env name [GATEWAY_API_KEY]: ",
             args.api_key_env,
             prompt_models,
@@ -303,9 +361,9 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
                     Some(t.to_string())
                 }
             } else if prompt_models {
-                let ans =
-                    prompt_password("gateway API key (saved in router.yml; Enter=env only): ")
-                        .unwrap_or_default();
+                let ans = io
+                    .prompt_secret("gateway API key (saved in router.yml; Enter=env only): ")
+                    .unwrap_or_default();
                 let t = ans.trim();
                 if t.is_empty() {
                     None
@@ -317,22 +375,26 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         small_provider_model_id: prompt_opt(
+            io,
             &format!("ariamodel-small provider_model_id [{tmpl_small}]: "),
             args.model_small,
             prompt_models,
         ),
         mid_provider_model_id: prompt_opt(
+            io,
             &format!("ariamodel-mid provider_model_id [{tmpl_mid}]: "),
             args.model_mid,
             prompt_models,
         ),
         large_provider_model_id: prompt_opt(
+            io,
             &format!("ariamodel-large provider_model_id [{tmpl_large}]: "),
             args.model_large,
             prompt_models,
         ),
         agent_endpoint: if kind == "agent" {
             prompt_opt(
+                io,
                 "agent.endpoint [same as base_url / tokenhub]: ",
                 args.agent_endpoint,
                 prompt_models,
@@ -342,6 +404,7 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
         },
         agent_model: if kind == "agent" {
             prompt_opt(
+                io,
                 "agent.model [ariacompute/ariamodel-mid]: ",
                 args.agent_model,
                 prompt_models,
@@ -351,6 +414,7 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
         },
         agent_fallback: if kind == "agent" {
             prompt_opt(
+                io,
                 "agent.fallback [ariacompute/ariamodel-mid]: ",
                 args.agent_fallback,
                 prompt_models,
@@ -360,6 +424,7 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
         },
         afm_d_endpoint: if kind == "afm-d" {
             prompt_opt(
+                io,
                 "afm-d.endpoint [http://127.0.0.1:8010]: ",
                 args.afm_d_endpoint,
                 prompt_models,
@@ -369,6 +434,7 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
         },
         afm_d_fallback: if kind == "afm-d" {
             prompt_opt(
+                io,
                 "afm-d.fallback [ariacompute/ariamodel-mid]: ",
                 args.afm_d_fallback,
                 prompt_models,
@@ -379,30 +445,32 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let admin_user = args.admin_user.unwrap_or_else(|| {
-        let u = prompt("admin username [admin]: ").unwrap_or_default();
+        let u = io.prompt("admin username [admin]: ").unwrap_or_default();
         if u.is_empty() {
             "admin".into()
         } else {
             u
         }
     });
-    let admin_pass = args.admin_password.unwrap_or_else(|| {
-        let p1 = prompt_password("admin password: ").unwrap_or_default();
-        let p2 = prompt_password("confirm password: ").unwrap_or_default();
-        if p1 != p2 {
-            eprintln!("passwords do not match");
-            std::process::exit(1);
+    let admin_pass = match args.admin_password {
+        Some(p) => p,
+        None => {
+            let p1 = io.prompt_secret("admin password: ").unwrap_or_default();
+            let p2 = io.prompt_secret("confirm password: ").unwrap_or_default();
+            if p1 != p2 {
+                return Err("passwords do not match".into());
+            }
+            p1
         }
-        p1
-    });
+    };
     if admin_pass.len() < 8 {
         return Err("password must be at least 8 characters".into());
     }
 
     let path = default_config_path()?;
     let overwrite = if path.exists() {
-        if prompt_models || stdin_is_tty() {
-            let ans = prompt(&format!("{} exists; overwrite? [y/N]: ", path.display()))?;
+        if prompt_models || io.is_tty() {
+            let ans = io.prompt(&format!("{} exists; overwrite? [y/N]: ", path.display()))?;
             matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes")
         } else {
             // Non-interactive flagged setup: overwrite.
@@ -432,13 +500,13 @@ fn cmd_setup(args: SetupArgs) -> Result<(), Box<dyn std::error::Error>> {
         } else {
             t.to_string()
         }
-    } else if prompt_models || stdin_is_tty() {
+    } else if prompt_models || io.is_tty() {
         let hint = if existing_cli.upgrade_url.is_empty() {
             default_upgrade
         } else {
             existing_cli.upgrade_url.as_str()
         };
-        let ans = prompt(&format!("upgrade_url (default: {hint}): "))?;
+        let ans = io.prompt(&format!("upgrade_url (default: {hint}): "))?;
         if ans.trim().is_empty() {
             hint.to_string()
         } else {
@@ -556,13 +624,13 @@ fn setup_status() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn setup_clear() -> Result<(), Box<dyn std::error::Error>> {
+fn setup_clear(io: &mut dyn CliIo) -> Result<(), Box<dyn std::error::Error>> {
     let path = clear_default_config()?;
     println!("cleared {}", path.display());
     if let Some(p) = clear_cli_config()? {
         println!("cleared {}", p.display());
     }
-    let ans = prompt("also delete router-keys.json and router-users.json? [y/N]: ")?;
+    let ans = io.prompt("also delete router-keys.json and router-users.json? [y/N]: ")?;
     if matches!(ans.to_ascii_lowercase().as_str(), "y" | "yes") {
         for p in [default_keys_path()?, default_users_path()?] {
             if p.exists() {
@@ -574,10 +642,9 @@ fn setup_clear() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
+async fn run_with(cli: Cli, io: &mut dyn CliIo) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
-        Command::Setup(args) => cmd_setup(*args)?,
+        Command::Setup(args) => cmd_setup(*args, io)?,
         Command::Validate { config } => {
             let config = resolve_config(config)?;
             RouterDocument::load_path(&config)?;
@@ -595,22 +662,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mgmt = mgmt_bind;
             let state = Arc::new(AppState::with_path(doc, PathBuf::from(&config)));
             let data = data_router(state.clone());
+            println!("data {bind}  mgmt {mgmt}");
             let admin = if no_dashboard {
-                println!("data {bind}  mgmt {mgmt}");
                 mgmt_router(state)
             } else {
-                println!("data {bind}  mgmt {mgmt}");
                 println!("dashboard http://{mgmt}/");
                 mgmt_router_serve_dashboard(state)
             };
             let data_l = tokio::net::TcpListener::bind(&bind).await?;
             let mgmt_l = tokio::net::TcpListener::bind(&mgmt).await?;
-            let a = axum::serve(data_l, data);
-            let b = axum::serve(mgmt_l, admin);
-            tokio::select! {
-                r = a => r?,
-                r = b => r?,
-            }
+            let (ds, ms) = (io.serve_shutdown(), io.serve_shutdown());
+            serve_two(data_l, data, mgmt_l, admin, ds, ms).await?;
         }
         Command::Upgrade { version } => upgrade::run(version.as_deref(), ROUTER_VERSION)
             .await
@@ -620,4 +682,731 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+/// Serve the data and management listeners concurrently. The first server that
+/// finishes (error or graceful shutdown) ends the process; the other is dropped.
+async fn serve_two(
+    data_l: tokio::net::TcpListener,
+    data: axum::Router,
+    mgmt_l: tokio::net::TcpListener,
+    admin: axum::Router,
+    data_shutdown: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    mgmt_shutdown: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+) -> std::io::Result<()> {
+    tokio::select! {
+        res = serve_one(data_l, data, data_shutdown) => res,
+        res = serve_one(mgmt_l, admin, mgmt_shutdown) => res,
+    }
+}
+
+/// Serve one plane until graceful shutdown. A named function (rather than an
+/// inline `async` block) keeps the tail expression instrumented even when the
+/// future is dropped before completion.
+async fn serve_one(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    shutdown: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+) -> std::io::Result<()> {
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// `ARIA_COMPUTE_HOME` is process-global; serialise every test that touches
+    /// it (including the `upgrade` module's tests, which share this lock).
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct FakeIo {
+        answers: Vec<String>,
+        secrets: Vec<String>,
+        tty: bool,
+        shutdown: bool,
+    }
+
+    impl FakeIo {
+        fn new(tty: bool, shutdown: bool) -> Self {
+            Self {
+                answers: Vec::new(),
+                secrets: Vec::new(),
+                tty,
+                shutdown,
+            }
+        }
+
+        fn answers(mut self, values: &[&str]) -> Self {
+            self.answers = values.iter().map(|s| s.to_string()).collect();
+            self
+        }
+
+        fn secrets(mut self, values: &[&str]) -> Self {
+            self.secrets = values.iter().map(|s| s.to_string()).collect();
+            self
+        }
+    }
+
+    impl CliIo for FakeIo {
+        fn prompt(&mut self, _label: &str) -> io::Result<String> {
+            if self.answers.is_empty() {
+                Ok(String::new())
+            } else {
+                Ok(self.answers.remove(0))
+            }
+        }
+
+        fn prompt_secret(&mut self, _label: &str) -> io::Result<String> {
+            if self.secrets.is_empty() {
+                Ok(String::new())
+            } else {
+                Ok(self.secrets.remove(0))
+            }
+        }
+
+        fn is_tty(&self) -> bool {
+            self.tty
+        }
+
+        fn serve_shutdown(
+            &self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+            if self.shutdown {
+                Box::pin(std::future::ready(()))
+            } else {
+                Box::pin(std::future::pending())
+            }
+        }
+    }
+
+    /// Current-thread runtime for the sync tests (env vars + `run_with` await).
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(f)
+    }
+
+    fn cli(command: Command) -> Cli {
+        Cli {
+            _version: (),
+            command,
+        }
+    }
+
+    fn setup_args() -> SetupArgs {
+        SetupArgs {
+            status: false,
+            clear: false,
+            template: Some("semantic".into()),
+            admin_user: Some("admin".into()),
+            admin_password: Some("password1".into()),
+            base_url: None,
+            api_key_env: None,
+            api_key: None,
+            model_small: None,
+            model_mid: None,
+            model_large: None,
+            agent_endpoint: None,
+            agent_model: None,
+            agent_fallback: None,
+            afm_d_endpoint: None,
+            afm_d_fallback: None,
+            upgrade_url: None,
+        }
+    }
+
+    /// Run `f` with `ARIA_COMPUTE_HOME` pointing at a throwaway directory.
+    fn with_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
+        let out = f(dir.path());
+        std::env::remove_var("ARIA_COMPUTE_HOME");
+        out
+    }
+
+    #[test]
+    fn version_command_prints_and_exits_ok() {
+        with_home(|_| {
+            let mut io = FakeIo::new(false, false);
+            block_on(run_with(cli(Command::Version), &mut io)).unwrap();
+        });
+    }
+
+    #[test]
+    fn setup_then_validate_then_status_then_clear() {
+        with_home(|home| {
+            let mut io = FakeIo::new(false, false);
+            // Non-interactive (flags only): no prompts at all.
+            block_on(run_with(
+                cli(Command::Setup(Box::new(setup_args()))),
+                &mut io,
+            ))
+            .unwrap();
+            assert!(home.join("router.yml").exists());
+            assert!(home.join("router-users.json").exists());
+            assert!(home.join("router-cli.yml").exists());
+
+            // A second setup sees the existing users and keeps them.
+            block_on(run_with(
+                cli(Command::Setup(Box::new(setup_args()))),
+                &mut io,
+            ))
+            .unwrap();
+
+            let cfg = home.join("router.yml").display().to_string();
+            block_on(run_with(
+                cli(Command::Validate {
+                    config: Some(cfg.clone()),
+                }),
+                &mut io,
+            ))
+            .unwrap();
+
+            // Status reads the generated YAML, keys + users files.
+            let mut status = setup_args();
+            status.status = true;
+            block_on(run_with(cli(Command::Setup(Box::new(status))), &mut io)).unwrap();
+
+            // Invalid YAML fails loudly.
+            let bad = home.join("bad.yml");
+            std::fs::write(&bad, "version: v0.3\nnope: 1\n").unwrap();
+            let err = block_on(run_with(
+                cli(Command::Validate {
+                    config: Some(bad.display().to_string()),
+                }),
+                &mut io,
+            ))
+            .unwrap_err();
+            assert!(err.to_string().contains("nope") || err.to_string().contains("unknown"));
+
+            // Clearing with confirmation removes config + key/user files.
+            let mut clear = setup_args();
+            clear.clear = true;
+            let mut yes = FakeIo::new(false, false).answers(&["y"]);
+            block_on(run_with(cli(Command::Setup(Box::new(clear))), &mut yes)).unwrap();
+            assert!(!home.join("router.yml").exists());
+            assert!(!home.join("router-users.json").exists());
+            assert!(!home.join("router-cli.yml").exists());
+        });
+    }
+
+    #[test]
+    fn setup_status_handles_missing_config() {
+        with_home(|_| {
+            let mut io = FakeIo::new(false, false);
+            let mut status = setup_args();
+            status.status = true;
+            block_on(run_with(cli(Command::Setup(Box::new(status))), &mut io)).unwrap();
+        });
+    }
+
+    #[test]
+    fn setup_clear_skips_missing_credential_files() {
+        with_home(|home| {
+            // Only the key file exists; the users file must be skipped, not fail.
+            std::fs::write(home.join("router-keys.json"), r#"{"keys":[]}"#).unwrap();
+            let mut clear = setup_args();
+            clear.clear = true;
+            let mut yes = FakeIo::new(false, false).answers(&["yes"]);
+            block_on(run_with(cli(Command::Setup(Box::new(clear))), &mut yes)).unwrap();
+            assert!(!home.join("router-keys.json").exists());
+            assert!(!home.join("router-users.json").exists());
+        });
+    }
+
+    #[test]
+    fn upgrade_without_cli_config_reports_the_missing_upgrade_url() {
+        with_home(|_| {
+            let mut io = FakeIo::new(false, false);
+            let err = block_on(run_with(
+                cli(Command::Upgrade {
+                    version: Some("9.9.9".into()),
+                }),
+                &mut io,
+            ))
+            .unwrap_err();
+            assert!(err.to_string().contains("upgrade_url not set"), "{err}");
+        });
+    }
+
+    #[test]
+    fn setup_interactive_prompts_cover_all_branches() {
+        with_home(|home| {
+            // Template, base_url, api_key_env, api key, three model ids, upgrade_url.
+            let mut io = FakeIo::new(true, false)
+                .answers(&[
+                    "agent",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "http://127.0.0.1:9000",
+                    "ariacompute/ariamodel-mid",
+                    "ariacompute/ariamodel-mid",
+                    "ops",
+                    "https://gitee.com/acme/router",
+                ])
+                .secrets(&["", "password1", "password1"]);
+            let mut args = SetupArgs {
+                template: None,
+                admin_user: None,
+                admin_password: None,
+                ..setup_args()
+            };
+            args.upgrade_url = None;
+            block_on(run_with(cli(Command::Setup(Box::new(args))), &mut io)).unwrap();
+            let yaml = std::fs::read_to_string(home.join("router.yml")).unwrap();
+            assert!(yaml.contains("http://127.0.0.1:9000"), "{yaml}");
+            let cli_cfg = std::fs::read_to_string(home.join("router-cli.yml")).unwrap();
+            assert!(cli_cfg.contains("gitee.com/acme/router"), "{cli_cfg}");
+
+            // Re-running asks to overwrite; "n" keeps the existing YAML but still
+            // rewrites the CLI config.
+            let mut keep = FakeIo::new(true, false)
+                .answers(&["semantic", "", "", "", "", "", "ops", "", "n"])
+                .secrets(&["", "password1", "password1"]);
+            let mut args = SetupArgs {
+                template: None,
+                admin_user: None,
+                admin_password: None,
+                ..setup_args()
+            };
+            args.upgrade_url = None;
+            block_on(run_with(cli(Command::Setup(Box::new(args))), &mut keep)).unwrap();
+        });
+    }
+
+    #[test]
+    fn setup_rejects_invalid_inputs() {
+        with_home(|_| {
+            let mut io = FakeIo::new(false, false);
+
+            let mut bad_template = setup_args();
+            bad_template.template = Some("bogus".into());
+            let err = block_on(run_with(
+                cli(Command::Setup(Box::new(bad_template))),
+                &mut io,
+            ))
+            .unwrap_err();
+            assert!(err.to_string().contains("invalid template"), "{err}");
+
+            let mut short = setup_args();
+            short.admin_password = Some("short".into());
+            let err =
+                block_on(run_with(cli(Command::Setup(Box::new(short))), &mut io)).unwrap_err();
+            assert!(err.to_string().contains("at least 8"), "{err}");
+
+            // Interactive password confirmation mismatch.
+            let mut mismatch = FakeIo::new(false, false).secrets(&["password1", "password2"]);
+            let mut args = SetupArgs {
+                admin_password: None,
+                ..setup_args()
+            };
+            args.admin_user = Some("admin".into());
+            let err =
+                block_on(run_with(cli(Command::Setup(Box::new(args))), &mut mismatch)).unwrap_err();
+            assert!(err.to_string().contains("do not match"), "{err}");
+        });
+    }
+
+    #[test]
+    fn setup_writes_upgrade_url_overrides() {
+        with_home(|home| {
+            let mut io = FakeIo::new(false, false);
+            let mut args = setup_args();
+            args.upgrade_url = Some("  https://github.com/acme/router  ".into());
+            block_on(run_with(cli(Command::Setup(Box::new(args))), &mut io)).unwrap();
+            let cfg = std::fs::read_to_string(home.join("router-cli.yml")).unwrap();
+            assert!(cfg.contains("https://github.com/acme/router"), "{cfg}");
+
+            // An empty flag keeps the previously saved value.
+            let mut args = setup_args();
+            args.upgrade_url = Some("   ".into());
+            block_on(run_with(cli(Command::Setup(Box::new(args))), &mut io)).unwrap();
+            let cfg = std::fs::read_to_string(home.join("router-cli.yml")).unwrap();
+            assert!(cfg.contains("https://github.com/acme/router"), "{cfg}");
+        });
+    }
+
+    #[test]
+    fn serve_binds_both_planes_and_stops_on_shutdown() {
+        with_home(|home| {
+            let mut io = FakeIo::new(false, false);
+            block_on(run_with(
+                cli(Command::Setup(Box::new(setup_args()))),
+                &mut io,
+            ))
+            .unwrap();
+            let cfg = home.join("router.yml").display().to_string();
+            for no_dashboard in [false, true] {
+                let mut io = FakeIo::new(false, true);
+                block_on(run_with(
+                    cli(Command::Serve {
+                        config: Some(cfg.clone()),
+                        bind: Some("127.0.0.1:0".into()),
+                        mgmt_bind: "127.0.0.1:0".into(),
+                        no_dashboard,
+                    }),
+                    &mut io,
+                ))
+                .unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn serve_requires_a_config() {
+        with_home(|_| {
+            let mut io = FakeIo::new(false, true);
+            let err = block_on(run_with(
+                cli(Command::Serve {
+                    config: None,
+                    bind: None,
+                    mgmt_bind: "127.0.0.1:0".into(),
+                    no_dashboard: true,
+                }),
+                &mut io,
+            ))
+            .unwrap_err();
+            assert!(err.to_string().contains("missing --config"), "{err}");
+        });
+    }
+
+    #[test]
+    fn resolve_config_prefers_explicit_path() {
+        with_home(|home| {
+            assert_eq!(resolve_config(Some("x.yml".into())).unwrap(), "x.yml");
+            // No flag and no default file → actionable error.
+            assert!(resolve_config(None).is_err());
+            std::fs::write(home.join("router.yml"), "version: v0.3\n").unwrap();
+            let resolved = resolve_config(None).unwrap();
+            assert!(resolved.ends_with("router.yml"), "{resolved}");
+        });
+    }
+
+    #[test]
+    fn prompt_opt_prefers_flag_then_prompt() {
+        let mut io = FakeIo::new(true, false).answers(&["  from-prompt  "]);
+        assert_eq!(
+            prompt_opt(&mut io, "label", Some(" from-flag ".into()), true).as_deref(),
+            Some("from-flag")
+        );
+        assert_eq!(prompt_opt(&mut io, "label", Some("   ".into()), true), None);
+        assert_eq!(prompt_opt(&mut io, "label", None, false), None);
+        assert_eq!(
+            prompt_opt(&mut io, "label", None, true).as_deref(),
+            Some("from-prompt")
+        );
+        // Empty answer → None.
+        assert_eq!(prompt_opt(&mut io, "label", None, true), None);
+    }
+
+    #[test]
+    fn read_secret_handles_editing_and_terminators() {
+        let mut out = String::new();
+        let mut echo = Vec::new();
+        read_secret(&mut &b"abc\x7fd\nrest"[..], &mut echo, &mut out).unwrap();
+        assert_eq!(out, "abd");
+        assert_eq!(echo, b"***\x08 \x08*");
+
+        // Backspace on an empty buffer is a no-op; control bytes are ignored;
+        // EOF terminates without a newline.
+        let mut out = String::new();
+        let mut echo = Vec::new();
+        read_secret(&mut &b"\x08\x01x"[..], &mut echo, &mut out).unwrap();
+        assert_eq!(out, "x");
+        assert_eq!(echo, b"*");
+
+        // A read error surfaces instead of being swallowed.
+        struct Broken;
+        impl io::Read for Broken {
+            fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("boom"))
+            }
+        }
+        let err = read_secret(&mut Broken, &mut Vec::new(), &mut String::new()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mask_termios_reports_errors_and_handles_pty() {
+        use std::os::fd::AsRawFd;
+
+        // Not a terminal → tcgetattr fails.
+        assert!(mask_termios(-1).is_err());
+        let null = std::fs::File::open("/dev/null").unwrap();
+        assert!(mask_termios(null.as_raw_fd()).is_err());
+
+        // A real pty accepts the attribute switch, and dropping restores it.
+        let (master, slave) = open_pty();
+        {
+            let _restore = mask_termios(slave.as_raw_fd()).expect("mask on pty");
+        }
+        drop(slave);
+        drop(master);
+
+        // tcsetattr on a bad fd fails with an OS error.
+        let attrs = unsafe { std::mem::zeroed::<libc::termios>() };
+        assert!(set_termios(-1, &attrs).is_err());
+    }
+
+    /// Open a pseudo terminal pair (assert-based: a failure here is a broken
+    /// environment, not a test assertion).
+    #[cfg(unix)]
+    fn open_pty() -> (std::fs::File, std::fs::File) {
+        use std::os::fd::FromRawFd;
+
+        unsafe {
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(master >= 0, "posix_openpt failed");
+            let name = libc::ptsname(master);
+            assert!(!name.is_null(), "ptsname failed");
+            assert_eq!(libc::grantpt(master), 0, "grantpt failed");
+            assert_eq!(libc::unlockpt(master), 0, "unlockpt failed");
+            let slave = libc::open(name, libc::O_RDWR | libc::O_NOCTTY);
+            assert!(slave >= 0, "open pts failed");
+            (
+                std::fs::File::from_raw_fd(master),
+                std::fs::File::from_raw_fd(slave),
+            )
+        }
+    }
+
+    #[test]
+    fn setup_defaults_template_and_skips_empty_flag_values() {
+        with_home(|home| {
+            // Empty template answer → "semantic"; `--api-key ""` stores nothing.
+            let mut io = FakeIo::new(true, false)
+                .answers(&["", "", "", "", "", "", "ops", "n", ""])
+                .secrets(&["", "password1", "password1"]);
+            let args = SetupArgs {
+                template: None,
+                admin_user: None,
+                admin_password: None,
+                upgrade_url: None,
+                ..setup_args()
+            };
+            block_on(run_with(cli(Command::Setup(Box::new(args))), &mut io)).unwrap();
+            let yaml = std::fs::read_to_string(home.join("router.yml")).unwrap();
+            assert!(yaml.contains("semantic"), "{yaml}");
+
+            let mut args = setup_args();
+            args.api_key = Some("   ".into());
+            let mut io = FakeIo::new(false, false);
+            block_on(run_with(cli(Command::Setup(Box::new(args))), &mut io)).unwrap();
+            let yaml = std::fs::read_to_string(home.join("router.yml")).unwrap();
+            assert!(!yaml.contains("\"   \""), "{yaml}");
+        });
+    }
+
+    #[test]
+    fn setup_tolerates_missing_secret_answers() {
+        with_home(|_| {
+            // No scripted secrets: both prompts return "" → equal, then rejected
+            // for being too short (covers the empty-answer arm of FakeIo).
+            let mut io =
+                FakeIo::new(true, false).answers(&["semantic", "", "", "", "", "", "ops", "n", ""]);
+            let args = SetupArgs {
+                template: None,
+                admin_user: None,
+                admin_password: None,
+                upgrade_url: None,
+                ..setup_args()
+            };
+            let err = block_on(run_with(cli(Command::Setup(Box::new(args))), &mut io)).unwrap_err();
+            assert!(err.to_string().contains("at least 8"), "{err}");
+        });
+    }
+
+    #[test]
+    fn fake_io_shutdown_can_stay_pending() {
+        use std::task::Poll;
+
+        let io = FakeIo::new(false, false);
+        let mut fut = io.serve_shutdown();
+        let waker = futures_util::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(matches!(fut.as_mut().poll(&mut cx), Poll::Pending));
+    }
+
+    #[test]
+    fn stdio_serve_shutdown_never_resolves() {
+        use std::task::Poll;
+
+        let io = StdIo;
+        let mut fut = io.serve_shutdown();
+        let waker = futures_util::task::noop_waker();
+        let mut cx = std::task::Context::from_waker(&waker);
+        assert!(matches!(fut.as_mut().poll(&mut cx), Poll::Pending));
+    }
+
+    #[test]
+    fn setup_afm_d_prompts_cover_template_specific_branches() {
+        with_home(|home| {
+            // Interactive afm-d setup: endpoint + fallback prompts, blank admin
+            // user (defaults to "admin"), and an api key typed at the prompt.
+            let mut io = FakeIo::new(true, false)
+                .answers(&[
+                    "afm-d",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "http://127.0.0.1:8010",
+                    "ariacompute/ariamodel-mid",
+                    "",
+                    "",
+                ])
+                .secrets(&["sk-from-prompt", "password1", "password1"]);
+            let args = SetupArgs {
+                template: None,
+                admin_user: None,
+                admin_password: None,
+                upgrade_url: None,
+                ..setup_args()
+            };
+            block_on(run_with(cli(Command::Setup(Box::new(args))), &mut io)).unwrap();
+            let yaml = std::fs::read_to_string(home.join("router.yml")).unwrap();
+            assert!(yaml.contains("http://127.0.0.1:8010"), "{yaml}");
+            assert!(yaml.contains("sk-from-prompt"), "{yaml}");
+            assert!(home.join("router-users.json").is_file());
+        });
+    }
+
+    #[test]
+    fn setup_flag_paths_for_api_key_and_upgrade_url() {
+        with_home(|home| {
+            // Explicit --api-key value is trimmed and stored in the YAML.
+            let mut args = setup_args();
+            args.api_key = Some("  sk-flagged  ".into());
+            // Blank --upgrade-url with no saved CLI config → site default.
+            args.upgrade_url = Some("   ".into());
+            let mut io = FakeIo::new(false, false);
+            block_on(run_with(cli(Command::Setup(Box::new(args))), &mut io)).unwrap();
+            let yaml = std::fs::read_to_string(home.join("router.yml")).unwrap();
+            assert!(yaml.contains("sk-flagged"), "{yaml}");
+            let cli_cfg = std::fs::read_to_string(home.join("router-cli.yml")).unwrap();
+            assert!(
+                cli_cfg.contains("github.com") || cli_cfg.contains("gitee.com"),
+                "{cli_cfg}"
+            );
+
+            // Interactive re-run: the api key prompt returns a value and the
+            // upgrade_url prompt accepts a blank answer (keeps the saved one).
+            let mut io = FakeIo::new(true, false)
+                .answers(&["semantic", "", "", "", "", "", "ops", "n", ""])
+                .secrets(&["sk-prompted", "password1", "password1"]);
+            let args = SetupArgs {
+                template: None,
+                admin_user: None,
+                admin_password: None,
+                upgrade_url: None,
+                ..setup_args()
+            };
+            block_on(run_with(cli(Command::Setup(Box::new(args))), &mut io)).unwrap();
+            let cli_cfg = std::fs::read_to_string(home.join("router-cli.yml")).unwrap();
+            assert!(
+                cli_cfg.contains("github.com") || cli_cfg.contains("gitee.com"),
+                "{cli_cfg}"
+            );
+        });
+    }
+
+    #[test]
+    fn setup_reports_unusable_user_store() {
+        with_home(|home| {
+            std::fs::write(home.join("router-users.json"), "{not json").unwrap();
+            let mut io = FakeIo::new(false, false);
+            let err = block_on(run_with(
+                cli(Command::Setup(Box::new(setup_args()))),
+                &mut io,
+            ))
+            .unwrap_err();
+            assert!(!err.to_string().is_empty());
+        });
+    }
+
+    #[test]
+    fn setup_status_reports_key_store_variants() {
+        with_home(|home| {
+            let mut io = FakeIo::new(false, false);
+            block_on(run_with(
+                cli(Command::Setup(Box::new(setup_args()))),
+                &mut io,
+            ))
+            .unwrap();
+
+            // Point the generated YAML at the temp files so `--status` can read
+            // them (the default `~/…` paths resolve to the real user home).
+            let keys_path = home.join("router-keys.json");
+            let users_path = home.join("router-users.json");
+            let cfg_path = home.join("router.yml");
+            let yaml = std::fs::read_to_string(&cfg_path)
+                .unwrap()
+                .replace(
+                    "~/.ariacompute/router-keys.json",
+                    keys_path.to_str().unwrap(),
+                )
+                .replace(
+                    "~/.ariacompute/router-users.json",
+                    users_path.to_str().unwrap(),
+                );
+            std::fs::write(&cfg_path, yaml).unwrap();
+
+            let mut status = setup_args();
+            status.status = true;
+            // A local-only key store: no serve account, no oauth api key.
+            let mut store = KeyStore::empty(keys_path.clone());
+            store.create("local-only").unwrap();
+            block_on(run_with(
+                cli(Command::Setup(Box::new(status.clone()))),
+                &mut io,
+            ))
+            .unwrap();
+
+            // An api key without a linked user shows the "key only" state.
+            let mut store = KeyStore::empty(keys_path.clone());
+            store
+                .oauth_set_api_key("sk-bf-0123456789abcdef", None)
+                .unwrap();
+            block_on(run_with(
+                cli(Command::Setup(Box::new(status.clone()))),
+                &mut io,
+            ))
+            .unwrap();
+
+            // A linked serve account with an api key.
+            let mut store = KeyStore::empty(keys_path.clone());
+            store
+                .oauth_set_api_key("sk-bf-abcdef0123456789", None)
+                .unwrap();
+            let mut raw: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&keys_path).unwrap()).unwrap();
+            // The store always serialises a `keys` array, so this cannot be absent.
+            let keys = raw["keys"].as_array_mut().expect("key file has keys array");
+            for k in keys.iter_mut() {
+                k["site"] = serde_json::json!("com");
+                k["user"] = serde_json::json!({"id": "usr_1", "email": "ops@example.com"});
+            }
+            std::fs::write(&keys_path, raw.to_string()).unwrap();
+            block_on(run_with(cli(Command::Setup(Box::new(status))), &mut io)).unwrap();
+
+            // Clearing with confirmation removes both files.
+            let mut clear = setup_args();
+            clear.clear = true;
+            let mut yes = FakeIo::new(false, false).answers(&["yes"]);
+            block_on(run_with(cli(Command::Setup(Box::new(clear))), &mut yes)).unwrap();
+            assert!(!keys_path.exists());
+            assert!(!users_path.exists());
+        });
+    }
 }

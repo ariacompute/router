@@ -297,11 +297,9 @@ impl DecisionCache {
             Entry::Vacant(e) => {
                 let key = e.into_key();
                 while self.order.len() >= self.capacity {
-                    if let Some(old) = self.order.pop_front() {
-                        self.map.remove(&old);
-                    } else {
-                        break;
-                    }
+                    // `capacity >= 1`, so a full cache always has an evictable key.
+                    let old = self.order.pop_front().expect("order tracks map keys");
+                    self.map.remove(&old);
                 }
                 self.order.push_back(key.clone());
                 self.map.insert(key, model);
@@ -400,31 +398,15 @@ impl AfmDDecisioner {
         }
 
         // Process-local cache of prior System One answers for the same utterance × pool.
+        // The key already encodes the eligible set, so a hit is always in-pool.
         if let Some(text) = user_text.as_deref() {
             let key = cache_key(text, &task.eligible);
-            if let Ok(mut cache) = decision_cache().lock() {
-                if let Some(model) = cache.get(&key) {
-                    if task.eligible.iter().any(|m| m.name == model) {
-                        return Ok(RouteDecision {
-                            model: model.clone(),
-                            algorithm: Some("static".into()),
-                            reason: format!("afm-d:cache:{model}"),
-                            confidence: 0.5,
-                            layer: "afm-d".into(),
-                            decision: "afm-d".into(),
-                            bypass: false,
-                            routing_latency_ms: None,
-                            cache_response: false,
-                            retention_drop: None,
-                            retention_ttl_turns: None,
-                            retention_keep_current_model: None,
-                            retention_prefer_prefix: None,
-                            semantic_cache_hit: None,
-                            replay_id: None,
-                            session: None,
-                        });
-                    }
-                }
+            let cached = decision_cache()
+                .lock()
+                .ok()
+                .and_then(|mut cache| cache.get(&key));
+            if let Some(model) = cached {
+                return Ok(cached_decision(model));
             }
         }
 
@@ -441,15 +423,8 @@ impl AfmDDecisioner {
 
         let endpoint = endpoint.unwrap();
         let body = build_systemone_body(&task);
+        // `normalize_endpoint` guarantees an absolute http(s) base.
         let url = format!("{}/v1/systemone", endpoint.trim_end_matches('/'));
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
-            return apply_fallback_or_err(
-                &task,
-                RouterError::Config(format!(
-                    "afm-d endpoint must be an absolute http(s) URL, got {endpoint:?}"
-                )),
-            );
-        }
         static AFM_HTTP: OnceLock<reqwest::Client> = OnceLock::new();
         let client = AFM_HTTP.get_or_init(reqwest::Client::new);
         let timeout = std::time::Duration::from_millis(task.timeout_ms.max(1));
@@ -512,6 +487,27 @@ fn normalize_endpoint(raw: &str) -> String {
 
 fn first_eligible(eligible: &[ModelCard]) -> RouteDecision {
     tier_decision(&eligible[0], "afm-d:first-eligible")
+}
+
+fn cached_decision(model: String) -> RouteDecision {
+    RouteDecision {
+        model: model.clone(),
+        algorithm: Some("static".into()),
+        reason: format!("afm-d:cache:{model}"),
+        confidence: 0.5,
+        layer: "afm-d".into(),
+        decision: "afm-d".into(),
+        bypass: false,
+        routing_latency_ms: None,
+        cache_response: false,
+        retention_drop: None,
+        retention_ttl_turns: None,
+        retention_keep_current_model: None,
+        retention_prefer_prefix: None,
+        semantic_cache_hit: None,
+        replay_id: None,
+        session: None,
+    }
 }
 
 fn tier_decision(model: &ModelCard, reason: &str) -> RouteDecision {
@@ -702,6 +698,44 @@ mod tests {
         }
     }
 
+    /// Loopback System One stub that can be shut down so `axum::serve` completes
+    /// (otherwise the tail of the spawned task never runs).
+    struct TestServer {
+        addr: std::net::SocketAddr,
+        base: String,
+        stop: Option<tokio::sync::oneshot::Sender<()>>,
+        handle: Option<tokio::task::JoinHandle<()>>,
+    }
+
+    impl TestServer {
+        async fn start(app: Router) -> Self {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            let handle = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async {
+                        let _ = rx.await;
+                    })
+                    .await
+                    .unwrap();
+            });
+            Self {
+                addr,
+                base: format!("http://{addr}"),
+                stop: Some(tx),
+                handle: Some(handle),
+            }
+        }
+
+        async fn shutdown(mut self) {
+            let tx = self.stop.take().expect("shutdown sender");
+            let handle = self.handle.take().expect("server handle");
+            let _ = tx.send(());
+            let _ = handle.await;
+        }
+    }
+
     fn base_task(eligible: Vec<ModelCard>) -> AfmDTask {
         // Must not match deterministic shortcuts (else HTTP tests never hit System One).
         AfmDTask {
@@ -748,22 +782,19 @@ mod tests {
                 }))
             }),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
+        let server = TestServer::start(app).await;
         // Bare host:port (no scheme) must not yield reqwest "relative URL" builder error.
         let mut task = base_task(vec![card("local/a"), card("local/b")]);
         task.state = json!("User message: host port scheme probe unique alpha");
         let d = AfmDDecisioner {
-            endpoint: Some(addr.to_string()),
+            endpoint: Some(server.addr.to_string()),
         }
         .route(task)
         .await
         .unwrap();
         assert_eq!(d.model, "local/b");
         assert!((d.confidence - 0.91).abs() < 1e-5);
+        server.shutdown().await;
     }
 
     #[tokio::test]
@@ -875,23 +906,20 @@ mod tests {
                 }))
             }),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
+        let server = TestServer::start(app).await;
         let mut task = base_task(vec![card("local/a"), card("local/b")]);
         task.state = json!("User message: fallback low confidence probe unique beta");
         task.min_confidence = Some(0.5);
         task.fallback = Some("local/b".into());
         let d = AfmDDecisioner {
-            endpoint: Some(format!("http://{addr}")),
+            endpoint: Some(server.base.clone()),
         }
         .route(task)
         .await
         .unwrap();
         assert_eq!(d.model, "local/b");
         assert!(d.reason.contains("fallback"));
+        server.shutdown().await;
     }
 
     #[tokio::test]
@@ -912,15 +940,11 @@ mod tests {
                 }))
             }),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
+        let server = TestServer::start(app).await;
         let mut task = base_task(vec![card("local/a"), card("local/b")]);
         task.state = json!("User message: http choice ok probe unique gamma");
         let d = AfmDDecisioner {
-            endpoint: Some(format!("http://{addr}")),
+            endpoint: Some(server.base.clone()),
         }
         .route(task)
         .await
@@ -928,6 +952,7 @@ mod tests {
         assert_eq!(d.model, "local/b");
         assert_eq!(d.reason, "afm-d:local/b");
         assert!((d.confidence - 0.91).abs() < 1e-5);
+        server.shutdown().await;
     }
 
     #[test]
@@ -1235,11 +1260,7 @@ mod tests {
                 }),
             )
             .with_state(hits.clone());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
+        let server = TestServer::start(app).await;
         // Unique prompt avoids cross-test cache pollution; must not match shortcuts.
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1257,7 +1278,7 @@ mod tests {
             track: None,
         };
         let decisioner = AfmDDecisioner {
-            endpoint: Some(format!("http://{addr}")),
+            endpoint: Some(server.base.clone()),
         };
         let first = decisioner.route(make_task()).await.unwrap();
         assert_eq!(first.model, "local/b");
@@ -1266,5 +1287,406 @@ mod tests {
         assert_eq!(second.model, "local/b");
         assert_eq!(second.reason, "afm-d:cache:local/b");
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+        server.shutdown().await;
+    }
+
+    #[test]
+    fn question_head_skips_blank_option_and_grading_lines() {
+        let mcq =
+            "What is 2+2?\n\nA. 3\nB. 4\n\nAnswer with the letter of the correct option only.";
+        assert_eq!(question_head(mcq), "What is 2+2?");
+        assert_eq!(
+            question_head("\n\n   \nhello there  \nworld"),
+            "hello there"
+        );
+        // Only boilerplate: fall back to the first non-empty line.
+        assert_eq!(
+            question_head("Answer with the letter only"),
+            "Answer with the letter only"
+        );
+        // Option block first: the head scan stops, the fallback returns line one.
+        assert_eq!(question_head("A. one\nB. two"), "A. one");
+        assert_eq!(
+            question_head("answer concisely\nwhat is 2+2?"),
+            "answer concisely"
+        );
+        assert_eq!(
+            normalize_utterance("What's  the  weather?!"),
+            "whats the weather"
+        );
+        // A single-character line is not an option marker.
+        assert_eq!(question_head("A\nB"), "A");
+        // No candidate lines at all: the loop finishes and `raw` is returned.
+        assert_eq!(question_head(""), "");
+        assert_eq!(question_head("   \n\n"), "   \n\n");
+    }
+
+    #[test]
+    fn shortcut_tier_does_not_match_free_prose() {
+        assert!(shortcut_tier("").is_none());
+        assert!(shortcut_tier("Please route this non shortcut probe request").is_none());
+        // Two questions → mid, before the factoid check.
+        assert_eq!(
+            shortcut_tier("What is REST? What is GraphQL?"),
+            Some(("mid", "afm-d:multi-q-mid"))
+        );
+        // Closed-form MCQ block → small.
+        let mcq = "Pick one.\nA. alpha\nB. beta\n";
+        assert_eq!(shortcut_tier(mcq), Some(("small", "afm-d:mcq-small")));
+        // Explain intent on the head wins over the MCQ block.
+        let explain_mcq = "Explain how a cache works.\nA. alpha\nB. beta\n";
+        assert_eq!(
+            shortcut_tier(explain_mcq),
+            Some(("large", "afm-d:explain-large"))
+        );
+    }
+
+    #[test]
+    fn closed_form_and_factoid_guards() {
+        assert!(is_closed_form_prompt(
+            "A. x\nB. y",
+            "answer with the letter of the correct option"
+        ));
+        assert!(!is_closed_form_prompt("only one line", "only one line"));
+        // Single-character lines cannot be option markers.
+        assert!(!is_closed_form_prompt("A\nB\n", "a b"));
+        // A/B without punctuation after the letter is not an option block.
+        assert!(!is_closed_form_prompt("A x\nB y", "a x b y"));
+
+        assert!(!is_short_factoid(
+            "please explain this",
+            "please explain this"
+        ));
+        assert!(!is_short_factoid("reverse proxy", "reverse proxy"));
+        assert!(!is_short_factoid(
+            "capital of japan",
+            "capital of japan? what is it?"
+        ));
+        let long = "capital of japan ".repeat(10); // 30 words > the 24-word head cap
+        assert!(!is_short_factoid(&long, &long));
+
+        assert!(is_short_factoid("capital of japan", "Capital of Japan?"));
+        assert!(is_short_factoid("convert 10 c", "Convert 10C"));
+        assert!(is_short_factoid(
+            "what is the sea level",
+            "what is the sea level"
+        ));
+        assert!(is_short_factoid("what is h2o", "What is H2O?"));
+        assert!(!is_short_factoid("what is h2o trade", "what is h2o trade"));
+        assert!(is_short_factoid(
+            "which planet is smallest",
+            "which planet is smallest"
+        ));
+        assert!(is_short_factoid("in which year", "in which year"));
+        assert!(is_short_factoid("is 2 prime", "is 2 prime"));
+        assert!(is_short_factoid(
+            "name the kernel creator",
+            "name the kernel creator"
+        ));
+    }
+
+    #[test]
+    fn tier_of_prefers_explicit_tier_then_name_suffix() {
+        assert_eq!(tier_of(&card_tier("x/small", "SMALL")), "small");
+        assert_eq!(tier_of(&card_tier("x", "medium")), "mid");
+        assert_eq!(tier_of(&card_tier("x", "large")), "large");
+        // Unknown explicit tier falls back to the name heuristic.
+        assert_eq!(tier_of(&card_tier("ariamodel-large", "weird")), "large");
+        assert_eq!(tier_of(&card("any-large")), "large");
+        assert_eq!(tier_of(&card("x/large")), "large");
+        assert_eq!(tier_of(&card("ariamodel-mid")), "mid");
+        assert_eq!(tier_of(&card("any-mid")), "mid");
+        assert_eq!(tier_of(&card("x/mid")), "mid");
+        assert_eq!(tier_of(&card("ariamodel-small")), "small");
+        assert_eq!(tier_of(&card("any-small")), "small");
+        assert_eq!(tier_of(&card("x/small")), "small");
+        assert_eq!(tier_of(&card("nope")), "unknown");
+
+        let pool = vec![card("a-small")];
+        assert_eq!(pick_tier(&pool, "small").unwrap().name, "a-small");
+        assert!(pick_tier(&pool, "large").is_none());
+    }
+
+    #[test]
+    fn decision_cache_overwrites_and_evicts_fifo() {
+        let mut cache = DecisionCache::new(0); // clamped to 1
+        assert!(cache.get("k1").is_none());
+        cache.insert("k1".into(), "m1".into());
+        assert_eq!(cache.get("k1").as_deref(), Some("m1"));
+        cache.insert("k1".into(), "m2".into()); // occupied → overwrite
+        assert_eq!(cache.get("k1").as_deref(), Some("m2"));
+        cache.insert("k2".into(), "m3".into()); // capacity 1 → evict k1
+        assert!(cache.get("k1").is_none());
+        assert_eq!(cache.get("k2").as_deref(), Some("m3"));
+    }
+
+    #[test]
+    fn state_user_text_variants() {
+        let mut task = base_task(vec![card("local/a")]);
+        task.state = json!("user message: lower prefix");
+        assert_eq!(task.state_user_text().as_deref(), Some("lower prefix"));
+        task.state = json!("  plain state  ");
+        assert_eq!(task.state_user_text().as_deref(), Some("plain state"));
+        task.state = json!("   ");
+        assert!(task.state_user_text().is_none());
+        task.state = json!({"last_user": "  from object  "});
+        assert_eq!(task.state_user_text().as_deref(), Some("from object"));
+        task.state = json!({"last_user": "   "});
+        assert!(task.state_user_text().is_none());
+        task.state = json!({"other": 1});
+        assert!(task.state_user_text().is_none());
+    }
+
+    #[test]
+    fn synthesize_description_handles_missing_tier_and_capabilities() {
+        let card = ModelCard {
+            name: "n".into(),
+            locality: "cloud".into(),
+            modality: "text".into(),
+            capabilities: vec![],
+            provider_model_id: String::new(),
+            tier: Some(String::new()),
+        };
+        let desc = synthesize_description(&card);
+        assert!(desc.contains("tier=unknown"), "{desc}");
+        assert!(desc.contains("capabilities=chat"), "{desc}");
+        assert!(desc.contains("locality=cloud"), "{desc}");
+    }
+
+    #[test]
+    fn task_from_uses_prompt_when_last_user_is_missing() {
+        let recipe = AfmDRecipe {
+            endpoint: None,
+            track: None,
+            timeout_ms: None,
+            fallback: None,
+            instructions: None,
+            descriptions: HashMap::new(),
+            min_confidence: None,
+            prefix_reuse: None,
+        };
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![ChatMessage {
+                role: "system".into(),
+                content: json!("sys prompt"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let task = task_from(&req, vec![card("local/a")], &recipe);
+        // `prompt_text` only joins user turns, so a user-less request yields "".
+        assert_eq!(task.state, "");
+        assert_eq!(task.timeout_ms, DEFAULT_TIMEOUT_MS);
+        assert_eq!(task.instructions, DEFAULT_INSTRUCTIONS);
+        assert!(task.track.is_none());
+    }
+
+    #[tokio::test]
+    async fn encoder_and_unset_track_report_pool_ceiling() {
+        let eligible: Vec<_> = (0..256).map(|i| card(&format!("local/m{i}"))).collect();
+        let err = AfmDDecisioner {
+            endpoint: Some("http://127.0.0.1:1".into()),
+        }
+        .route(AfmDTask {
+            track: Some(AfmDTrack::Encoder),
+            ..base_task(eligible.clone())
+        })
+        .await
+        .expect_err("encoder pool too large");
+        let msg = err.to_string();
+        assert!(msg.contains("exceeds Choice max 255"), "{msg}");
+        assert!(msg.contains("track=encoder"), "{msg}");
+
+        let err = AfmDDecisioner {
+            endpoint: Some("http://127.0.0.1:1".into()),
+        }
+        .route(base_task(eligible))
+        .await
+        .expect_err("unset track uses encoder ceiling");
+        let msg = err.to_string();
+        assert!(msg.contains("exceeds Choice max 255"), "{msg}");
+        assert!(!msg.contains("track="), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn systemone_error_status_falls_back_or_fails() {
+        let app = Router::new().route(
+            "/v1/systemone",
+            post(|| async { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom") }),
+        );
+        let server = TestServer::start(app).await;
+        let mut task = base_task(vec![card("local/a"), card("local/b")]);
+        task.state = json!("User message: systemone error status probe unique delta");
+
+        let err = AfmDDecisioner {
+            endpoint: Some(server.base.clone()),
+        }
+        .route(task.clone())
+        .await
+        .expect_err("500 without fallback");
+        assert!(matches!(err, RouterError::Extension(_)));
+
+        task.fallback = Some("local/b".into());
+        let d = AfmDDecisioner {
+            endpoint: Some(server.base.clone()),
+        }
+        .route(task)
+        .await
+        .unwrap();
+        assert_eq!(d.model, "local/b");
+        assert!(d.reason.contains("fallback"));
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn systemone_malformed_body_is_extension_error() {
+        let app = Router::new().route(
+            "/v1/systemone",
+            post(|| async { (axum::http::StatusCode::OK, "not json") }),
+        );
+        let server = TestServer::start(app).await;
+        let mut task = base_task(vec![card("local/a"), card("local/b")]);
+        task.state = json!("User message: malformed systemone body probe unique zeta");
+        let err = AfmDDecisioner {
+            endpoint: Some(server.base.clone()),
+        }
+        .route(task)
+        .await
+        .expect_err("decode error");
+        assert!(matches!(err, RouterError::Extension(_)));
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn systemone_timeout_is_reported() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // Raw TCP stub so the delayed reply runs even after the client gives up.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let body = br#"{"answers":{"route":{"choice":"local/a"}}}"#;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+                body.len()
+            );
+            let _ = sock.write_all(head.as_bytes()).await;
+            let _ = sock.write_all(body).await;
+        });
+        let mut task = base_task(vec![card("local/a"), card("local/b")]);
+        task.state = json!("User message: systemone timeout probe unique eta");
+        // Connect must succeed before the budget expires, so keep it comfortably
+        // larger than a loopback handshake but far below the stub's delay.
+        task.timeout_ms = 100;
+        let err = AfmDDecisioner {
+            endpoint: Some(format!("127.0.0.1:{}", addr.port())),
+        }
+        .route(task)
+        .await
+        .expect_err("timeout");
+        assert!(matches!(err, RouterError::Timeout(_)));
+        // Bounded join: a client that never connects must not wedge the suite.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), server).await;
+    }
+
+    #[tokio::test]
+    async fn systemone_connection_error_mentions_endpoint() {
+        let mut task = base_task(vec![card("local/a"), card("local/b")]);
+        task.state = json!("User message: unreachable systemone probe unique theta");
+        let err = AfmDDecisioner {
+            endpoint: Some("127.0.0.1:1".into()),
+        }
+        .route(task)
+        .await
+        .expect_err("connection refused");
+        let msg = err.to_string();
+        assert!(msg.contains("afm-d systemone"), "{msg}");
+        assert!(msg.contains("127.0.0.1:1"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn min_confidence_satisfied_keeps_choice() {
+        let app = Router::new().route(
+            "/v1/systemone",
+            post(|| async {
+                Json(json!({"answers": {"route": {"choice": "local/b", "confidence": 0.9}}}))
+            }),
+        );
+        let server = TestServer::start(app).await;
+        let mut task = base_task(vec![card("local/a"), card("local/b")]);
+        task.state = json!("User message: min confidence satisfied probe unique kappa");
+        task.min_confidence = Some(0.5);
+        let d = AfmDDecisioner {
+            endpoint: Some(server.base.clone()),
+        }
+        .route(task)
+        .await
+        .unwrap();
+        assert_eq!(d.model, "local/b");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn state_without_user_text_skips_shortcuts_and_cache() {
+        let app = Router::new().route(
+            "/v1/systemone",
+            post(|| async {
+                Json(json!({"answers": {"route": {"choice": "local/b", "confidence": 0.8}}}))
+            }),
+        );
+        let server = TestServer::start(app).await;
+        let mut task = base_task(vec![card("local/a"), card("local/b")]);
+        task.state = json!({"no_user_text": true});
+        let d = AfmDDecisioner {
+            endpoint: Some(server.base.clone()),
+        }
+        .route(task)
+        .await
+        .unwrap();
+        assert_eq!(d.model, "local/b");
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn empty_pool_fails_closed() {
+        let err = AfmDDecisioner { endpoint: None }
+            .route(base_task(vec![]))
+            .await
+            .expect_err("no eligible models");
+        assert!(matches!(err, RouterError::FailClosed(_)));
+    }
+
+    #[tokio::test]
+    async fn shortcut_without_matching_tier_falls_through() {
+        let mut task = base_task(vec![card_tier("only-mid", "mid")]);
+        task.state = json!("User message: hi");
+        let d = AfmDDecisioner { endpoint: None }.route(task).await.unwrap();
+        assert_eq!(d.reason, "afm-d:first-eligible");
+    }
+
+    #[tokio::test]
+    async fn fallback_outside_pool_still_fails_closed() {
+        let app = Router::new().route(
+            "/v1/systemone",
+            post(|| async { (axum::http::StatusCode::BAD_GATEWAY, "nope") }),
+        );
+        let server = TestServer::start(app).await;
+        let mut task = base_task(vec![card("local/a"), card("local/b")]);
+        task.state = json!("User message: fallback outside pool probe unique iota");
+        task.fallback = Some("cloud/not-eligible".into());
+        let err = AfmDDecisioner {
+            endpoint: Some(server.base.clone()),
+        }
+        .route(task)
+        .await
+        .expect_err("fallback outside pool");
+        assert!(matches!(err, RouterError::Extension(_)));
+        server.shutdown().await;
     }
 }

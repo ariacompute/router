@@ -206,3 +206,179 @@ fn signal_nodes(signals: &Signals) -> Vec<(String, String, String)> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const YAML: &str = r#"
+version: v0.3
+providers:
+  models:
+    - name: small
+      locality: local
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+    - name: large
+      locality: cloud
+      backend_refs: [{name: p, endpoint: 127.0.0.1:2}]
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: sem
+  - model_names: [agent-mode]
+    router: agent
+    recipe: ag
+  - model_names: [afm]
+    router: afm-d
+    recipe: af
+recipes:
+  - name: sem
+    router: semantic
+    routing:
+      signals:
+        keywords: [{name: kw, keywords: [explain]}]
+        language: [{name: lang, code: en}]
+        context: [{name: ctx}]
+        authz: [{name: az, role: admin}]
+        conversation: [{name: conv}]
+        metadata: [{name: md, key: k, value: v}]
+        event: [{name: ev}]
+        structure: [{name: st}]
+      decisions:
+        - name: d
+          rules: {operator: AND, conditions: []}
+          algorithm: latency-aware
+          plugins: [{name: header-mutation}]
+          modelRefs: [{model: small}]
+        - name: d2
+          rules: {operator: AND, conditions: []}
+          modelRefs: [{model: large}]
+        - name: d3
+          rules: {operator: AND, conditions: []}
+          algorithm: static
+          modelRefs: [{model: small}]
+  - name: ag
+    router: agent
+    agent:
+      max_turns: 2
+      timeout_ms: 100
+      fallback: small
+  - name: af
+    router: afm-d
+    afm-d:
+      timeout_ms: 200
+      endpoint: "http://127.0.0.1:8010"
+      fallback: large
+"#;
+
+    fn ids(g: &Value) -> Vec<String> {
+        g["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn has_edge(g: &Value, from: &str, to: &str) -> bool {
+        g["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["from"] == from && e["to"] == to)
+    }
+
+    #[test]
+    fn graphs_every_router_kind_and_signal_family() {
+        let doc = RouterDocument::from_yaml_str(YAML).unwrap();
+        let g = topology_graph(&doc);
+        let ids = ids(&g);
+        for want in [
+            "model:small",
+            "model:large",
+            "recipe:sem",
+            "recipe:ag",
+            "recipe:af",
+            "signal:keyword:kw",
+            "signal:language:lang",
+            "signal:context:ctx",
+            "signal:authz:az",
+            "signal:conversation:conv",
+            "signal:metadata:md",
+            "signal:event:ev",
+            "signal:structure:st",
+            "decision:d",
+            "decision:d2",
+            "algorithm:latency-aware",
+            "algorithm:static",
+            "plugin:header-mutation",
+            "builtin:builtin",
+            "afm-d:systemone",
+            "entrypoint:auto",
+            "entrypoint:agent-mode",
+            "entrypoint:afm",
+        ] {
+            assert!(ids.contains(&want.to_string()), "missing node {want}");
+        }
+        assert!(has_edge(&g, "recipe:sem", "signal:keyword:kw"));
+        assert!(has_edge(&g, "decision:d", "algorithm:latency-aware"));
+        assert!(has_edge(&g, "decision:d", "plugin:header-mutation"));
+        assert!(has_edge(&g, "algorithm:latency-aware", "model:small"));
+        assert!(has_edge(&g, "builtin:builtin", "model:small"));
+        assert!(has_edge(&g, "afm-d:systemone", "model:large"));
+        assert!(has_edge(&g, "entrypoint:auto", "recipe:sem"));
+        assert!(has_edge(&g, "recipe:af", "afm-d:systemone"));
+    }
+
+    #[test]
+    fn shared_nodes_are_emitted_once() {
+        // `algorithm:static` is produced by two decisions; the node is deduped
+        // while each decision→algorithm edge is still recorded.
+        let doc = RouterDocument::from_yaml_str(YAML).unwrap();
+        let g = topology_graph(&doc);
+        let nodes = g["nodes"].as_array().unwrap();
+        let statics = nodes
+            .iter()
+            .filter(|n| n["id"] == "algorithm:static")
+            .count();
+        assert_eq!(statics, 1);
+        let edges = g["edges"].as_array().unwrap();
+        let static_edges = edges
+            .iter()
+            .filter(|e| e["to"] == "algorithm:static")
+            .count();
+        assert_eq!(static_edges, 2);
+    }
+
+    #[test]
+    fn semantic_recipe_without_routing_emits_no_signal_nodes() {
+        let mut doc = RouterDocument::from_yaml_str(YAML).unwrap();
+        for r in &mut doc.recipes {
+            if r.name == "sem" {
+                r.routing = None;
+            }
+        }
+        let g = topology_graph(&doc);
+        let nodes = ids(&g);
+        assert!(nodes.contains(&"recipe:sem".to_string()));
+        assert!(!nodes.iter().any(|n| n.starts_with("signal:")));
+        assert!(!nodes.iter().any(|n| n.starts_with("decision:")));
+    }
+
+    #[test]
+    fn agent_and_afm_d_without_options_emit_no_extra_nodes() {
+        // Validation rejects agent/afm-d recipes without their block, so a
+        // missing block can only be reached by clearing it after parsing.
+        let mut doc = RouterDocument::from_yaml_str(YAML).unwrap();
+        for r in &mut doc.recipes {
+            r.agent = None;
+            r.afm_d = None;
+        }
+        let g = topology_graph(&doc);
+        let nodes = ids(&g);
+        assert!(nodes.contains(&"recipe:ag".to_string()));
+        assert!(nodes.contains(&"recipe:af".to_string()));
+        assert!(!nodes.iter().any(|n| n.starts_with("builtin:")));
+        assert!(!nodes.iter().any(|n| n.starts_with("afm-d:")));
+    }
+}

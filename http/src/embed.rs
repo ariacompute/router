@@ -31,9 +31,19 @@ pub fn mgmt_router_with_embedded_dashboard(state: Arc<AppState>) -> Router {
 /// Combined management router: prefer an on-disk `dashboard/dist` (dev
 /// override), then the embedded assets, then the API-only router.
 pub fn mgmt_router_serve_dashboard(state: Arc<AppState>) -> Router {
-    if let Some(dir) = crate::resolve_dashboard_dir() {
+    dashboard_router(state, crate::resolve_dashboard_dir(), has_dashboard())
+}
+
+/// Pure selection step (separated from env/build probing so every branch is
+/// testable regardless of whether `dashboard/dist` exists on this machine).
+fn dashboard_router(
+    state: Arc<AppState>,
+    disk_dir: Option<std::path::PathBuf>,
+    embedded: bool,
+) -> Router {
+    if let Some(dir) = disk_dir {
         crate::mgmt_router_with_dashboard(state, dir)
-    } else if has_dashboard() {
+    } else if embedded {
         mgmt_router_with_embedded_dashboard(state)
     } else {
         crate::mgmt_router(state)
@@ -148,5 +158,85 @@ mod tests {
         assert!(content_type("app.js").contains("javascript"));
         assert_eq!(content_type("x.png"), "image/png");
         assert_eq!(content_type("x.unknown"), "application/octet-stream");
+    }
+
+    #[test]
+    fn percent_decode_accepts_both_hex_cases() {
+        assert_eq!(percent_decode("%2f"), "/");
+        assert_eq!(percent_decode("%2F"), "/");
+        assert_eq!(percent_decode("%41"), "A");
+        assert_eq!(percent_decode("%4"), "%4");
+    }
+
+    fn state() -> (Arc<AppState>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = format!(
+            r#"
+version: v0.3
+providers:
+  models:
+    - name: m
+      backend_refs: [{{name: p, endpoint: 127.0.0.1:9}}]
+global:
+  require_api_key: false
+  keys_path: {keys}
+  users_path: {users}
+"#,
+            keys = dir.path().join("k.json").display(),
+            users = dir.path().join("u.json").display()
+        );
+        let doc = aria_router_config::RouterDocument::from_yaml_str(&raw).unwrap();
+        (Arc::new(AppState::new(doc)), dir)
+    }
+
+    async fn get(app: Router, uri: &str) -> (StatusCode, String) {
+        use tower::ServiceExt;
+        let res = app
+            .oneshot(axum::http::Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn dashboard_router_serves_disk_then_embedded_then_api_only() {
+        let (st, _dir) = state();
+
+        // On-disk dashboard wins.
+        let web = tempfile::tempdir().unwrap();
+        std::fs::write(web.path().join("index.html"), "<html>disk</html>").unwrap();
+        let app = dashboard_router(st.clone(), Some(web.path().to_path_buf()), false);
+        let (status, body) = get(app, "/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("disk"));
+
+        // No disk dir + embedded assets: index fallback, SPA routes, 404 for assets.
+        let app = dashboard_router(st.clone(), None, true);
+        let (status, _) = get(app.clone(), "/").await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = get(app.clone(), "/keys").await;
+        assert_eq!(status, StatusCode::OK, "SPA fallback for routes");
+        let (status, _) = get(app, "/assets/missing.js").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // No disk dir and no embedded dashboard: API-only (mgmt endpoints still work).
+        let app = dashboard_router(st, None, false);
+        let (status, _) = get(app, "/health").await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn serve_dashboard_entry_keeps_management_api() {
+        // Production entry point: probes the environment/build for assets and
+        // must always keep the management API reachable.
+        let (st, _dir) = state();
+        let app = mgmt_router_serve_dashboard(st);
+        let (status, _) = get(app, "/health").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(has_dashboard(), DASHBOARD_HAS);
     }
 }

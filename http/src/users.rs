@@ -644,6 +644,268 @@ mod tests {
     }
 
     #[test]
+    fn role_as_str_matches_serde_names() {
+        assert_eq!(UserRole::Admin.as_str(), "admin");
+        assert_eq!(UserRole::User.as_str(), "user");
+        assert_eq!(
+            serde_json::to_string(&UserRole::Admin).unwrap(),
+            "\"admin\""
+        );
+        assert_eq!(
+            serde_json::from_str::<UserRole>("\"user\"").unwrap(),
+            UserRole::User
+        );
+    }
+
+    fn store_with_admin() -> (UserStore, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("users.json");
+        UserStore::create_admin(&path, "admin", "password1").unwrap();
+        (UserStore::load(&path).unwrap(), dir)
+    }
+
+    #[test]
+    fn create_admin_rejects_existing_users_and_bad_inputs() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("users.json");
+        UserStore::create_admin(&path, "admin", "password1").unwrap();
+        // Second bootstrap loads the existing file and refuses.
+        let err = UserStore::create_admin(&path, "admin2", "password1").unwrap_err();
+        assert!(matches!(err, RouterError::InvalidParam(_)), "{err}");
+        assert!(err.to_string().contains("already exist"), "{err}");
+
+        let fresh = dir.path().join("fresh.json");
+        let err = UserStore::create_admin(&fresh, "  ", "password1").unwrap_err();
+        assert!(err.to_string().contains("username required"), "{err}");
+        let err = UserStore::create_admin(&fresh, "admin", "short").unwrap_err();
+        assert!(err.to_string().contains("at least 8"), "{err}");
+        UserStore::create_admin(&fresh, "admin", "password1").unwrap();
+        let err = UserStore::create_admin(&fresh, "ADMIN", "password1").unwrap_err();
+        assert!(err.to_string().contains("already exist"), "{err}");
+    }
+
+    #[test]
+    fn insert_user_rejects_duplicate_username() {
+        let (mut store, _dir) = store_with_admin();
+        let err = store
+            .insert_user("Admin", "password1", UserRole::User)
+            .unwrap_err();
+        assert!(err.to_string().contains("username already taken"), "{err}");
+    }
+
+    #[test]
+    fn get_and_counts_and_get_unknown() {
+        let (store, _dir) = store_with_admin();
+        let admin = store.list_public().first().cloned().unwrap();
+        assert_eq!(store.get(&admin.id).unwrap().username, "admin");
+        assert!(store.get("usr_missing").is_none());
+        assert_eq!(store.counts(), (1, 0));
+        assert!(!store.is_empty());
+        assert!(UserStore::empty(std::path::PathBuf::from("x")).is_empty());
+    }
+
+    #[test]
+    fn login_paths_and_logout() {
+        let (mut store, _dir) = store_with_admin();
+        // Unknown user.
+        let err = store.login("ghost", "password1").unwrap_err();
+        assert!(matches!(err, RouterError::Unauthorized(_)), "{err}");
+        // Wrong password (argon2 verification failure).
+        let err = store.login("admin", "wrongpassword").unwrap_err();
+        assert!(matches!(err, RouterError::Unauthorized(_)), "{err}");
+        // Correct credentials issue a session; logout invalidates it.
+        let (u, tok) = store.login("ADMIN", "password1").unwrap();
+        assert_eq!(u.role, UserRole::Admin);
+        assert_eq!(store.resolve_session(&tok).unwrap().id, u.id);
+        store.logout(&tok);
+        let err = store.resolve_session(&tok).unwrap_err();
+        assert!(err.to_string().contains("invalid session"), "{err}");
+    }
+
+    #[test]
+    fn login_and_session_reject_disabled_user() {
+        let (mut store, _dir) = store_with_admin();
+        let admin = store.list_public().first().cloned().unwrap();
+        let (_u, tok) = store.login("admin", "password1").unwrap();
+        store.set_disabled(&admin.id, true).unwrap();
+        let err = store.login("admin", "password1").unwrap_err();
+        assert!(err.to_string().contains("user disabled"), "{err}");
+        let err = store.resolve_session(&tok).unwrap_err();
+        assert!(err.to_string().contains("user disabled"), "{err}");
+        assert_eq!(store.counts(), (0, 0));
+        // Unknown user id is invalid, not silently ignored.
+        let err = store.set_disabled("usr_nope", true).unwrap_err();
+        assert!(err.to_string().contains("unknown user"), "{err}");
+        store.set_disabled(&admin.id, false).unwrap();
+        assert!(store.has_admin());
+    }
+
+    #[test]
+    fn session_expiry_and_orphan_session() {
+        let (mut store, _dir) = store_with_admin();
+        let admin = store.list_public().first().cloned().unwrap();
+        let (_, tok) = store.login("admin", "password1").unwrap();
+        store.sessions.get_mut(&tok).unwrap().expires_unix = now_unix() - 1;
+        let err = store.resolve_session(&tok).unwrap_err();
+        assert!(err.to_string().contains("session expired"), "{err}");
+        assert!(
+            !store.sessions.contains_key(&tok),
+            "expired session dropped"
+        );
+
+        let orphan = store.issue_session("usr_missing").unwrap();
+        let err = store.resolve_session(&orphan).unwrap_err();
+        assert!(err.to_string().contains("invalid session"), "{err}");
+        assert!(!store.resolve_session("no-such-token").is_ok());
+        let _ = admin;
+    }
+
+    #[test]
+    fn set_password_validates_length_and_unknown_user() {
+        let (mut store, _dir) = store_with_admin();
+        let admin = store.list_public().first().cloned().unwrap();
+        let err = store.set_password(&admin.id, "short").unwrap_err();
+        assert!(err.to_string().contains("at least 8"), "{err}");
+        let err = store.set_password("usr_nope", "password2").unwrap_err();
+        assert!(err.to_string().contains("unknown user"), "{err}");
+        store.set_password(&admin.id, "password2").unwrap();
+        assert!(store.login("admin", "password2").is_ok());
+    }
+
+    #[test]
+    fn set_email_normalizes_and_rejects_invalid() {
+        let (mut store, _dir) = store_with_admin();
+        let admin = store.list_public().first().cloned().unwrap();
+        store
+            .set_email(&admin.id, Some("  Jane@Aria.IO  ".into()))
+            .unwrap();
+        assert_eq!(
+            store.get(&admin.id).unwrap().email.as_deref(),
+            Some("jane@aria.io")
+        );
+        let err = store
+            .set_email(&admin.id, Some("not-an-email".into()))
+            .unwrap_err();
+        assert!(err.to_string().contains("must contain '@'"), "{err}");
+        store.set_email(&admin.id, Some("   ".into())).unwrap();
+        assert!(store.get(&admin.id).unwrap().email.is_none());
+        store.set_email(&admin.id, None).unwrap();
+        assert!(store.get(&admin.id).unwrap().email.is_none());
+        let err = store.set_email("usr_nope", None).unwrap_err();
+        assert!(err.to_string().contains("unknown user"), "{err}");
+    }
+
+    #[test]
+    fn unique_username_suffixes_collisions() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("users.json");
+        let mut store = UserStore::empty(path);
+        let a = store
+            .upsert_serve_user("serve-a", Some("dup@aria.io".into()), None, &[])
+            .unwrap();
+        let b = store
+            .upsert_serve_user("serve-b", Some("dup@aria.io".into()), None, &[])
+            .unwrap();
+        let c = store
+            .upsert_serve_user("serve-c", Some("dup@aria.io".into()), None, &[])
+            .unwrap();
+        assert_eq!(a.username, "dup");
+        assert_eq!(b.username, "dup2");
+        assert_eq!(c.username, "dup3");
+    }
+
+    #[test]
+    fn upsert_serve_user_without_email_uses_serve_id_and_user_role() {
+        let (mut store, _dir) = store_with_admin();
+        // Existing local admin → new OAuth identity stays a regular user; no email
+        // means the serve id becomes the username base.
+        let u = store
+            .upsert_serve_user("serve-xyz", None, Some("   ".into()), &[])
+            .unwrap();
+        assert_eq!(u.role, UserRole::User);
+        assert_eq!(u.username, "serve-xyz");
+        assert!(u.email.is_none());
+        assert!(u.name.is_none());
+    }
+
+    #[test]
+    fn verify_password_rejects_malformed_hash() {
+        let err = verify_password("password1", "not-a-phc-hash").unwrap_err();
+        assert!(matches!(err, RouterError::Unauthorized(_)), "{err}");
+    }
+
+    #[test]
+    fn persist_without_parent_and_on_unwritable_path_reports_io() {
+        // A root path has no parent, so the mkdir branch is skipped and the write
+        // fails; the error must surface instead of being swallowed.
+        let mut store = UserStore::empty(std::path::PathBuf::from("/"));
+        let err = store
+            .upsert_serve_user("serve-1", Some("a@b.io".into()), None, &[])
+            .unwrap_err();
+        assert!(matches!(err, RouterError::Io(_)), "{err}");
+    }
+
+    #[test]
+    fn load_reports_read_and_parse_errors() {
+        let dir = tempdir().unwrap();
+        let bad = dir.path().join("bad.json");
+        std::fs::write(&bad, "{not json").unwrap();
+        let err = UserStore::load(&bad).unwrap_err();
+        assert!(matches!(err, RouterError::Config(_)), "{err}");
+
+        let dir_as_file = dir.path().join("dir.json");
+        std::fs::create_dir(&dir_as_file).unwrap();
+        let err = UserStore::load(&dir_as_file).unwrap_err();
+        assert!(matches!(err, RouterError::Io(_)), "{err}");
+    }
+
+    fn headers_with(name: axum::http::HeaderName, value: &[u8]) -> axum::http::HeaderMap {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(name, axum::http::HeaderValue::from_bytes(value).unwrap());
+        h
+    }
+
+    #[test]
+    fn extract_session_token_reads_cookie_then_bearer() {
+        use axum::http::header::{AUTHORIZATION, COOKIE};
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            COOKIE,
+            axum::http::HeaderValue::from_static("other=1; aria_router_session=tok-1; x=2"),
+        );
+        assert_eq!(extract_session_token(&h).as_deref(), Some("tok-1"));
+
+        // Empty cookie value falls through to the Authorization header.
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            COOKIE,
+            axum::http::HeaderValue::from_static("aria_router_session=   "),
+        );
+        h.insert(
+            AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer sess-2"),
+        );
+        assert_eq!(extract_session_token(&h).as_deref(), Some("sess-2"));
+
+        // API keys are not session tokens.
+        let h = headers_with(AUTHORIZATION, b"Bearer sk-aria_abc");
+        assert!(extract_session_token(&h).is_none());
+        let h = headers_with(AUTHORIZATION, b"Bearer sk-bf-abc");
+        assert!(extract_session_token(&h).is_none());
+        // Empty bearer and non-bearer schemes are ignored.
+        let h = headers_with(AUTHORIZATION, b"Bearer   ");
+        assert!(extract_session_token(&h).is_none());
+        let h = headers_with(AUTHORIZATION, b"Basic dXNlcg==");
+        assert!(extract_session_token(&h).is_none());
+        // Non-UTF-8 header bytes are ignored rather than panicking.
+        let h = headers_with(COOKIE, b"aria_router_session=\x80");
+        assert!(extract_session_token(&h).is_none());
+        let h = headers_with(AUTHORIZATION, b"Bearer \x80");
+        assert!(extract_session_token(&h).is_none());
+        assert!(extract_session_token(&axum::http::HeaderMap::new()).is_none());
+    }
+
+    #[test]
     fn upsert_serve_user_requires_serve_id() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("users.json");

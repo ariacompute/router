@@ -680,4 +680,24 @@ mod tests {
         assert_eq!(tier_of_model("m-small"), "small");
         assert_eq!(tier_of_model("local/general"), "unknown");
     }
+
+    #[test]
+    fn serde_defaults_fill_confidence_locality_modality() {
+        let d: RouteDecision = serde_json::from_str(r#"{"model":"m"}"#).unwrap();
+        assert_eq!(d.confidence, 1.0);
+
+        let c: ModelCard = serde_json::from_str(r#"{"name":"m"}"#).unwrap();
+        assert_eq!(c.locality, "local");
+        assert_eq!(c.modality, "text");
+    }
+
+    #[test]
+    fn decision_cache_default_capacity_works() {
+        let cache = DecisionCache::default();
+        assert!(cache.get("s", 1).is_none());
+        cache.put("s".into(), 1, RouteDecision::bypass("m"));
+        let hit = cache.get("s", 1);
+        assert!(hit.is_some());
+        assert_eq!(hit.unwrap().model, "m");
+    }
 }

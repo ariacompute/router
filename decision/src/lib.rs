@@ -503,4 +503,356 @@ mod tests {
         )
         .is_none());
     }
+
+    fn hit(kind: &str, name: &str, matched: bool, confidence: f32) -> SignalHit {
+        SignalHit {
+            kind: kind.into(),
+            name: name.into(),
+            matched,
+            confidence,
+        }
+    }
+
+    fn projection(name: &str, kind: &str, extra: serde_json::Value) -> ProjectionCfg {
+        let map: HashMap<String, serde_json::Value> =
+            serde_json::from_value(extra).unwrap_or_default();
+        ProjectionCfg {
+            name: name.into(),
+            kind: kind.into(),
+            extra: map,
+        }
+    }
+
+    #[test]
+    fn project_partition_picks_first_matched_signal() {
+        let set = SignalSet {
+            hits: vec![
+                hit("keyword", "slow", false, 1.0),
+                hit("keyword", "fast", true, 0.4),
+            ],
+        };
+        let cfgs = vec![projection(
+            "speed",
+            "partition",
+            serde_json::json!({"signals": ["slow", "fast", "missing"]}),
+        )];
+        let pm = project(&cfgs, &set).unwrap();
+        assert_eq!(pm.values["speed"], Value::String("fast".into()));
+
+        // No `signals` array → empty input list → null (no partition winner).
+        let cfgs = vec![projection("speed", "partition", serde_json::json!({}))];
+        let pm = project(&cfgs, &set).unwrap();
+        assert_eq!(pm.values["speed"], Value::Null);
+    }
+
+    #[test]
+    fn project_score_and_mapping_bands() {
+        let set = SignalSet {
+            hits: vec![hit("keyword", "kw", true, 0.8)],
+        };
+        let cfgs = vec![
+            projection(
+                "score",
+                "score",
+                serde_json::json!({"weights": {"kw": 0.5, "absent": 9.0}}),
+            ),
+            projection(
+                "band",
+                "mapping",
+                serde_json::json!({
+                    "from": "score",
+                    "bands": [
+                        {"name": "low", "min": 0.0, "max": 0.1},
+                        {"name": "high", "min": 0.1, "max": 1.0}
+                    ]
+                }),
+            ),
+        ];
+        let pm = project(&cfgs, &set).unwrap();
+        assert!((pm.values["score"].as_f64().unwrap() - 0.4).abs() < 1e-6);
+        assert_eq!(pm.values["band"], Value::String("high".into()));
+    }
+
+    #[test]
+    fn project_mapping_defaults_when_unbanded() {
+        // No bands at all → "default".
+        let cfgs = vec![projection(
+            "band",
+            "mapping",
+            serde_json::json!({"from": "missing"}),
+        )];
+        let pm = project(&cfgs, &SignalSet::default()).unwrap();
+        assert_eq!(pm.values["band"], Value::String("default".into()));
+
+        // Band without name/min/max defaults to an open interval named "band".
+        let cfgs = vec![projection(
+            "band",
+            "mapping",
+            serde_json::json!({"from": "missing", "bands": [{}]}),
+        )];
+        let pm = project(&cfgs, &SignalSet::default()).unwrap();
+        assert_eq!(pm.values["band"], Value::String("band".into()));
+    }
+
+    #[test]
+    fn project_score_without_weights_is_zero() {
+        let cfgs = vec![projection("score", "score", serde_json::json!({}))];
+        let pm = project(&cfgs, &SignalSet::default()).unwrap();
+        assert_eq!(pm.values["score"], serde_json::json!(0.0));
+
+        // Weights that are not an object are ignored too.
+        let cfgs = vec![projection(
+            "score",
+            "score",
+            serde_json::json!({"weights": 3}),
+        )];
+        let pm = project(&cfgs, &SignalSet::default()).unwrap();
+        assert_eq!(pm.values["score"], serde_json::json!(0.0));
+    }
+
+    #[test]
+    fn project_unknown_kind_is_unsupported() {
+        let cfgs = vec![projection("x", "cluster", serde_json::json!({}))];
+        let err = project(&cfgs, &SignalSet::default()).unwrap_err();
+        assert!(matches!(err, RouterError::Unsupported(_)));
+    }
+
+    fn recipe_with(strategy: &str, decisions: Vec<DecisionCfg>, routing: bool) -> Recipe {
+        Recipe {
+            name: "r".into(),
+            router: aria_router_core::RouterKind::Semantic,
+            routing: routing.then(|| Routing {
+                strategy: strategy.into(),
+                model_cards: None,
+                signals: Default::default(),
+                projections: vec![],
+                decisions,
+                algorithms: serde_json::Value::Null,
+                plugins: serde_json::Value::Null,
+                prefix_reuse: None,
+                competence: None,
+                decision_ext: None,
+            }),
+            agent: None,
+            afm_d: None,
+        }
+    }
+
+    fn decision_cfg(name: &str, priority: i32, conditions: Vec<Condition>) -> DecisionCfg {
+        DecisionCfg {
+            name: name.into(),
+            description: None,
+            priority,
+            rules: RuleNode {
+                operator: Some("AND".into()),
+                conditions,
+                not: None,
+            },
+            model_refs: vec![ModelRef { model: "m".into() }],
+            algorithm: Some("static".into()),
+            plugins: vec![],
+            locality: None,
+            emits: vec![],
+        }
+    }
+
+    #[test]
+    fn select_decision_without_routing_or_match_returns_none() {
+        let set = SignalSet::default();
+        let no_routing = recipe_with("priority", vec![], false);
+        assert!(
+            select_decision(&no_routing, &set, &ProjectionMap::default(), "priority")
+                .unwrap()
+                .is_none()
+        );
+
+        let no_match = recipe_with(
+            "priority",
+            vec![decision_cfg(
+                "d",
+                1,
+                vec![Condition {
+                    kind: "keyword".into(),
+                    name: "absent".into(),
+                    equals: None,
+                }],
+            )],
+            true,
+        );
+        assert!(
+            select_decision(&no_match, &set, &ProjectionMap::default(), "priority")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn confidence_strategy_prefers_higher_signal_confidence() {
+        let set = SignalSet {
+            hits: vec![
+                hit("keyword", "weak", true, 0.2),
+                hit("keyword", "strong", true, 0.9),
+            ],
+        };
+        let recipe = recipe_with(
+            "confidence",
+            vec![
+                decision_cfg(
+                    "weak_but_high_priority",
+                    100,
+                    vec![Condition {
+                        kind: "keyword".into(),
+                        name: "weak".into(),
+                        equals: None,
+                    }],
+                ),
+                decision_cfg(
+                    "strong",
+                    1,
+                    vec![Condition {
+                        kind: "keyword".into(),
+                        name: "strong".into(),
+                        equals: None,
+                    }],
+                ),
+            ],
+            true,
+        );
+        let chosen = select_decision(&recipe, &set, &ProjectionMap::default(), "confidence")
+            .unwrap()
+            .unwrap();
+        assert_eq!(chosen.name, "strong");
+    }
+
+    #[test]
+    fn confidence_strategy_breaks_ties_on_priority() {
+        let set = SignalSet {
+            hits: vec![
+                hit("keyword", "a", true, 0.5),
+                hit("keyword", "b", true, 0.5),
+            ],
+        };
+        let recipe = recipe_with(
+            "confidence",
+            vec![
+                decision_cfg(
+                    "low",
+                    1,
+                    vec![Condition {
+                        kind: "keyword".into(),
+                        name: "a".into(),
+                        equals: None,
+                    }],
+                ),
+                decision_cfg(
+                    "high",
+                    9,
+                    vec![
+                        Condition {
+                            kind: "keyword".into(),
+                            name: "b".into(),
+                            equals: None,
+                        },
+                        // Projection conditions carry full confidence.
+                        Condition {
+                            kind: "projection".into(),
+                            name: "absent_projection".into(),
+                            equals: None,
+                        },
+                    ],
+                ),
+            ],
+            true,
+        );
+        // The projection condition has no value → the decision would not match at all,
+        // so the low-priority decision alone matches and wins.
+        let chosen = select_decision(&recipe, &set, &ProjectionMap::default(), "confidence")
+            .unwrap()
+            .unwrap();
+        assert_eq!(chosen.name, "low");
+    }
+
+    #[test]
+    fn confidence_of_uses_projection_constant_and_signal_confidence() {
+        let set = SignalSet {
+            hits: vec![hit("keyword", "a", true, 0.5)],
+        };
+        let mut pm = ProjectionMap::default();
+        pm.values.insert("band".into(), Value::String("x".into()));
+        let d = decision_cfg(
+            "d",
+            1,
+            vec![
+                Condition {
+                    kind: "projection".into(),
+                    name: "band".into(),
+                    equals: Some("x".into()),
+                },
+                Condition {
+                    kind: "projection_value".into(),
+                    name: "band".into(),
+                    equals: Some("x".into()),
+                },
+                Condition {
+                    kind: "keyword".into(),
+                    name: "a".into(),
+                    equals: None,
+                },
+            ],
+        );
+        assert!((confidence_of(&d, &set) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn projection_equals_handles_number_bool_and_unnamed_values() {
+        let set = SignalSet::default();
+        let mut pm = ProjectionMap::default();
+        pm.values.insert("num".into(), serde_json::json!(3));
+        pm.values.insert("flag".into(), serde_json::json!(true));
+        pm.values.insert("arr".into(), serde_json::json!([1, 2]));
+        pm.values.insert("text".into(), Value::String("x".into()));
+
+        let cond = |name: &str, equals: Option<&str>| RuleNode {
+            operator: Some("AND".into()),
+            conditions: vec![Condition {
+                kind: "projection".into(),
+                name: name.into(),
+                equals: equals.map(str::to_string),
+            }],
+            not: None,
+        };
+        assert!(eval_rule(&cond("num", Some("3")), &set, &pm).unwrap());
+        assert!(eval_rule(&cond("flag", Some("true")), &set, &pm).unwrap());
+        assert!(!eval_rule(&cond("flag", Some("false")), &set, &pm).unwrap());
+        assert!(!eval_rule(&cond("arr", Some("1")), &set, &pm).unwrap());
+        // No `equals` → only presence (non-null) matters.
+        assert!(eval_rule(&cond("text", None), &set, &pm).unwrap());
+    }
+
+    #[test]
+    fn competence_keeps_best_and_handles_unknown_tier() {
+        let cfg = CompetenceCfg {
+            enabled: true,
+            floor: 0.6,
+            simple_threshold: 0.7,
+        };
+        // Cheapest candidate first: the later mid-tier candidate must not replace it.
+        let eligible = vec![
+            card("small", "small"),
+            card("mid", "mid"),
+            card("large", "large"),
+        ];
+        let down = apply_competence("large", &eligible, 0.9, Some(0.95), &cfg).unwrap();
+        assert_eq!(down, "small");
+
+        // Unknown tier ranks like `mid`, so a small model is still a valid downgrade.
+        let mut unknown = card("plain", "mid");
+        unknown.tier = None;
+        let eligible = vec![unknown.clone(), card("small", "small")];
+        let down = apply_competence("plain", &eligible, 0.9, Some(0.95), &cfg).unwrap();
+        assert_eq!(down, "small");
+
+        // Selected model is not in the eligible pool → None (fail closed).
+        assert!(apply_competence("ghost", &eligible, 0.9, Some(0.95), &cfg).is_none());
+    }
 }

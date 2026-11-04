@@ -20,7 +20,7 @@ pub fn hash_embed(text: &str, dim: usize) -> Vec<f32> {
         // Second hash for sign.
         let mut h2 = DefaultHasher::new();
         (t.as_str(), 1u8).hash(&mut h2);
-        if h2.finish() % 2 == 0 {
+        if h2.finish().is_multiple_of(2) {
             v[idx] *= -1.0;
         }
     }
@@ -157,5 +157,78 @@ mod tests {
         );
         assert!(ok, "conf={c}");
         assert!(c > 0.2);
+    }
+
+    #[test]
+    fn hash_embed_negative_sign_and_empty_cosine() {
+        // Hashing many tokens reliably hits the "even hash → negate" branch.
+        let bag: Vec<String> = (0..32).map(|i| format!("tok{i}")).collect();
+        let v = hash_embed(&bag.join(" "), 64);
+        assert!(v.iter().any(|x| *x < 0.0));
+        // Fewer dims than the minimum are clamped up, not truncated.
+        assert_eq!(hash_embed("a", 2).len(), 8);
+
+        assert_eq!(cosine(&[], &[]), 0.0);
+        assert_eq!(cosine(&[0.0; 4], &[0.0; 4]), 0.0);
+        assert!((cosine(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn embed_match_empty_candidates_and_mean_aggregation() {
+        let (ok, c) = embed_match("anything", &[], 0.1, "max", 64);
+        assert!(!ok);
+        assert_eq!(c, 0.0);
+
+        let (ok, _) = embed_match("alpha beta", &["alpha beta".into()], 0.1, "mean", 64);
+        assert!(ok);
+    }
+
+    #[test]
+    fn classify_match_description_examples_categories_and_fallbacks() {
+        let map = |v: Value| v.as_object().unwrap().clone();
+
+        let (ok, _) = classify_match(
+            "prove the theorem",
+            &map(serde_json::json!({
+                "description": "prove the theorem",
+                "examples": ["prove the theorem", {"text": "prove the theorem"}],
+                "hard": ["prove the theorem"],
+                "easy": ["say hi"],
+                "jailbreak_patterns": ["prove the theorem"],
+                "benign_patterns": ["say hi"]
+            })),
+            64,
+        );
+        assert!(ok);
+
+        let (ok, _) = classify_match(
+            "name and address",
+            &map(serde_json::json!({"pii_types_allowed": ["name", "address"]})),
+            64,
+        );
+        assert!(ok);
+
+        // Array entries that are neither strings nor `{text: ...}` objects are skipped.
+        let (ok, _) = classify_match(
+            "prove the theorem",
+            &map(serde_json::json!({
+                "description": "prove the theorem",
+                "examples": [{"no_text": 1}, 7, "prove the theorem"]
+            })),
+            64,
+        );
+        assert!(ok);
+
+        let (ok, _) = classify_match(
+            "math",
+            &map(serde_json::json!({"mmlu_categories": ["math", "physics"]})),
+            64,
+        );
+        assert!(ok);
+
+        // No anchors at all → evaluable but non-matching.
+        let (ok, c) = classify_match("anything", &map(serde_json::json!({})), 64);
+        assert!(!ok);
+        assert_eq!(c, 0.0);
     }
 }

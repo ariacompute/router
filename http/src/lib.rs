@@ -145,19 +145,21 @@ pub fn mgmt_router_with_dashboard(state: Arc<AppState>, static_dir: impl AsRef<F
 
 /// Resolve `dashboard/dist` next to CWD, the binary, or `ARIA_ROUTER_DASHBOARD`.
 pub fn resolve_dashboard_dir() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("ARIA_ROUTER_DASHBOARD") {
-        let p = PathBuf::from(p);
-        if p.join("index.html").is_file() {
-            return Some(p);
-        }
+    let env_dir = std::env::var("ARIA_ROUTER_DASHBOARD")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|p| p.join("index.html").is_file());
+    if let Some(p) = env_dir {
+        return Some(p);
     }
     let mut cands = vec![PathBuf::from("dashboard/dist")];
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            cands.push(parent.join("dashboard/dist"));
-            cands.push(parent.join("../dashboard/dist"));
-            cands.push(parent.join("../../dashboard/dist"));
-        }
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()));
+    if let Some(parent) = exe_dir {
+        cands.push(parent.join("dashboard/dist"));
+        cands.push(parent.join("../dashboard/dist"));
+        cands.push(parent.join("../../dashboard/dist"));
     }
     cands.into_iter().find(|p| p.join("index.html").is_file())
 }
@@ -830,17 +832,18 @@ fn resolve_chat_auth(
 
 /// Client-provided session for ContextHold (`x-aria-session` or body `session`).
 fn explicit_session(headers: &HeaderMap, req: &ChatRequest) -> Option<String> {
-    if let Some(v) = headers.get("x-aria-session").and_then(|v| v.to_str().ok()) {
-        if !v.is_empty() {
-            return Some(v.to_string());
-        }
+    let from_header = headers
+        .get("x-aria-session")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty());
+    if let Some(v) = from_header {
+        return Some(v.to_string());
     }
-    if let Some(v) = req.extra.get("session").and_then(|v| v.as_str()) {
-        if !v.is_empty() {
-            return Some(v.to_string());
-        }
-    }
-    None
+    req.extra
+        .get("session")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
 }
 
 fn ephemeral_session_id() -> String {
@@ -1737,21 +1740,11 @@ async fn route_afm_d(
     let decisioner = AfmDDecisioner {
         endpoint: afm.endpoint.clone(),
     };
+    // The System One decisioner already applies `afm-d.fallback` for an
+    // out-of-pool choice and fails closed when none is configured, so the model
+    // handed back here is always usable.
     let mut decision = decisioner.route(task).await?;
     decision.layer = "afm-d".into();
-    if let Some(fb) = &afm.fallback {
-        if !eligible.iter().any(|e| e.name == decision.model) {
-            decision.model = fb.clone();
-            decision.reason = format!("fallback:{fb}");
-        }
-    }
-    if !eligible.iter().any(|e| e.name == decision.model) && doc.provider(&decision.model).is_none()
-    {
-        return Err(RouterError::FailClosed(format!(
-            "afm-d model {} not eligible",
-            decision.model
-        )));
-    }
     let mut fwd = req;
     fwd.model = decision.model.clone();
     Ok((decision, fwd, None, vec![]))
@@ -1836,21 +1829,11 @@ async fn route_agent(
         api_key,
         canned,
     };
+    // The builtin agent only accepts a `submit_route` model from its own eligible
+    // pool and fails closed otherwise (overreach → 403), so no post-hoc fallback
+    // or eligibility re-check is needed here.
     let mut decision = builtin.route(task, &tools).await?;
     decision.layer = "agent".into();
-    if let Some(fb) = &agent.fallback {
-        if !eligible.iter().any(|e| e.name == decision.model) {
-            decision.model = fb.clone();
-            decision.reason = format!("fallback:{fb}");
-        }
-    }
-    if !eligible.iter().any(|e| e.name == decision.model) && doc.provider(&decision.model).is_none()
-    {
-        return Err(RouterError::FailClosed(format!(
-            "agent model {} not eligible",
-            decision.model
-        )));
-    }
     let mut fwd = req;
     fwd.model = decision.model.clone();
     Ok((decision, fwd, None, vec![]))
@@ -1869,6 +1852,7 @@ fn metadata_from_headers(h: &HeaderMap) -> HashMap<String, String> {
     m
 }
 
+#[derive(Debug)]
 pub struct AppError(pub RouterError);
 
 impl From<RouterError> for AppError {
@@ -2117,9 +2101,12 @@ global:
     async fn mock_upstream() -> String {
         use axum::response::IntoResponse;
         use axum::routing::post;
+        use std::future::IntoFuture;
         async fn echo(Json(v): Json<Value>) -> Response {
+            use futures_util::StreamExt;
             let model = v.get("model").cloned().unwrap_or(json!("echo"));
             let stream = v.get("stream").and_then(|x| x.as_bool()).unwrap_or(false);
+            let marker = v.get("messages").map(|m| m.to_string()).unwrap_or_default();
             if stream {
                 let chunk = json!({
                     "id": "chatcmpl-mock",
@@ -2147,11 +2134,34 @@ global:
                     }
                 });
                 let body = format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n", chunk, usage);
-                Response::builder()
-                    .status(200)
-                    .header(header::CONTENT_TYPE, "text/event-stream")
-                    .body(Body::from(body))
-                    .unwrap()
+                let sse = |body: Body| {
+                    Response::builder()
+                        .status(200)
+                        .header(header::CONTENT_TYPE, "text/event-stream")
+                        .body(body)
+                        .unwrap()
+                };
+                if marker.contains("stream-error") {
+                    // One chunk, then a transport error mid-body. The delay lets
+                    // the response head and first chunk reach the client first.
+                    let first = format!("data: {}\n\n", chunk);
+                    let head = futures_util::stream::iter(vec![Ok::<_, std::io::Error>(
+                        bytes::Bytes::from(first),
+                    )]);
+                    let tail = futures_util::stream::once(async {
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        Err(std::io::Error::other("mock stream error"))
+                    });
+                    return sse(Body::from_stream(head.chain(tail)));
+                }
+                if marker.contains("slow-stream") {
+                    // Delay the first byte so the consumer observes `Poll::Pending`.
+                    return sse(Body::from_stream(futures_util::stream::once(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        Ok::<_, std::io::Error>(bytes::Bytes::from(body))
+                    })));
+                }
+                sse(Body::from(body))
             } else {
                 Json(json!({
                     "id": "chatcmpl-mock",
@@ -2174,10 +2184,575 @@ global:
         let app = Router::new().route("/v1/chat/completions", post(echo));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
+        // Detached: the task ends when the test runtime is dropped. Spawning the
+        // `Serve` future directly avoids an `async` wrapper whose tail is never
+        // reached (it would show up as an uncovered line).
+        let _server = tokio::spawn(axum::serve(listener, app).into_future());
         format!("127.0.0.1:{}", addr.port())
+    }
+
+    async fn call(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        body: Option<Value>,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, HeaderMap, Value) {
+        let mut req = Request::builder().method(method).uri(uri);
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        let body = match body {
+            Some(v) => {
+                req = req.header("content-type", "application/json");
+                Body::from(v.to_string())
+            }
+            None => Body::empty(),
+        };
+        let res = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
+        let status = res.status();
+        let headers = res.headers().clone();
+        let bytes = to_bytes(res.into_body(), 1 << 22).await.unwrap();
+        let v = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, headers, v)
+    }
+
+    fn with_semantic_cache(backend: &str, threshold: f32) -> RouterDocument {
+        let raw = tiny_yaml(backend).replace(
+            "global:\n  require_api_key: false",
+            &format!(
+                "global:\n  require_api_key: false\n  stores:\n    semantic_cache:\n      enabled: true\n      similarity_threshold: {threshold}\n      max_entries: 8\n      ttl_turns: 2\n    memory:\n      enabled: true\n      default_ttl_turns: 2\n"
+            ),
+        );
+        RouterDocument::from_yaml_str(&raw).unwrap()
+    }
+
+    #[tokio::test]
+    async fn management_surface_smoke() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = mgmt_router(st.clone());
+
+        let (status, _, v) = call(&app, "GET", "/health", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["status"], "ok");
+
+        let (status, _, v) = call(&app, "GET", "/v1/router/version", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(v.get("version").is_some());
+
+        let (status, _, v) = call(&app, "POST", "/v1/router/validate", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["ok"], true);
+
+        let (status, _, v) = call(&app, "GET", "/v1/router/overview", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["status"], "ok");
+        assert_eq!(v["providers"], 1);
+        assert_eq!(v["api_keys"]["active"], 0);
+        assert_eq!(v["local_users"]["admin"], 0);
+        assert!(v.get("serve_account").is_some());
+
+        let (status, _, v) = call(&app, "GET", "/v1/router/topology", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!v["nodes"].as_array().unwrap().is_empty());
+
+        let (status, _, v) = call(&app, "GET", "/v1/router/models", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(v["data"].as_array().unwrap().len() >= 3);
+
+        let (status, _, v) = call(&app, "GET", "/v1/router/cost?n=5", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["recent"].as_array().unwrap().len(), 0);
+        let (status, _, v) = call(&app, "GET", "/v1/router/cost", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(v.get("totals").is_some());
+        let (status, _, v) = call(&app, "GET", "/v1/router/cost/by-competence", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["actual_cost_usd"], 0.0);
+
+        // Provider upsert: existing (update) and new (insert).
+        let (status, _, v) = call(
+            &app,
+            "PUT",
+            "/v1/router/providers",
+            Some(
+                json!({"name": "local/general", "endpoint": backend, "provider_model_id": "echo2"}),
+            ),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["ok"], true);
+        let (status, _, _) = call(
+            &app,
+            "PUT",
+            "/v1/router/providers",
+            Some(json!({"name": "brand/new", "endpoint": backend, "locality": "cloud"})),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _, v) = call(&app, "GET", "/v1/router/providers", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        let models = v["models"].as_array().unwrap();
+        assert!(models.iter().any(|m| m["name"] == "brand/new"));
+        let updated = models
+            .iter()
+            .find(|m| m["name"] == "local/general")
+            .unwrap();
+        assert_eq!(updated["provider_model_id"], "echo2");
+        assert_eq!(updated["locality"], "local");
+
+        // Config get / put (YAML and JSON bodies) / invalid body.
+        let (status, _, v) = call(&app, "GET", "/v1/router/config", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(v["yaml"].as_str().unwrap().contains("version: v0.3"));
+        // Keep the rewritten config on the isolated key/user files.
+        let mut isolated = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        isolated.global.keys_path =
+            Some(_dir.path().join("router-keys.json").display().to_string());
+        isolated.global.users_path =
+            Some(_dir.path().join("router-users.json").display().to_string());
+        let yaml = isolated.to_yaml().unwrap();
+        let res = app
+            .clone()
+            .oneshot(
+                Request::put("/v1/router/config")
+                    .body(Body::from(yaml.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let json_doc = serde_json::to_string(&isolated).unwrap();
+        let res = app
+            .clone()
+            .oneshot(
+                Request::put("/v1/router/config")
+                    .body(Body::from(json_doc))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let (status, _, _) = call(
+            &app,
+            "PUT",
+            "/v1/router/config",
+            Some(json!({"version": "v0.2"})),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let res = app
+            .clone()
+            .oneshot(
+                Request::put("/v1/router/config")
+                    .body(Body::from(vec![0xff, 0xfe]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        // Keys: list (empty), create, revoke, revoke unknown.
+        let (status, _, v) = call(&app, "GET", "/v1/router/keys", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["keys"].as_array().unwrap().len(), 0);
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/router/keys",
+            Some(json!({"name": "dash"})),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let id = v["id"].as_str().unwrap().to_string();
+        assert!(v["secret"].as_str().unwrap().starts_with("sk-"));
+        let (status, _, v) =
+            call(&app, "DELETE", &format!("/v1/router/keys/{id}"), None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["ok"], true);
+        let (status, _, _) = call(&app, "DELETE", "/v1/router/keys/missing", None, &[]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Playground chat endpoint (no session → playground identity).
+        let (status, headers, v) = call(
+            &app,
+            "POST",
+            "/v1/router/chat",
+            Some(json!({
+                "model": "ariacompute/semantic-auto",
+                "messages": [{"role": "user", "content": "please explain rust"}]
+            })),
+            &[
+                ("x-aria-role", "admin"),
+                ("x-aria-metadata", "{\"tenant\":\"a\"}"),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers.get("x-aria-router-layer").unwrap(), "semantic");
+        assert_eq!(v["choices"][0]["message"]["content"], "ok");
+    }
+
+    #[tokio::test]
+    async fn management_requires_bearer_when_configured() {
+        let backend = mock_upstream().await;
+        let mut doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        doc.global.require_api_key = true;
+        let (st, _dir) = isolated_state(doc);
+        let app = mgmt_router(st.clone());
+        let (status, _, _) = call(
+            &app,
+            "PUT",
+            "/v1/router/providers",
+            Some(json!({"name": "x", "endpoint": backend})),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        // Data plane: chat without a key is rejected by `resolve_chat_auth`.
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            "/v1/router/chat",
+            Some(json!({"model": "local/general", "messages": []})),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "playground path bypasses api keys");
+        let (status, _, _) = call(
+            &data_router(st),
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({"model": "local/general", "messages": []})),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        // Unknown model on the data plane → FailClosed (403).
+        let backend2 = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend2)).unwrap();
+        let (st2, _dir2) = isolated_state(doc);
+        let (status, _, _) = call(
+            &data_router(st2),
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({"model": "nope/unknown", "messages": []})),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn rate_limit_and_upstream_failure_statuses() {
+        let backend = mock_upstream().await;
+        let raw = tiny_yaml(&backend).replace(
+            "global:\n  require_api_key: false",
+            "global:\n  require_api_key: false\n  services:\n    ratelimit:\n      enabled: true\n      requests_per_minute: 1",
+        );
+        let doc = RouterDocument::from_yaml_str(&raw).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st);
+        let body =
+            json!({"model": "local/general", "messages": [{"role": "user", "content": "hi"}]});
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(body.clone()),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _, _) = call(&app, "POST", "/v1/chat/completions", Some(body), &[]).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+
+        // Upstream unreachable → 502 from the catch-all error arm.
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml("127.0.0.1:1")).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let (status, _, _) = call(
+            &data_router(st),
+            "POST",
+            "/v1/chat/completions",
+            Some(
+                json!({"model": "local/general", "messages": [{"role": "user", "content": "hi"}]}),
+            ),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn semantic_cache_serves_second_request() {
+        let backend = mock_upstream().await;
+        let doc = with_semantic_cache(&backend, 0.5);
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+        let body = json!({
+            "model": "ariacompute/semantic-auto",
+            "messages": [{"role": "user", "content": "please explain rust ownership"}]
+        });
+        let (status, headers, _) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(body.clone()),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers.get("x-aria-router-semantic-cache").is_none());
+        let (status, headers, v) =
+            call(&app, "POST", "/v1/chat/completions", Some(body), &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers.get("x-aria-router-semantic-cache").unwrap(), "hit");
+        assert_eq!(v["choices"][0]["message"]["content"], "ok");
+        // Cost ledger records the cache hit with zero upstream requests.
+        let summary = st.cost.lock().unwrap().summary();
+        assert_eq!(summary["requests"], 2);
+    }
+
+    #[tokio::test]
+    async fn streaming_chat_records_cost_and_headers() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+        let (status, headers, _) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({
+                "model": "ariacompute/semantic-auto",
+                "stream": true,
+                "messages": [{"role": "user", "content": "please explain rust"}]
+            })),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers.get("content-type").unwrap(), "text/event-stream");
+        assert_eq!(headers.get("x-aria-router-model").unwrap(), "local/general");
+        let summary = st.cost.lock().unwrap().summary();
+        assert_eq!(summary["requests"], 1);
+    }
+
+    #[tokio::test]
+    async fn sse_cost_stream_handles_pending_completion_and_upstream_errors() {
+        use futures_util::StreamExt;
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+
+        // A body that delays its first byte makes the wrapper observe `Pending`.
+        let res = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "ariacompute/semantic-auto",
+                            "stream": true,
+                            "messages": [{"role": "user", "content": "please explain rust slow-stream"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let mut body = res.into_body().into_data_stream();
+        let mut text = String::new();
+        while let Some(item) = body.next().await {
+            text.push_str(&String::from_utf8_lossy(&item.unwrap()));
+        }
+        assert!(text.contains("ok"), "{text}");
+        // Re-polling a finished stream must not record the cost twice.
+        assert!(body.next().await.is_none());
+        assert_eq!(st.cost.lock().unwrap().summary()["requests"], 1);
+
+        // A mid-stream transport error propagates and still records the failure.
+        let res = app
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "ariacompute/semantic-auto",
+                            "stream": true,
+                            "messages": [{"role": "user", "content": "please explain rust stream-error"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let err = to_bytes(res.into_body(), 1 << 20).await.unwrap_err();
+        assert!(err.to_string().contains("upstream"), "{err}");
+        assert_eq!(st.cost.lock().unwrap().summary()["requests"], 2);
+    }
+
+    #[tokio::test]
+    async fn replay_endpoints_preview_and_reroute() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let cfg = st.doc.lock().unwrap().global.services.router_replay.clone();
+        st.replay_log.push(
+            ReplayRecord {
+                id: "rec-1".into(),
+                decision: RouteDecision::bypass("local/general"),
+                signals_summary: None,
+                projections: None,
+                emits: None,
+                retention: None,
+                session: Some("s-1".into()),
+                prompt_preview: Some("please explain rust".into()),
+                task_category: None,
+                selected_group: None,
+                tool_outcomes: None,
+                accepted_output: None,
+                stage_competence: None,
+            },
+            &cfg,
+        );
+        // A record without a preview still reroutes with an empty prompt.
+        st.replay_log.push(
+            ReplayRecord {
+                id: "rec-2".into(),
+                decision: RouteDecision::bypass("local/general"),
+                signals_summary: None,
+                projections: None,
+                emits: None,
+                retention: None,
+                session: None,
+                prompt_preview: None,
+                task_category: None,
+                selected_group: None,
+                tool_outcomes: None,
+                accepted_output: None,
+                stage_competence: None,
+            },
+            &cfg,
+        );
+        let app = mgmt_router(st.clone());
+
+        let (status, _, v) = call(&app, "GET", "/v1/router/replay?n=10", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["records"].as_array().unwrap().len(), 2);
+
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/router/replay/rec-1/reroute",
+            Some(json!({})),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["forwarded"], false);
+        assert_eq!(v["original_id"], "rec-1");
+
+        let (status, _, v) = call(&app, "POST", "/v1/router/replay/rec-2/reroute", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["decision"]["model"], "local/general");
+
+        // `forward=true` performs a real upstream call.
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/router/replay/rec-1/reroute?forward=true",
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["forwarded"], true);
+        assert_eq!(v["body"]["choices"][0]["message"]["content"], "ok");
+
+        let (status, _, _) =
+            call(&app, "POST", "/v1/router/replay/missing/reroute", None, &[]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn dashboard_dir_resolution_prefers_env() {
+        // Serialize environment mutation: `resolve_dashboard_dir` reads the same var.
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<html></html>").unwrap();
+        // Set a known value first so the restore path below is deterministic.
+        std::env::set_var("ARIA_ROUTER_DASHBOARD", dir.path());
+        let prev = std::env::var("ARIA_ROUTER_DASHBOARD").ok();
+        std::env::set_var("ARIA_ROUTER_DASHBOARD", dir.path());
+        let found = resolve_dashboard_dir().unwrap();
+        assert_eq!(found, dir.path());
+        // Missing index.html falls through to the filesystem candidates.
+        let empty = tempfile::tempdir().unwrap();
+        std::env::set_var("ARIA_ROUTER_DASHBOARD", empty.path());
+        let fallback = resolve_dashboard_dir();
+        assert!(fallback.is_none() || fallback.unwrap().join("index.html").is_file());
+        std::env::set_var(
+            "ARIA_ROUTER_DASHBOARD",
+            prev.expect("value set above is always present"),
+        );
+        // Leave the process environment clean for other tests.
+        std::env::remove_var("ARIA_ROUTER_DASHBOARD");
+    }
+
+    #[test]
+    fn keys_for_status_and_last_route_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        let mut keys = KeyStore::empty(path.clone());
+        keys.create_for("one", None).unwrap();
+        let (active, revoked) = load_keys_for_status(&path).unwrap();
+        assert_eq!((active, revoked), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn semantic_decision_ext_overrides_model() {
+        use axum::routing::post;
+        async fn decide() -> Json<Value> {
+            Json(json!({"model": "local/general", "decision": "ext", "algorithm": "static"}))
+        }
+        let llm = Router::new().route("/v1/decision", post(decide));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, llm).await.unwrap() });
+        let backend = mock_upstream().await;
+        let raw = tiny_yaml(&backend).replace(
+            "strategy: priority",
+            &format!("strategy: priority\n      decision_ext:\n        endpoint: http://{addr}"),
+        );
+        let doc = RouterDocument::from_yaml_str(&raw).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let (status, headers, _) = call(
+            &data_router(st),
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({
+                "model": "ariacompute/semantic-auto",
+                "messages": [{"role": "user", "content": "hi"}]
+            })),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers.get("x-aria-router-decision").unwrap(), "ext");
     }
 
     #[tokio::test]
@@ -2494,11 +3069,12 @@ global:
             "text/event-stream"
         );
         assert!(res.headers().get("x-aria-router-model").is_some());
-        assert!(
-            res.headers().get("x-aria-router-algorithm").is_some()
-                || res.headers().get("x-aria-router-reason").is_some()
-                || res.headers().get("x-aria-router-confidence").is_some()
-        );
+        // Evaluated eagerly so every header probe is exercised (a short-circuiting
+        // `||` chain would leave the later probes uncovered).
+        let has_algo = res.headers().get("x-aria-router-algorithm").is_some();
+        let has_reason = res.headers().get("x-aria-router-reason").is_some();
+        let has_confidence = res.headers().get("x-aria-router-confidence").is_some();
+        assert!(has_algo || has_reason || has_confidence);
         let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("data:"), "expected SSE chunks, got {text}");
@@ -2781,40 +3357,25 @@ global:
     }
 
     #[tokio::test]
-    async fn dashboard_serves_index_when_dist_present() {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dashboard/dist");
-        if !dir.join("index.html").is_file() {
-            return;
-        }
+    async fn dashboard_serves_index_from_a_disk_directory() {
+        // Deterministic: build the asset dir in a tempdir instead of depending on
+        // whether `dashboard/dist` happens to be built on this machine.
         let backend = mock_upstream().await;
         let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
         let (st, _dir) = isolated_state(doc);
-        let res = mgmt_router_with_dashboard(st, dir)
+        let web = tempfile::tempdir().unwrap();
+        std::fs::write(
+            web.path().join("index.html"),
+            "<html><title>aria-router</title></html>",
+        )
+        .unwrap();
+        let res = mgmt_router_with_dashboard(st, web.path())
             .oneshot(Request::get("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(res.status(), 200);
         let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
-        let html = String::from_utf8_lossy(&bytes);
-        assert!(html.contains("aria-router") || html.contains("root"));
-    }
-
-    #[tokio::test]
-    async fn embedded_dashboard_serves_index() {
-        if !crate::embed::has_dashboard() {
-            return;
-        }
-        let backend = mock_upstream().await;
-        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let (st, _dir) = isolated_state(doc);
-        let res = crate::embed::mgmt_router_with_embedded_dashboard(st)
-            .oneshot(Request::get("/").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(res.status(), 200);
-        let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
-        let html = String::from_utf8_lossy(&bytes);
-        assert!(html.contains("aria-router") || html.contains("root"));
+        assert!(String::from_utf8_lossy(&bytes).contains("aria-router"));
     }
 
     fn tiny_yaml_priced(backend: &str, require_key: bool) -> String {
@@ -4843,5 +5404,1066 @@ global:
         let doc = RouterDocument::from_yaml_str(raw).unwrap();
         assert!(doc.global.stores.memory.enabled);
         assert!(doc.global.stores.semantic_cache.enabled);
+    }
+
+    #[test]
+    fn explicit_session_prefers_header_then_body() {
+        let req: ChatRequest = serde_json::from_value(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "session": "body-sess"
+        }))
+        .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-aria-session", "hdr-sess".parse().unwrap());
+        assert_eq!(
+            explicit_session(&headers, &req).as_deref(),
+            Some("hdr-sess")
+        );
+
+        // Empty header falls back to the request body.
+        headers.insert("x-aria-session", "   ".parse().unwrap());
+        assert_eq!(
+            explicit_session(&headers, &req).as_deref(),
+            Some("   "),
+            "non-empty whitespace is still a client session"
+        );
+        headers.insert("x-aria-session", "".parse().unwrap());
+        assert_eq!(
+            explicit_session(&headers, &req).as_deref(),
+            Some("body-sess")
+        );
+
+        // Empty body session → no ContextHold key.
+        let empty: ChatRequest = serde_json::from_value(json!({
+            "model": "m",
+            "messages": [],
+            "session": ""
+        }))
+        .unwrap();
+        assert!(explicit_session(&HeaderMap::new(), &empty).is_none());
+        assert!(explicit_session(&headers, &empty).is_none());
+
+        // Non-UTF-8 header bytes are ignored.
+        let mut bad = HeaderMap::new();
+        bad.insert(
+            "x-aria-session",
+            axum::http::HeaderValue::from_bytes(b"\x80").unwrap(),
+        );
+        assert!(explicit_session(&bad, &empty).is_none());
+    }
+
+    fn state_with_users(backend: &str) -> (Arc<AppState>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let users_path = dir.path().join("router-users.json");
+        LocalUserStore::create_admin(&users_path, "admin", "password1").unwrap();
+        let mut doc = RouterDocument::from_yaml_str(&tiny_yaml(backend)).unwrap();
+        doc.global.keys_path = Some(dir.path().join("router-keys.json").display().to_string());
+        doc.global.users_path = Some(users_path.display().to_string());
+        (Arc::new(AppState::new(doc)), dir)
+    }
+
+    fn session_cookie(st: &Arc<AppState>, username: &str) -> String {
+        let mut users = st.users.lock().unwrap();
+        let id = users
+            .list_public()
+            .into_iter()
+            .find(|u| u.username == username)
+            .unwrap()
+            .id;
+        format!("aria_router_session={}", users.issue_session(&id).unwrap())
+    }
+
+    #[tokio::test]
+    async fn keys_are_scoped_to_the_dashboard_user() {
+        let backend = mock_upstream().await;
+        let (st, _dir) = state_with_users(&backend);
+        let app = mgmt_router(st.clone());
+        st.users
+            .lock()
+            .unwrap()
+            .register("bob", "password1", true)
+            .unwrap();
+        let admin_cookie = session_cookie(&st, "admin");
+        let bob_cookie = session_cookie(&st, "bob");
+
+        // No session at all → the dashboard gate rejects the key list.
+        let (status, _, _) = call(&app, "GET", "/v1/router/keys", None, &[]).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Admin creates a key (owned by the admin).
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/router/keys",
+            Some(json!({"name": "admin-key"})),
+            &[("cookie", admin_cookie.as_str())],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let admin_key = v["id"].as_str().unwrap().to_string();
+
+        // Bob creates his own and only sees that one.
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/router/keys",
+            Some(json!({"name": "bob-key"})),
+            &[("cookie", bob_cookie.as_str())],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let bob_key = v["id"].as_str().unwrap().to_string();
+        let (_, _, v) = call(
+            &app,
+            "GET",
+            "/v1/router/keys",
+            None,
+            &[("cookie", bob_cookie.as_str())],
+        )
+        .await;
+        assert_eq!(v["keys"].as_array().unwrap().len(), 1);
+        // Admin sees everything.
+        let (_, _, v) = call(
+            &app,
+            "GET",
+            "/v1/router/keys",
+            None,
+            &[("cookie", admin_cookie.as_str())],
+        )
+        .await;
+        assert_eq!(v["keys"].as_array().unwrap().len(), 2);
+
+        // Bob cannot revoke the admin's key, but can revoke his own.
+        let (status, _, _) = call(
+            &app,
+            "DELETE",
+            &format!("/v1/router/keys/{admin_key}"),
+            None,
+            &[("cookie", bob_cookie.as_str())],
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _, _) = call(
+            &app,
+            "DELETE",
+            &format!("/v1/router/keys/{bob_key}"),
+            None,
+            &[("cookie", bob_cookie.as_str())],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // An admin may revoke any key, including one owned by another user.
+        let (status, _, _) = call(
+            &app,
+            "DELETE",
+            &format!("/v1/router/keys/{admin_key}"),
+            None,
+            &[("cookie", admin_cookie.as_str())],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // An unowned key (created without a session) is revocable by anyone.
+        let unowned = st.keys.lock().unwrap().create("unowned").unwrap();
+        let (status, _, _) = call(
+            &app,
+            "DELETE",
+            &format!("/v1/router/keys/{}", unowned.id),
+            None,
+            &[("cookie", bob_cookie.as_str())],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn data_plane_models_and_chat_identity_paths() {
+        let backend = mock_upstream().await;
+        let (st, _dir) = state_with_users(&backend);
+        let app = data_router(st.clone());
+
+        // `/v1/models` lists entrypoints + providers.
+        let (status, _, v) = call(&app, "GET", "/v1/models", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(v["data"].as_array().unwrap().len() >= 2);
+
+        let admin_id = st.users.lock().unwrap().list_public()[0].id.clone();
+        let body = json!({
+            "model": "ariacompute/semantic-auto",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+
+        // Local key owned by a dashboard user → identity `local_user`.
+        let owned = st
+            .keys
+            .lock()
+            .unwrap()
+            .create_for("owned", Some(admin_id.clone()))
+            .unwrap();
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(body.clone()),
+            &[("authorization", &format!("Bearer {}", owned.secret))],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // Local key without an owner → identity `local`.
+        let anonymous = st.keys.lock().unwrap().create("anon").unwrap();
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(body.clone()),
+            &[("authorization", &format!("Bearer {}", anonymous.secret))],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // Key owned by a deleted user degrades to `local`.
+        let ghost = st
+            .keys
+            .lock()
+            .unwrap()
+            .create_for("ghost", Some("usr_missing".into()))
+            .unwrap();
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(body.clone()),
+            &[("authorization", &format!("Bearer {}", ghost.secret))],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // OAuth key → identity `serve` (site/user metadata from the link).
+        link_with_key(&st, "sk-bf-DATAPLANE123456", "http://127.0.0.1:9");
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(body),
+            &[("authorization", "Bearer sk-bf-DATAPLANE123456")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Unknown bearer → 401.
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({"model": "ariacompute/semantic-auto", "messages": []})),
+            &[("authorization", "Bearer sk-bf-unknown")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(v["error"]["message"]
+            .as_str()
+            .is_some_and(|m| !m.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn playground_chat_uses_session_user() {
+        let backend = mock_upstream().await;
+        let (st, _dir) = state_with_users(&backend);
+        let app = mgmt_router(st.clone());
+        let cookie = session_cookie(&st, "admin");
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/router/chat",
+            Some(json!({
+                "model": "ariacompute/semantic-auto",
+                "messages": [{"role": "user", "content": "hi"}]
+            })),
+            &[("cookie", cookie.as_str())],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        let (_, _, cost) = call(&app, "GET", "/v1/router/cost?n=5", None, &[]).await;
+        let recent = cost["recent"].as_array().unwrap();
+        assert!(!recent.is_empty());
+        assert_eq!(recent[0]["identity"], "local_user");
+        assert_eq!(recent[0]["user"], "admin");
+    }
+
+    #[tokio::test]
+    async fn missing_decision_and_default_model_fails_closed() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        // No keyword match (skip the only decision) and no default model.
+        st.doc.lock().unwrap().providers.defaults.default_model = String::new();
+        let app = data_router(st);
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({
+                "model": "ariacompute/semantic-auto",
+                "messages": [{"role": "user", "content": "plain"}]
+            })),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{v}");
+        assert!(v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no matching decision"));
+    }
+
+    #[test]
+    fn parse_json_usage_prefers_usage_then_estimates() {
+        let body = json!({"usage": {"prompt_tokens": 11, "completion_tokens": 7}});
+        assert_eq!(parse_json_usage(&body, 99), (11, 7, "usage"));
+
+        // Missing counters fall back to the prompt estimate / zero.
+        let partial = json!({"usage": {"prompt_tokens": 3}});
+        assert_eq!(parse_json_usage(&partial, 42), (3, 0, "usage"));
+
+        let no_usage = json!({"choices": [{"message": {"content": "hello world"}}]});
+        let (pt, ct, src) = parse_json_usage(&no_usage, 42);
+        assert_eq!((pt, src), (42, "estimate"));
+        assert!(ct > 0, "content length drives the completion estimate");
+
+        assert_eq!(parse_json_usage(&json!({}), 5), (5, 0, "estimate"));
+    }
+
+    #[test]
+    fn parse_sse_usage_reads_the_last_usage_frame() {
+        let stream = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            "data: {\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        assert_eq!(parse_sse_usage(stream, 1), (9, 4, "usage"));
+
+        assert_eq!(
+            parse_sse_usage("data: {\"usage\":{\"prompt_tokens\":2}}", 7),
+            (2, 0, "usage")
+        );
+
+        // No usage frame → heuristic estimate.
+        let (pt, _, src) = parse_sse_usage("data: {\"a\":1}\nnot-json", 7);
+        assert_eq!((pt, src), (7, "estimate"));
+        // Empty / keep-alive-only streams also estimate.
+        assert_eq!(parse_sse_usage("", 3).0, 3);
+        assert_eq!(parse_sse_usage("data: [DONE]", 3).0, 3);
+        assert_eq!(parse_sse_usage("data:", 3).0, 3);
+    }
+
+    #[test]
+    fn attach_route_headers_emits_every_optional_header() {
+        let mut d = RouteDecision::bypass("local/general");
+        d.reason = "why\u{1}not\n".into();
+        d.confidence = 0.8125;
+        d.algorithm = Some("static".into());
+        d.routing_latency_ms = Some(12.5);
+        d.retention_drop = Some(true);
+        d.retention_ttl_turns = Some(2);
+        d.retention_keep_current_model = Some(true);
+        d.retention_prefer_prefix = Some(false);
+        d.semantic_cache_hit = Some(true);
+        let mut h = HeaderMap::new();
+        attach_route_headers(&mut h, &d);
+
+        // Non-graphic characters are replaced so the value stays a valid header.
+        assert_eq!(h["x-aria-router-reason"], "why?not?");
+        assert_eq!(h["x-aria-router-confidence"], "0.8125");
+        assert_eq!(h["x-aria-router-algorithm"], "static");
+        assert_eq!(h["x-aria-router-latency-ms"], "12.500");
+        assert_eq!(h["x-aria-router-retention-drop"], "true");
+        assert_eq!(h["x-aria-router-retention-ttl-turns"], "2");
+        assert_eq!(h["x-aria-router-retention-keep-current-model"], "true");
+        assert_eq!(h["x-aria-router-retention-prefer-prefix"], "false");
+        assert_eq!(h["x-aria-router-semantic-cache"], "hit");
+        assert_eq!(h["x-aria-router-bypass"], "true");
+
+        // A decision without optionals emits only the mandatory headers.
+        let mut plain = RouteDecision::bypass("local/general");
+        plain.reason.clear();
+        let mut bare = HeaderMap::new();
+        attach_route_headers(&mut bare, &plain);
+        assert!(bare.get("x-aria-router-reason").is_none());
+        assert!(bare.get("x-aria-router-retention-drop").is_none());
+    }
+
+    #[test]
+    fn record_caps_replay_history_and_last_route_json() {
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml("http://127.0.0.1:9")).unwrap();
+        let (st, _d) = isolated_state(doc);
+        assert_eq!(last_route_json(&st), json!({}));
+
+        for _ in 0..260 {
+            record(&st, RouteDecision::bypass("local/general"));
+        }
+        assert_eq!(st.replay.lock().unwrap().len(), 256);
+        assert_eq!(last_route_json(&st)["model"], "local/general");
+    }
+
+    #[test]
+    fn maybe_store_semantic_respects_retention_drop() {
+        let raw = include_str!("../../config/examples/semantic-stateful.yaml");
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(raw).unwrap());
+        let cfg = st.doc.lock().unwrap().global.stores.semantic_cache.clone();
+        let body = json!({"choices": [{"message": {"content": "cached"}}]});
+        let mut d = RouteDecision::bypass("local/general");
+        d.decision = "explanatory".into();
+        d.retention_drop = Some(true);
+        maybe_store_semantic(&st, &d, "explain rust", &body);
+        assert!(
+            st.semantic_cache
+                .lookup("explain rust", "local/general", "explanatory", &cfg)
+                .is_none(),
+            "retention drop must skip the semantic cache"
+        );
+
+        d.retention_drop = Some(false);
+        maybe_store_semantic(&st, &d, "explain rust", &body);
+        assert!(
+            st.semantic_cache
+                .lookup("explain rust", "local/general", "explanatory", &cfg)
+                .is_some(),
+            "cache enabled + retention kept must store the body"
+        );
+    }
+
+    #[tokio::test]
+    async fn response_cache_plugin_answers_from_the_cache() {
+        let backend = mock_upstream().await;
+        let mut doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        doc.recipes[0].routing.as_mut().unwrap().decisions[0].plugins =
+            vec![aria_router_config::PluginRef {
+                name: "response-cache".into(),
+                extra: Default::default(),
+            }];
+        let (st, _dir) = isolated_state(doc);
+        // Seed the cache with a body the upstream would never produce.
+        let fwd = ChatRequest {
+            model: "local/general".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("please explain"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let cached = json!({"choices": [{"message": {"content": "cached-only"}}]});
+        remember_response(
+            &st.plugins,
+            &[aria_router_config::PluginRef {
+                name: "response-cache".into(),
+                extra: Default::default(),
+            }],
+            &fwd,
+            &cached,
+        );
+
+        let app = data_router(st);
+        // A miss forwards upstream and stores the reply for the next call.
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({
+                "model": "ariacompute/semantic-auto",
+                "messages": [{"role": "user", "content": "please explain other"}]
+            })),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_ne!(v["choices"][0]["message"]["content"], "cached-only");
+
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({
+                "model": "ariacompute/semantic-auto",
+                "messages": [{"role": "user", "content": "please explain"}]
+            })),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["choices"][0]["message"]["content"], "cached-only");
+
+        // And the miss reply is now cached for its own utterance.
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({
+                "model": "ariacompute/semantic-auto",
+                "messages": [{"role": "user", "content": "please explain other"}]
+            })),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_ne!(v["choices"][0]["message"]["content"], "cached-only");
+    }
+
+    #[tokio::test]
+    async fn fast_response_plugin_short_circuits_and_replay_reroute() {
+        let backend = mock_upstream().await;
+        let mut doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        doc.recipes[0].routing.as_mut().unwrap().decisions[0].plugins =
+            vec![aria_router_config::PluginRef {
+                name: "fast-response".into(),
+                extra: [("message".to_string(), json!("canned-reply"))]
+                    .into_iter()
+                    .collect(),
+            }];
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+        let (status, _, v) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(json!({
+                "model": "ariacompute/semantic-auto",
+                "messages": [{"role": "user", "content": "please explain"}]
+            })),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["choices"][0]["message"]["content"], "canned-reply");
+
+        // Re-route a recorded decision with forwarding enabled: the canned body is
+        // returned instead of hitting the upstream.
+        let cfg = st.doc.lock().unwrap().global.services.router_replay.clone();
+        st.replay_log.push(
+            ReplayRecord {
+                id: "rec-fast".into(),
+                decision: RouteDecision::bypass("local/general"),
+                signals_summary: None,
+                projections: None,
+                emits: None,
+                retention: None,
+                session: None,
+                prompt_preview: Some("please explain rust".into()),
+                task_category: None,
+                selected_group: None,
+                tool_outcomes: None,
+                accepted_output: None,
+                stage_competence: None,
+            },
+            &cfg,
+        );
+        let id = "rec-fast".to_string();
+        let admin = mgmt_router(st);
+        let (status, _, v) = call(
+            &admin,
+            "POST",
+            &format!("/v1/router/replay/{id}/reroute?forward=true"),
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert_eq!(v["forwarded"], false);
+        assert_eq!(
+            v["body"]["choices"][0]["message"]["content"],
+            "canned-reply"
+        );
+    }
+
+    /// Fake System One endpoint answering with a fixed routing choice.
+    async fn spawn_system_one(choice: &'static str) -> String {
+        use axum::routing::post;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().route(
+            "/v1/systemone",
+            post(move || async move {
+                Json(json!({
+                    "answers": {"route": {"choice": choice, "confidence": 0.9}},
+                    "model": "fake-system-one"
+                }))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        base
+    }
+
+    fn text_req(model: &str) -> ChatRequest {
+        ChatRequest {
+            model: model.into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: json!("route this"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn afm_d_falls_back_and_rejects_ineligible_choices() {
+        let backend = mock_upstream().await;
+        let system_one = spawn_system_one("ghost/model").await;
+
+        // With a configured fallback, an ineligible choice is replaced.
+        let yaml = format!(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: {backend}
+    - name: local/fast
+      provider_model_id: echo-fast
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: {backend}
+entrypoints:
+  - model_names: [ariacompute/afm-d-auto]
+    router: afm-d
+    recipe: afm-d-default
+recipes:
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      endpoint: {system_one}
+      timeout_ms: 2000
+      fallback: local/general
+global:
+  require_api_key: false
+"#
+        );
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&yaml).unwrap());
+        let (d, fwd, _, _) =
+            route_request(&st, text_req("ariacompute/afm-d-auto"), &HashMap::new())
+                .await
+                .unwrap();
+        assert_eq!(d.model, "local/general");
+        assert!(d.reason.contains("fallback:local/general"), "{}", d.reason);
+        assert_eq!(fwd.model, "local/general");
+
+        // Without a fallback the same choice fails closed.
+        let yaml_no_fb = yaml.replace("      fallback: local/general\n", "");
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&yaml_no_fb).unwrap());
+        let err = route_request(&st, text_req("ariacompute/afm-d-auto"), &HashMap::new())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("not in eligible pool"),
+            "expected fail-closed, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_falls_back_and_rejects_ineligible_choices() {
+        let backend = mock_upstream().await;
+        let yaml = format!(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: ""
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: {backend}
+          api_key: sk-backend
+entrypoints:
+  - model_names: [ariacompute/agent-auto]
+    router: agent
+    recipe: agent-default
+recipes:
+  - name: agent-default
+    router: agent
+    agent:
+      endpoint: {backend}
+      model: local/general
+      timeout_ms: 1000
+      max_turns: 1
+      fallback: local/general
+global:
+  require_api_key: false
+"#
+        );
+        // A pool member chosen by the agent is accepted as-is.
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&yaml).unwrap());
+        st.set_fake_agent("builtin", RouteDecision::bypass("local/general"));
+        let (d, fwd, _, _) =
+            route_request(&st, text_req("ariacompute/agent-auto"), &HashMap::new())
+                .await
+                .unwrap();
+        assert_eq!(d.model, "local/general");
+        assert_eq!(d.layer, "agent");
+        assert_eq!(fwd.model, "local/general");
+
+        // A model outside the eligible pool is refused by the agent runtime.
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&yaml).unwrap());
+        st.set_fake_agent("builtin", RouteDecision::bypass("ghost/model"));
+        let err = route_request(&st, text_req("ariacompute/agent-auto"), &HashMap::new())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("not in eligible pool"),
+            "expected fail-closed, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn afm_d_and_agent_fail_closed_without_text_models() {
+        for router in ["afm-d", "agent"] {
+            let recipe = if router == "afm-d" {
+                "  - name: afm-d-default\n    router: afm-d\n    afm-d:\n      timeout_ms: 1000\n"
+            } else {
+                "  - name: agent-default\n    router: agent\n    agent:\n      timeout_ms: 1000\n      max_turns: 1\n"
+            };
+            let yaml = format!(
+                r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/vision
+  models:
+    - name: local/vision
+      provider_model_id: vision
+      locality: local
+      modality: image
+      capabilities: [vision]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/auto]
+    router: {router}
+    recipe: {router}-default
+recipes:
+{recipe}global:
+  require_api_key: false
+"#
+            );
+            let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&yaml).unwrap());
+            let err = route_request(&st, text_req("ariacompute/auto"), &HashMap::new())
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("no eligible models"),
+                "{router}: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mismatched_entrypoint_recipe_pair_is_rejected() {
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml("http://127.0.0.1:9")).unwrap();
+        let (st, _d) = isolated_state(doc);
+        // Validation forbids this, so only a runtime mutation can hit the guard.
+        st.doc.lock().unwrap().recipes[0].router = RouterKind::Agent;
+        let err = route_request(&st, text_req("ariacompute/semantic-auto"), &HashMap::new())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("mismatch"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn agent_delegate_without_fallback_fails_closed() {
+        let yaml = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/agent-auto]
+    router: agent
+    recipe: agent-default
+recipes:
+  - name: agent-default
+    router: agent
+    agent:
+      timeout_ms: 1000
+      max_turns: 1
+      delegate_endpoint: 127.0.0.1:1
+global:
+  require_api_key: false
+"#;
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(yaml).unwrap());
+        let err = route_request(&st, text_req("ariacompute/agent-auto"), &HashMap::new())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("decision_ext"),
+            "expected a delegation failure, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_uses_the_provider_name_when_no_upstream_id_is_set() {
+        let backend = mock_upstream().await;
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap());
+        {
+            let mut doc = st.doc.lock().unwrap();
+            doc.providers.models[0].provider_model_id.clear();
+        }
+        st.set_fake_agent("builtin", RouteDecision::bypass("local/general"));
+        let (d, _, _, _) = route_request(&st, text_req("ariacompute/agent-auto"), &HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(d.model, "local/general");
+    }
+
+    #[tokio::test]
+    async fn agent_uses_the_upstream_provider_id_when_it_is_set() {
+        let backend = mock_upstream().await;
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap());
+        {
+            let mut doc = st.doc.lock().unwrap();
+            doc.providers.models[0].provider_model_id = "echo-upstream".into();
+            // Point the agent recipe at the logical model so the provider mapping runs.
+            let recipe = doc
+                .recipes
+                .iter_mut()
+                .find(|r| r.name == "agent-default")
+                .expect("agent recipe present");
+            recipe.agent.as_mut().expect("agent block present").model =
+                Some("local/general".into());
+        }
+        st.set_fake_agent("builtin", RouteDecision::bypass("local/general"));
+        let (d, fwd, _, _) =
+            route_request(&st, text_req("ariacompute/agent-auto"), &HashMap::new())
+                .await
+                .unwrap();
+        assert_eq!(d.model, "local/general");
+        assert_eq!(fwd.model, "local/general");
+    }
+
+    #[test]
+    fn parse_sse_usage_prefers_usage_and_falls_back_to_estimates() {
+        // A chunk without usage is skipped; the later usage frame wins.
+        let text = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n\
+                    data: {\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\n";
+        assert_eq!(parse_sse_usage(text, 9), (5, 2, "usage"));
+
+        // No usage anywhere → estimate from the accumulated SSE text.
+        let text = "data: {\"choices\":[]}\n\ndata: [DONE]\n\n";
+        let (pt, ct, src) = parse_sse_usage(text, 7);
+        assert_eq!(pt, 7);
+        assert!(ct > 0, "estimate must be non-zero for a non-empty body");
+        assert_eq!(src, "estimate");
+
+        // Malformed frames and empty/DONE sentinels are ignored.
+        let text = "data: not-json\n\ndata: \n\ndata: [DONE]\n\n";
+        let (pt, ct, src) = parse_sse_usage(text, 3);
+        assert_eq!((pt, src), (3, "estimate"));
+        assert!(ct > 0);
+    }
+
+    #[test]
+    fn app_error_maps_every_variant_to_its_status() {
+        use axum::response::IntoResponse;
+        let status = |e: RouterError| AppError(e).into_response().status();
+        assert_eq!(
+            status(RouterError::Unauthorized("x".into())),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            status(RouterError::RateLimited("x".into())),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            status(RouterError::FailClosed("x".into())),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status(RouterError::Unsupported("x".into())),
+            StatusCode::NOT_IMPLEMENTED
+        );
+        assert_eq!(
+            status(RouterError::Timeout("x".into())),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            status(RouterError::Config("x".into())),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status(RouterError::InvalidParam("x".into())),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status(RouterError::Upstream("x".into())),
+            StatusCode::BAD_GATEWAY
+        );
+    }
+
+    #[tokio::test]
+    async fn oneshot_json_treats_an_empty_body_as_an_empty_object() {
+        let app = Router::new().route("/empty", get(|| async { StatusCode::NO_CONTENT }));
+        let (status, v) =
+            oneshot_json(app, Request::get("/empty").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(v, json!({}));
+    }
+
+    #[tokio::test]
+    async fn competence_block_runs_for_semantic_routes() {
+        let backend = mock_upstream().await;
+        let yaml = tiny_yaml(&backend).replace(
+            "      strategy: priority",
+            "      strategy: priority\n      competence: {enabled: true}",
+        );
+        let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let (d, _, _, _) =
+            route_request(&st, text_req("ariacompute/semantic-auto"), &HashMap::new())
+                .await
+                .unwrap();
+        // No history means unknown competence, which forbids the downgrade.
+        assert_eq!(d.model, "local/general");
+        assert!(st.competence.score("").is_none());
+    }
+
+    #[tokio::test]
+    async fn competence_downgrade_picks_a_cheaper_tier_when_confident() {
+        let backend = mock_upstream().await;
+        let yaml = format!(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: tier/large
+  models:
+    - name: tier/small
+      provider_model_id: echo-small
+      tier: small
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: {backend}
+    - name: tier/large
+      provider_model_id: echo-large
+      tier: large
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: {backend}
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: comp
+recipes:
+  - name: comp
+    router: semantic
+    routing:
+      strategy: priority
+      competence: {{enabled: true, floor: 0.5, simple_threshold: 0.5}}
+      projections:
+        - name: simple
+          type: score
+          weights:
+            needs_explain: 1.0
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: tier/large
+            - model: tier/small
+global:
+  require_api_key: false
+"#
+        );
+        let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        // A confident session turn permits the downgrade.
+        st.competence.record("s-comp", 1.0);
+        let mut meta = HashMap::new();
+        meta.insert("session".to_string(), "s-comp".to_string());
+        let mut req = text_req("ariacompute/semantic-auto");
+        req.messages[0].content = json!("please explain rust systems programming");
+        let (d, fwd, _, _) = route_request(&st, req, &meta).await.unwrap();
+        assert_eq!(d.model, "tier/small");
+        assert_eq!(fwd.model, "tier/small");
+    }
+
+    #[tokio::test]
+    async fn decision_ext_failure_without_fallback_fails_closed() {
+        let backend = mock_upstream().await;
+        let yaml = tiny_yaml(&backend).replace(
+            "      strategy: priority",
+            "      strategy: priority\n      decision_ext: {endpoint: 127.0.0.1:1, timeout_ms: 500}",
+        );
+        let doc = RouterDocument::from_yaml_str(&yaml).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let err = route_request(&st, text_req("ariacompute/semantic-auto"), &HashMap::new())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("decision_ext"), "{err}");
     }
 }

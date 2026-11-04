@@ -19,11 +19,15 @@ struct Window {
 
 impl RateLimiter {
     pub fn check(&self, bucket: &str, cfg: &RateLimitCfg) -> Result<(), RouterError> {
+        self.check_at(bucket, cfg, Instant::now())
+    }
+
+    /// Clock-injected variant of [`Self::check`] so the 60s window rollover is testable.
+    fn check_at(&self, bucket: &str, cfg: &RateLimitCfg, now: Instant) -> Result<(), RouterError> {
         if !cfg.enabled || cfg.requests_per_minute == 0 {
             return Ok(());
         }
         let mut g = self.inner.lock().unwrap();
-        let now = Instant::now();
         let w = g.entry(bucket.to_string()).or_insert(Window {
             start: now,
             count: 0,
@@ -73,5 +77,24 @@ mod tests {
             requests_per_minute: 0,
         };
         assert!(lim.check("a", &zero).is_ok());
+    }
+
+    #[test]
+    fn window_rolls_over_after_sixty_seconds() {
+        let lim = RateLimiter::default();
+        let cfg = RateLimitCfg {
+            enabled: true,
+            requests_per_minute: 1,
+        };
+        let t0 = Instant::now();
+        assert!(lim.check_at("a", &cfg, t0).is_ok());
+        assert!(matches!(
+            lim.check_at("a", &cfg, t0 + Duration::from_secs(1)),
+            Err(RouterError::RateLimited(_))
+        ));
+        // A full window later the bucket resets and admits the next request.
+        assert!(lim
+            .check_at("a", &cfg, t0 + Duration::from_secs(61))
+            .is_ok());
     }
 }

@@ -139,6 +139,7 @@ version = "0.1.0"
 dependencies = [
  "aria-router-config",
  "aria-router-core",
+ "axum",
  "reqwest",
  "serde",
  "serde_json",
@@ -218,6 +219,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "webpki-roots",
 ]
 
 [[package]]

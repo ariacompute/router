@@ -81,6 +81,10 @@ mod tests {
         assert!(t.rating("c") < fast);
         t.observe_latency("d", 10.0, &[]); // no-op without peers
         assert!((t.rating("d") - 1000.0).abs() < 1e-3);
+        // 100..500ms scores 0.5 → neutral (expected 0.5), rating unchanged.
+        t.set("mid", 1000.0);
+        t.observe_latency("mid", 250.0, &["peer".into()]);
+        assert!((t.rating("mid") - 1000.0).abs() < 1e-3);
         let _ = global_elo().rating("x");
     }
 }

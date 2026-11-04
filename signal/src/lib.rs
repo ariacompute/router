@@ -511,4 +511,270 @@ recipes:
         let set = extract(&doc, recipe, &req, &HashMap::new()).unwrap();
         assert!(set.matched("embedding", "tech") || set.get("embedding", "tech").is_some());
     }
+
+    fn req_with(text: &str) -> ChatRequest {
+        ChatRequest {
+            model: "auto".into(),
+            messages: vec![aria_router_core::ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(text.into()),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        }
+    }
+
+    const ALL_SIGNALS_YAML: &str = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/general
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: AND
+            keywords: [explain, rust]
+          - name: none_hit
+            operator: NOR
+            keywords: [zzz]
+        language:
+          - name: zh
+            code: zh
+          - name: en
+            code: en
+        context:
+          - name: tiny
+            max_tokens: 1000
+        authz:
+          - name: admin
+            role: admin
+          - name: no_role
+        conversation:
+          - name: multi_turn
+            min_messages: 2
+        metadata:
+          - name: tenant_a
+            key: tenant
+            value: a
+        event:
+          - name: build_failed
+            code: BUILD_FAILED
+          - name: bare_event
+        structure:
+          - name: many_questions
+            min_questions: 2
+      decisions:
+        - name: d
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+              - type: language
+                name: zh
+              - type: context
+                name: tiny
+              - type: authz
+                name: admin
+              - type: conversation
+                name: multi_turn
+              - type: metadata
+                name: tenant_a
+              - type: event
+                name: build_failed
+              - type: structure
+                name: many_questions
+          modelRefs: [{model: local/general}]
+"#;
+
+    #[test]
+    fn extracts_every_heuristic_signal_family() {
+        let doc = RouterDocument::from_yaml_str(ALL_SIGNALS_YAML).unwrap();
+        let recipe = doc.recipe("mom").unwrap();
+        let mut md = HashMap::new();
+        md.insert("role".to_string(), "admin".to_string());
+        md.insert("tenant".to_string(), "a".to_string());
+
+        // Chinese + two questions + the BUILD_FAILED event code.
+        let req = req_with("请解释 explain rust ownership 所有权是什么意思？为什么？ BUILD_FAILED");
+        let set = extract(&doc, recipe, &req, &md).unwrap();
+        assert!(set.matched("keyword", "needs_explain"));
+        assert!(set.matched("language", "zh"));
+        assert!(!set.matched("language", "en"));
+        assert!(set.matched("context", "tiny"));
+        assert!(set.matched("authz", "admin"));
+        // No `role` configured on this signal → never matches.
+        assert!(!set.matched("authz", "no_role"));
+        assert!(!set.matched("conversation", "multi_turn"));
+        assert!(set.matched("metadata", "tenant_a"));
+        assert!(set.matched("event", "build_failed"));
+        assert!(set.matched("structure", "many_questions"));
+
+        // Missing event code falls back to the signal name.
+        let set = extract(&doc, recipe, &req_with("bare_event here"), &HashMap::new()).unwrap();
+        assert!(set.matched("event", "bare_event"));
+        assert!(!set.matched("event", "build_failed"));
+        assert!(!set.matched("authz", "admin"));
+        assert!(!set.matched("metadata", "tenant_a"));
+        assert!(!set.matched("structure", "many_questions"));
+        // `NOR` keyword signal matches because none of its words appear.
+        assert!(set.matched("keyword", "none_hit"));
+    }
+
+    #[test]
+    fn detect_lang_switches_on_cjk_density() {
+        assert_eq!(detect_lang("plain english sentence"), "en");
+        assert_eq!(detect_lang("这是一个中文句子"), "zh");
+        assert_eq!(detect_lang(""), "en");
+    }
+
+    #[test]
+    fn recipe_without_routing_yields_empty_set() {
+        let raw = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/general
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [auto]
+    router: agent
+    recipe: bare
+recipes:
+  - name: bare
+    router: agent
+    agent:
+      max_turns: 1
+"#;
+        let doc = RouterDocument::from_yaml_str(raw).unwrap();
+        let recipe = doc.recipe("bare").unwrap();
+        let set = extract(&doc, recipe, &req_with("hi"), &HashMap::new()).unwrap();
+        assert!(set.hits.is_empty());
+    }
+
+    #[cfg(feature = "ml")]
+    #[test]
+    fn learned_signal_yaml_shapes_under_ml() {
+        let raw = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/general
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      signals:
+        fact-check:
+          - name: fc
+            description: "check the facts"
+        jailbreak: {name: single, description: "jailbreak prompt"}
+        domain: "not-a-list"
+        pii:
+          - "just a string"
+          - name: pii_names
+            pii_types_allowed: ["name", "address"]
+          - name: pii_empty
+        user-feedback:
+          - name: uf
+            examples: [{"text": "too slow"}, "not helpful"]
+        complexity:
+          - name: hard
+            hard: ["prove the theorem"]
+            easy: ["say hi"]
+      decisions:
+        - name: d
+          rules:
+            operator: AND
+            conditions:
+              - type: fact-check
+                name: fc
+              - type: jailbreak
+                name: single
+              - type: domain
+                name: whatever
+              - type: pii
+                name: pii_names
+              - type: user-feedback
+                name: uf
+              - type: complexity
+                name: hard
+              - type: reask
+                name: absent
+          modelRefs: [{model: local/general}]
+"#;
+        let doc = RouterDocument::from_yaml_str(raw).unwrap();
+        let recipe = doc.recipe("mom").unwrap();
+        let set = extract(
+            &doc,
+            recipe,
+            &req_with("please check the facts and prove the theorem"),
+            &HashMap::new(),
+        )
+        .unwrap();
+        // Every configured learned signal is emitted (matched or not).
+        assert!(set.get("fact-check", "fc").is_some());
+        assert!(set.get("jailbreak", "single").is_some());
+        assert!(set.get("pii", "pii_names").is_some());
+        assert!(set.get("pii", "pii_empty").is_some());
+        assert!(set.get("user-feedback", "uf").is_some());
+        assert!(set.get("complexity", "hard").is_some());
+        // Scalar `domain` and unconfigured `reask` produce no hits.
+        assert!(set.get("domain", "whatever").is_none());
+        assert!(set.get("reask", "absent").is_none());
+    }
+
+    #[test]
+    fn nested_not_rules_contribute_their_signal_kinds() {
+        let raw = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/general
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      signals:
+        keywords:
+          - name: needs_explain
+            keywords: [explain]
+      decisions:
+        - name: d
+          rules:
+            operator: AND
+            conditions: []
+            not:
+              operator: AND
+              conditions:
+                - type: keyword
+                  name: needs_explain
+          modelRefs: [{model: local/general}]
+"#;
+        let doc = RouterDocument::from_yaml_str(raw).unwrap();
+        let recipe = doc.recipe("mom").unwrap();
+        let set = extract(&doc, recipe, &req_with("please explain"), &HashMap::new()).unwrap();
+        assert!(set.matched("keyword", "needs_explain"));
+    }
 }

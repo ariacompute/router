@@ -111,9 +111,7 @@ impl BuiltinAgent {
         let tool_defs = tool_definitions();
 
         for turn in 0..task.max_turns {
-            if std::time::Instant::now() >= deadline {
-                return Err(RouterError::Timeout("builtin agent".into()));
-            }
+            // `remaining == 0` makes the per-request timeout fire immediately.
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             let body = json!({
                 "model": self.model,
@@ -640,8 +638,420 @@ mod tests {
             canned: None,
         };
         assert_eq!(
-            first.route(task, &tools).await.unwrap().reason,
+            first.route(task.clone(), &tools).await.unwrap().reason,
             "builtin:first-eligible"
         );
+        // Canned decision outside the pool fails closed.
+        let canned_bad = BuiltinAgent {
+            endpoint: None,
+            model: "router-llm".into(),
+            api_key: None,
+            canned: Some(RouteDecision::bypass("cloud/not-eligible")),
+        };
+        let err = canned_bad
+            .route(task.clone(), &tools)
+            .await
+            .expect_err("canned outside pool");
+        assert!(matches!(err, RouterError::FailClosed(_)));
+    }
+
+    // ---- loopback LLM stub -------------------------------------------------
+
+    struct StubLlm {
+        endpoint: String,
+        seen_auth: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        seen_bodies: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        stop: Option<tokio::sync::oneshot::Sender<()>>,
+        handle: Option<tokio::task::JoinHandle<()>>,
+    }
+
+    impl StubLlm {
+        async fn start(responses: Vec<serde_json::Value>) -> Self {
+            use axum::extract::Json;
+            use axum::http::HeaderMap;
+            use std::collections::VecDeque;
+            use std::sync::{Arc, Mutex};
+
+            let queue = Arc::new(Mutex::new(VecDeque::from(responses)));
+            let seen_auth = Arc::new(Mutex::new(Vec::new()));
+            let seen_bodies = Arc::new(Mutex::new(Vec::new()));
+            let (q, auth, bodies) = (queue.clone(), seen_auth.clone(), seen_bodies.clone());
+
+            let app = axum::Router::new().route(
+                "/v1/chat/completions",
+                axum::routing::post(
+                    move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                        let (q, auth, bodies) = (q.clone(), auth.clone(), bodies.clone());
+                        async move {
+                            auth.lock().unwrap().push(
+                                headers
+                                    .get("authorization")
+                                    .and_then(|h| h.to_str().ok())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            );
+                            bodies.lock().unwrap().push(body);
+                            let next = {
+                                let mut g = q.lock().unwrap();
+                                if g.len() > 1 {
+                                    g.pop_front().unwrap()
+                                } else {
+                                    g.front().cloned().unwrap_or(serde_json::json!({}))
+                                }
+                            };
+                            match next.get("__status").and_then(|s| s.as_u64()) {
+                                Some(code) => (
+                                    axum::http::StatusCode::from_u16(code as u16).unwrap(),
+                                    "stub error",
+                                )
+                                    .into_response(),
+                                None => {
+                                    // The `__status` marker is not part of the OpenAI body.
+                                    let mut next = next;
+                                    if let Some(obj) = next.as_object_mut() {
+                                        obj.remove("__status");
+                                    }
+                                    axum::Json(next).into_response()
+                                }
+                            }
+                        }
+                    },
+                ),
+            );
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            let handle = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async {
+                        let _ = rx.await;
+                    })
+                    .await
+                    .unwrap();
+            });
+            Self {
+                endpoint: format!("http://{addr}"),
+                seen_auth,
+                seen_bodies,
+                stop: Some(tx),
+                handle: Some(handle),
+            }
+        }
+
+        async fn shutdown(mut self) {
+            let tx = self.stop.take().expect("stop sender");
+            let handle = self.handle.take().expect("handle");
+            let _ = tx.send(());
+            let _ = handle.await;
+        }
+    }
+
+    use axum::response::IntoResponse;
+
+    fn msg_tool(id: &str, name: &str, args: serde_json::Value) -> serde_json::Value {
+        json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": args.to_string()}
+                    }]
+                }
+            }]
+        })
+    }
+
+    fn msg_json(decision: serde_json::Value) -> serde_json::Value {
+        json!({
+            "choices": [{"message": {"role": "assistant", "content": decision.to_string()}}]
+        })
+    }
+
+    fn agent_with(endpoint: &str, api_key: Option<&str>) -> BuiltinAgent {
+        BuiltinAgent {
+            endpoint: Some(endpoint.to_string()),
+            model: "router-llm".into(),
+            api_key: api_key.map(str::to_string),
+            canned: None,
+        }
+    }
+
+    fn task_for(eligible: Vec<ModelCard>, max_turns: u32) -> RouteTask {
+        RouteTask {
+            prompt: "explain rust ownership".into(),
+            eligible,
+            system: DEFAULT_SYSTEM.into(),
+            timeout_ms: 2000,
+            max_turns,
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_pool_fails_closed() {
+        let err = BuiltinAgent {
+            endpoint: None,
+            model: "m".into(),
+            api_key: None,
+            canned: None,
+        }
+        .route(task_for(vec![], 1), &ToolRuntime::default())
+        .await
+        .expect_err("no eligible");
+        assert!(matches!(err, RouterError::FailClosed(_)));
+    }
+
+    #[tokio::test]
+    async fn tool_loop_then_submit_route() {
+        let stub = StubLlm::start(vec![
+            msg_tool("c1", "list_eligible_models", json!({})),
+            msg_tool(
+                "c2",
+                "submit_route",
+                json!({"model": "local/b", "reason": "mid tier", "confidence": 0.7, "algorithm": "static"}),
+            ),
+        ])
+        .await;
+        let agent = agent_with(&stub.endpoint, Some("sk-agent"));
+        let mut no_upstream = card("local/c");
+        no_upstream.provider_model_id.clear();
+        let task = task_for(
+            vec![
+                card("local/a"),
+                card_tier("local/b", "mid", "up-x"),
+                no_upstream,
+            ],
+            3,
+        );
+        let d = agent.route(task, &ToolRuntime::default()).await.unwrap();
+        assert_eq!(d.model, "local/b");
+        assert_eq!(d.reason, "mid tier");
+        assert!((d.confidence - 0.7).abs() < 1e-6);
+        assert_eq!(d.algorithm.as_deref(), Some("static"));
+        // api_key became a bearer token and the tool defs were advertised.
+        let auth = stub.seen_auth.lock().unwrap()[0].clone();
+        assert_eq!(auth, "Bearer sk-agent");
+        {
+            let bodies = stub.seen_bodies.lock().unwrap();
+            assert_eq!(bodies[0]["tools"].as_array().unwrap().len(), 5);
+            let line = bodies[0]["messages"][1]["content"].as_str().unwrap();
+            assert!(line.contains("local/b [tier=mid upstream=up-x]"), "{line}");
+            // Models without an upstream id render as `-`.
+            assert!(line.contains("local/c [tier=unknown upstream=-]"), "{line}");
+        }
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn non_terminal_tools_then_content_decision() {
+        let stub = StubLlm::start(vec![
+            msg_tool("c1", "get_backend_health", json!({"model": "local/a"})),
+            msg_tool("c2", "get_recent_latency", json!({})),
+            msg_tool("c3", "get_request_view", json!({})),
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "```json\n{\"model\":\"local/a\",\"reason\":\"small\"}\n```"
+                    }
+                }]
+            }),
+        ])
+        .await;
+        let mut tools = ToolRuntime::default();
+        tools.failures.insert("local/a".into(), 1);
+        tools.latency_ms.insert("local/a".into(), 7.0);
+        tools.request_view = json!({"message_count": 1});
+        let d = agent_with(&stub.endpoint, None)
+            .route(task_for(vec![card("local/a")], 4), &tools)
+            .await
+            .unwrap();
+        assert_eq!(d.model, "local/a");
+        assert_eq!(d.reason, "small");
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn exceeding_max_turns_fails_closed() {
+        let stub = StubLlm::start(vec![msg_tool("c1", "list_eligible_models", json!({}))]).await;
+        let err = agent_with(&stub.endpoint, None)
+            .route(task_for(vec![card("local/a")], 1), &ToolRuntime::default())
+            .await
+            .expect_err("max turns");
+        assert!(matches!(err, RouterError::FailClosed(_)));
+        assert!(err.to_string().contains("exceeded max_turns"));
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn zero_turn_budget_fails_closed() {
+        let stub = StubLlm::start(vec![msg_json(json!({"model": "local/a"}))]).await;
+        let err = agent_with(&stub.endpoint, None)
+            .route(task_for(vec![card("local/a")], 0), &ToolRuntime::default())
+            .await
+            .expect_err("zero turns");
+        assert!(matches!(err, RouterError::FailClosed(_)));
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn upstream_error_status_and_bad_body() {
+        let stub = StubLlm::start(vec![json!({"__status": 500})]).await;
+        let err = agent_with(&stub.endpoint, None)
+            .route(task_for(vec![card("local/a")], 1), &ToolRuntime::default())
+            .await
+            .expect_err("upstream 500");
+        assert!(matches!(err, RouterError::Extension(_)));
+        stub.shutdown().await;
+
+        let stub = StubLlm::start(vec![json!({"choices": []})]).await;
+        let err = agent_with(&stub.endpoint, None)
+            .route(task_for(vec![card("local/a")], 1), &ToolRuntime::default())
+            .await
+            .expect_err("missing message");
+        assert!(matches!(err, RouterError::FailClosed(_)));
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn empty_tool_calls_fall_through_to_content() {
+        let stub = StubLlm::start(vec![json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "{\"model\":\"local/a\"}", "tool_calls": []}
+            }]
+        })])
+        .await;
+        let d = agent_with(&stub.endpoint, None)
+            .route(task_for(vec![card("local/a")], 1), &ToolRuntime::default())
+            .await
+            .unwrap();
+        assert_eq!(d.reason, "submit_route");
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn empty_message_fails_closed() {
+        let stub = StubLlm::start(vec![json!({
+            "choices": [{"message": {"role": "assistant"}}]
+        })])
+        .await;
+        let err = agent_with(&stub.endpoint, None)
+            .route(task_for(vec![card("local/a")], 1), &ToolRuntime::default())
+            .await
+            .expect_err("empty message");
+        assert!(matches!(err, RouterError::FailClosed(_)));
+        assert!(err
+            .to_string()
+            .contains("produced no tool_calls or content"));
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_and_invalid_arguments() {
+        // Invalid JSON arguments fall back to `{}`; unknown tool then errors.
+        let stub = StubLlm::start(vec![json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{"id": "c1", "function": {"name": "bogus_tool", "arguments": "{not json"}}]
+                }
+            }]
+        })])
+        .await;
+        let err = agent_with(&stub.endpoint, None)
+            .route(task_for(vec![card("local/a")], 2), &ToolRuntime::default())
+            .await
+            .expect_err("unknown tool");
+        assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn submit_route_rejects_model_outside_pool() {
+        let stub = StubLlm::start(vec![msg_tool(
+            "c1",
+            "submit_route",
+            json!({"model": "cloud/ghost"}),
+        )])
+        .await;
+        let err = agent_with(&stub.endpoint, None)
+            .route(task_for(vec![card("local/a")], 2), &ToolRuntime::default())
+            .await
+            .expect_err("outside pool");
+        assert!(matches!(err, RouterError::FailClosed(_)));
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn llm_timeout_is_reported() {
+        // Unroutable port: the send fails fast with an extension error.
+        let err = agent_with("http://127.0.0.1:1", None)
+            .route(task_for(vec![card("local/a")], 1), &ToolRuntime::default())
+            .await
+            .expect_err("connection refused");
+        assert!(matches!(err, RouterError::Extension(_)), "{err}");
+    }
+
+    #[test]
+    fn tool_runtime_edge_cases() {
+        let eligible = vec![card("local/a"), card("local/b")];
+        let mut tools = ToolRuntime::default();
+        tools.failures.insert("local/b".into(), 3);
+        // Filters skip non-matching models.
+        let health = run_tool(
+            "get_backend_health",
+            &json!({"model": "local/a"}),
+            &eligible,
+            &tools,
+        )
+        .unwrap();
+        assert!(health.get("local/b").is_none());
+        assert_eq!(health["local/a"]["healthy"], true);
+        let lat = run_tool(
+            "get_recent_latency",
+            &json!({"model": "local/b"}),
+            &eligible,
+            &tools,
+        )
+        .unwrap();
+        assert!(lat.as_object().unwrap().is_empty());
+
+        let view = run_tool(
+            "get_request_view",
+            &json!({}),
+            &eligible,
+            &ToolRuntime {
+                request_view: json!({"k": 1}),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(view["k"], 1);
+
+        // submit_route is terminal only; direct calls are rejected.
+        assert!(matches!(
+            run_tool("submit_route", &json!({}), &eligible, &tools),
+            Err(RouterError::InvalidParam(_))
+        ));
+        assert!(matches!(
+            run_tool("nope", &json!({}), &eligible, &tools),
+            Err(RouterError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn tier_of_unknown_explicit_tier_uses_name() {
+        let card = card_tier("acme/thing-large", "weird", "up");
+        assert_eq!(tier_of(&card), "large");
+        assert_eq!(tier_hint_from_name("svc/x/large"), "large");
+        assert_eq!(tier_hint_from_name("x/large"), "large");
+        assert_eq!(tier_hint_from_name("x-MID"), "mid");
+        assert_eq!(tier_hint_from_name("x/mid"), "mid");
+        assert_eq!(tier_hint_from_name("x-small"), "small");
+        assert_eq!(tier_hint_from_name("x/small"), "small");
+        assert_eq!(tier_hint_from_name("x"), "unknown");
     }
 }
