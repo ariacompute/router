@@ -539,7 +539,7 @@ host 套件暴露）。
 
 ## 阶段 T — 实施计划（计划稿 · 待人审激活）
 
-> 依据 [`requirements.md` §7](requirements.md)（C1–C9 候选池）与 [§8](requirements.md)（U1 独立需求），可执行任务级细节见 [`docs/implementation-plan.md`](docs/implementation-plan.md)。
+> 依据 [`requirements.md` §7](requirements.md)（C1–C9 候选池）与 [§8](requirements.md)（U1 独立需求）；特性细节与验证见 `README.md` / `README_cn.md` 与 `releasenotes.md` / `releasenotes_cn.md`。
 >
 > **状态声明**：本章是**实施计划（计划稿 · 待人审激活）**，**不是实施清单**。用表格列编号，**不含勾选式待办、验收记录或提交记录**。
 > 依 Harness 约定，`requirements.md` 须经人工逐项审核（M0 门禁 G1–G11，含 C7 与 §2.1 的裁决、U1 的 G11）通过后方可进入编码；**在此之前不激活任何任务**。
@@ -579,7 +579,7 @@ host 套件暴露）。
 |----|------|:----:|
 | [`requirements.md` §7.2](requirements.md) | `C1`–`C9` 候选条目（原文） | 待人审、未排期 |
 | [`requirements.md` §8](requirements.md) | `U1` 独立需求 | 计划稿 · 待人审激活 |
-| [`docs/implementation-plan.md`](docs/implementation-plan.md) §5 | 10 张任务卡 `T90`–`T99` ↔ `C1`–`C9` / `U1`，含目标文件、单测、验证命令、验收与风险 | 计划稿 · 待人审激活 |
+| `README.md` / `README_cn.md` · `releasenotes*.md` | `T90`–`T99` ↔ `C1`–`C9` / `U1` 落地细节、目标文件、验证命令、验收与残余 | 已落地（2026-11-05） |
 | 本章 T.1 / T.2 | 编号、里程碑、依赖、验收摘要（表格） | 计划稿 · 待人审激活 |
 | 上文候选池 | 仅作回指目标，**不新增勾选、不改一行** | 待人审、未排期 |
 
@@ -589,4 +589,4 @@ host 套件暴露）。
 
 ---
 
-**实施记录（2026-11-05，纯追加）**：用户明确要求实现 `docs/implementation-plan.md` 全部特性，视为 M0 人审门禁激活。T90–T99（C1–C9 / U1）均已落地：`cargo fmt`/`clippy -D warnings`/`cargo test --workspace --all-features`、`npm --prefix dashboard ci && build && test`、`python -m unittest discover -s bench/tests -t .`、`./scripts/audit-ui.sh --static|--dom` 均通过；`--url` 在无 Chrome 环境按约定记录 `skipped`。逐项落地清单、验证结果与残余项见 `docs/implementation-plan.md` §11、`docs/impeccable-audit.md`。`./scripts/coverage.sh report` 实测 100.00%（22637/22637 行）；C7 依 G6 裁决为默认关闭的软额度。
+**实施记录（2026-11-05，纯追加）**：用户明确要求实现 `requirements.md` §7–§8 全部特性，视为 M0 人审门禁激活。T90–T99（C1–C9 / U1）均已落地：`cargo fmt`/`clippy -D warnings`/`cargo test --workspace --all-features`、`npm --prefix dashboard ci && build && test`、`python -m unittest discover -s bench/tests -t .`、`./scripts/audit-ui.sh --static|--dom` 均通过；`--url` 在无 Chrome 环境按约定记录 `skipped`。逐项落地清单、验证结果与残余项见 `README.md` / `README_cn.md` 与 `releasenotes.md` / `releasenotes_cn.md`（审计复跑命令见 `README.md`「本地渲染检查（重跑）」一节）。`./scripts/coverage.sh report` 实测 100.00%（22637/22637 行）；C7 依 G6 裁决为默认关闭的软额度。

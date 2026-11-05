@@ -9,8 +9,20 @@ Aria Compute 推理网关：OpenAI 兼容 HTTP，三种并列决策器（**seman
 ```bash
 cargo test
 cargo clippy --workspace --all-targets -- -D warnings
+./scripts/coverage.sh           # 100% 行覆盖门禁（llvm-cov）
 ./scripts/run-binding-tests.sh
 cargo build --release -p aria-router -p ariacompute-router-ffi
+```
+
+运维 Dashboard 另有护栏测试与 impeccable 风格审计（在仓库根目录执行）：
+
+```bash
+npm --prefix dashboard ci
+npm --prefix dashboard run build
+npm --prefix dashboard run test   # 样式 token + 15 路由 × 深浅双主题 jsdom 快照
+./scripts/audit-ui.sh --static    # CSS / index.html 静态规则
+./scripts/audit-ui.sh --dom       # 全部路由 × 双主题（jsdom）
+./scripts/audit-ui.sh --url       # Chrome 页面加载（无浏览器时 skip）
 ```
 
 ## 配置 / 运行
@@ -152,7 +164,7 @@ cargo run -p aria-router -- serve \
 |------------------------|------|
 | **Local (router Dashboard)** | Login / Register · API 密钥（`sk-aria_…`）· Users（admin） |
 | **OAuth (Aria Compute)** | Account — 已关联用户、`sk-bf-…` 展示/粘贴/OAuth |
-| **Routing** | Config · Topology · Providers · Replay · **Playground**（多轮聊天、SSE、路由 Header；不做 MCP/Claw） |
+| **Routing** | Config · Topology · Providers · Replay · **Playground**（多轮聊天、SSE、路由 Header；不做 MCP/Claw）· Cost · Cost by Competence · **Model Performance** · **Trust Tiers** |
 
 Cost 分 **Local users** 与 **OAuth users**。构建：
 
@@ -167,6 +179,23 @@ cargo run -p aria-router -- serve \
 ```
 
 `--no-dashboard` 只提供 JSON API（仍可用 curl 管理 keys/cost）。无 Grafana、ML wizard；默认绑 `127.0.0.1`。
+
+**设计契约与 UI 回归审计**：Dashboard 为单色 / 扁平 / 直角 / AA / ≥12px，动效仅 transform/opacity，使用本地字体栈（无 web-font CDN）。设计契约见 [`PRODUCT.md`](PRODUCT.md)。UI 护栏测试：`npm --prefix dashboard run test`。
+
+### 本地渲染检查（重跑）
+
+`scripts/audit-ui.sh` 以五种模式运行 impeccable 风格审计：`--static`（CSS + `index.html` 主规则）、`--dom`（15 路由 × 深浅双主题 jsdom 渲染）、`--url`（实时页面 + Chrome + impeccable 二进制）、`--browser`（同 `--url`，但缺浏览器即硬失败）、`--list-rules`（打印规则 id + 页面矩阵）。无法运行的模式记为 `skipped`，绝不伪造成功。
+
+```bash
+npm --prefix dashboard ci
+npm --prefix dashboard run build
+npm --prefix dashboard run test
+./scripts/audit-ui.sh --list-rules
+./scripts/audit-ui.sh --static
+./scripts/audit-ui.sh --dom
+# 在有 Chrome 与 impeccable 二进制的机器上：
+IMPECCABLE_BROWSER=/usr/bin/google-chrome ./scripts/audit-ui.sh --url
+```
 
 ### API 密钥与成本
 
@@ -253,7 +282,7 @@ curl -s http://127.0.0.1:8090/v1/router/topology | jq .
 curl -s http://127.0.0.1:8090/v1/router/config | jq .
 ```
 
-响应头：`x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`。若设置了 retention emit，还会有：`x-aria-router-retention-keep-current-model`、`x-aria-router-retention-ttl-turns`、`x-aria-router-retention-drop`、`x-aria-router-retention-prefer-prefix`。
+响应头：`x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`，以及 `x-aria-router-redecision`（显式跨请求边界：`new-user-message` / `context-compaction` / `tool-continuation` / `same-turn` / `unknown`）。若设置了 retention emit，还会有：`x-aria-router-retention-keep-current-model`、`x-aria-router-retention-ttl-turns`、`x-aria-router-retention-drop`、`x-aria-router-retention-prefer-prefix`。
 
 ## SDK Bindings
 
@@ -560,6 +589,7 @@ chmod +x aria-router
 | `build-routing-eval` | 生成 `routing_gateway_eval.json`（≥200 模板；可选并入 MMLU/DRACO） |
 | `research` | DRACO 形 JSONL + rubric，对比 always_X 与各 router |
 | `compare` | MCQ **accuracy + E2E latency + tokens**（对齐 VSR 公开 bench 叙事） |
+| `policy-consistency` | 离线重算 4 种确定性策略（cheapest / strongest / expected-label / by-config-expected），输入为已保存的决策记录——无需 live router；report-only，恒含 `ci_fail: false` |
 | `list-corpus` | 打印内置 tiny 语料 |
 | `download-draco` / `download-mmlu` | 可选 HF 拉取（失败 skip） |
 
@@ -946,6 +976,8 @@ emits:
 | 决策模型扩展 API（外置决策服务） | ✅ | ✅ | ❌ |
 | 多租户 / 鉴权 / 计费（API key·OAuth·Users·六因子成本） | ✅ | ❌ | ❌ |
 | 成本·能力可观测（按 tier 成本归因 + Dashboard） | ✅ | △ | ❌ |
+| 显式重判边界可观测（`x-aria-router-redecision`） | ✅ | ❌ | ❌ |
+| 离线策略一致性报告（用留存记录重算，无需 router） | ✅ | ❌ | ❌ |
 | 上下文前缀复用（同 turn 冻结决策） | ✅ | ✅ | ❌ |
 | 集成面（C ABI + 八语言 SDK / 部署形态） | ✅ | △ | △ |
 | 生产级服务端定位（多租户·管控·可运维） | ✅ | ❌ | ❌ |

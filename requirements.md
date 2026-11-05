@@ -623,7 +623,7 @@ python -m bench routing \
 ## 8. Router Web UI：impeccable 渲染审计与视觉优化（U1 · 计划稿 · 待人审激活）
 
 > **状态声明**：本章是与 §7 **并列、互不隶属**的独立需求，编号 **U1**，不占用 `C1–C9`、不改动 §1–§7 任何条款。
-> 与 [`docs/implementation-plan.md`](docs/implementation-plan.md) 的任务卡 T99 / 里程碑 M6、[`task.md`](task.md) 阶段 T 的 T99 三处对应，统一标注「**计划稿 · 待人审激活**」。
+> 与 [`task.md`](task.md) 阶段 T 的 T99 对应，统一标注「**计划稿 · 待人审激活**」。
 > 依本文件第 3 行与 `AGENTS.md` 的 Harness 约定，**本章仍须人工逐项审核**，审核通过前不进入编码、不成为已激活待办；§7 候选池的「未排期」状态不因本章变化。
 > 参考实现来自工作区同级 `playground` / `serve` 仓的已落地 impeccable 工具链（只读参考，不修改）；本仓当前 **无任何 impeccable 文件**。
 
@@ -631,7 +631,7 @@ python -m bench routing \
 
 - 在 `dashboard/`（管理面同端口 React SPA）落地 **impeccable 4.8.0** 渲染审计工具链，按审计结论**完成视觉重做**，并建立回归护栏。
 - 作用对象是 §2.1 / §1.1 阶段 F-dashboard 已交付的 SPA 页面与样式；**不改变 dashboard 功能行为**：API 契约、SSE 流式、路由响应头面板、localStorage 会话侧栏、`--no-dashboard` 语义均保持。
-- 本节只定义需求边界与验收；可执行级的目标文件、单测用例、验证命令与合并顺序见 [`docs/implementation-plan.md`](docs/implementation-plan.md) §5 的 T99 任务卡。
+- 本节只定义需求边界与验收；可执行级的目标文件、单测用例、验证命令与合并顺序见 [`task.md`](task.md) 阶段 T 的 T99 与 `README.md` / `releasenotes*.md`。
 
 ### 8.2 工具链形态（实施阶段新增）
 
@@ -640,7 +640,7 @@ python -m bench routing \
 | `PRODUCT.md` | `impeccable:product-schema 1` 设计契约，**按 router 运维面板定位重写**，不照抄 playground 的四个 playground / 13 语言描述 |
 | `dashboard/.impeccable/config.json` | 检测器引擎映射；playground 仅配 `.vue → html`，**本仓为 `.tsx`，支持情况须先核实**（§8.8） |
 | `scripts/audit-ui.sh` | 五种模式 `--static` / `--dom` / `--url` / `--browser` / `--list-rules`；runner 按 **npm / node_modules** 适配（playground 用 bun，不可照抄） |
-| `docs/impeccable-audit.md` | 基线记录：Tooling 表、Detection modes、findings → 修复 → 残余项、复跑命令 |
+| `README.md` / `README_cn.md`（本地渲染检查小节） | 基线记录：五模式说明、复跑命令（已并入 README，不再单列 `docs/impeccable-audit.md`） |
 | `dashboard/tests/style.spec.*` / `render-snapshot.spec.*` | 静态样式护栏 + jsdom 渲染快照 |
 
 - CLI 版本与环境变量口径对齐参考实现：`impeccable` 4.8.0、`IMPECCABLE_VERSION` / `IMPECCABLE_BIN` / `IMPECCABLE_BROWSER` / `PREVIEW_PORT` / `AUDIT_BASE_URL` / `AUDIT_ROUTES` / `AUDIT_THEMES` / `AUDIT_OUT_DIR`（`detect-out`）/ `AUDIT_PAGE_TIMEOUT`。
@@ -658,7 +658,7 @@ python -m bench routing \
 
 - 作用文件：4 个 CSS（`dashboard/src/index.css`、`App.module.css`、`pages/page.module.css`、`components/playground/playground.module.css`）、`App.tsx` 与相关 `pages/*` / `components/*`、`dashboard/index.html`、`dashboard/vite.config.ts`。
 - 设计契约方向（以 `PRODUCT.md` 定稿为准）：单色、直角、功能文案字号下限、WCAG AA 对比度、禁渐变与不一致圆角、动效只用 transform/opacity、本地字体栈替代外部 CDN。
-- 已可预见的审计 findings：`dashboard/index.html:7-12` 引用外部 Google Fonts CDN、`:2` 硬编码 `lang="en"`，处理结论须写入 `docs/impeccable-audit.md`。
+- 已可预见的审计 findings：`dashboard/index.html:7-12` 引用外部 Google Fonts CDN、`:2` 硬编码 `lang="en"`，处理结论须写入 README「设计契约与 UI 回归审计」一节。
 - **功能等价是硬约束**：视觉重做不得改动 `dashboard/src/api.ts` 的请求契约与 `x-aria-router-*` 响应头展示逻辑。
 
 ### 8.5 测试护栏与 CI
@@ -672,7 +672,7 @@ python -m bench routing \
 **正常路径**
 
 1. `npm --prefix dashboard ci && npm --prefix dashboard run build` 与新增 `test` 全绿。
-2. `./scripts/audit-ui.sh --static` 0 primary findings；`--dom` 全路由 × 双主题 0 primary findings；`--url` 在有 Chrome 的机器执行并把结果写入 `docs/impeccable-audit.md`。
+2. `./scripts/audit-ui.sh --static` 0 primary findings；`--dom` 全路由 × 双主题 0 primary findings；`--url` 在有 Chrome 的机器执行并记录于 README「本地渲染检查（重跑）」一节。
 3. 视觉重做后 13 个页面在双主题下功能等价，API 契约与 SSE 行为不变。
 
 **异常路径**
@@ -684,7 +684,7 @@ python -m bench routing \
 ### 8.7 与 §7 候选池及 C5 的关系
 
 - U1 **不占用 `C` 编号**，不进入 §7 候选池；§7 的 `C1–C9`、状态声明与「未排期」标注一字不改。
-- U1 与 C4 / C5 共改 `dashboard/src/App.tsx` / `api.ts`，与 C5 在 4 个 CSS 上重叠最大。**首选把 C4/C5 的 dashboard 部分与 U1 合并为同一批次**；若分批，则 U1 的设计 token / 工具链 / CI 骨架先行，再由 C4 → C5 在新设计系统上加页面，避免 C5 新页 CSS 被 U1 重做推翻。详见 `docs/implementation-plan.md` §3、§4。
+- U1 与 C4 / C5 共改 `dashboard/src/App.tsx` / `api.ts`，与 C5 在 4 个 CSS 上重叠最大。**首选把 C4/C5 的 dashboard 部分与 U1 合并为同一批次**；若分批，则 U1 的设计 token / 工具链 / CI 骨架先行，再由 C4 → C5 在新设计系统上加页面，避免 C5 新页 CSS 被 U1 重做推翻。
 - U1 不依赖 C1–C9 的 Rust 运行时改动；可与 M2 的低耦合任务并行。
 
 ### 8.8 风险与待核实项（人审时逐项确认）
@@ -704,4 +704,4 @@ python -m bench routing \
 
 ### 8.10 实施状态补记（2026-11-05，纯追加）
 
-§8.1–§8.9 为计划稿原文，保留不动。2026-11-05 用户明确要求实现 `docs/implementation-plan.md` 全部特性，M0 人审门禁据此激活，U1/T99 已完成：上述 §8.9 列出的文件均已创建或修改，`.tsx` 静态解析按风险 1 的降级方案处理（`.css` + `index.html` 静态扫描，元素级规则交给 `--dom` / `--url`），G11 裁决为允许新增 vitest / jsdom / testing-library devDependency。审计基线与残余项见 `docs/impeccable-audit.md`，逐项结果见 `docs/implementation-plan.md` §11。
+§8.1–§8.9 为计划稿原文，保留不动。2026-11-05 用户明确要求实现 `requirements.md` §7–§8 全部特性，M0 人审门禁据此激活，U1/T99 已完成：上述 §8.9 列出的文件均已创建或修改，`.tsx` 静态解析按风险 1 的降级方案处理（`.css` + `index.html` 静态扫描，元素级规则交给 `--dom` / `--url`），G11 裁决为允许新增 vitest / jsdom / testing-library devDependency。审计基线与复跑命令已并入 `README.md`「本地渲染检查（重跑）」一节，逐项结果见 `README.md` / `README_cn.md` 与 `releasenotes*.md`。

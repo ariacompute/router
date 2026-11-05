@@ -9,8 +9,20 @@ Aria Compute inference gateway: OpenAI-compatible HTTP, three parallel routers (
 ```bash
 cargo test
 cargo clippy --workspace --all-targets -- -D warnings
+./scripts/coverage.sh           # 100% line-coverage gate (llvm-cov)
 ./scripts/run-binding-tests.sh
 cargo build --release -p aria-router -p ariacompute-router-ffi
+```
+
+The ops dashboard has its own guard tests and impeccable-style audit (run from the repo root):
+
+```bash
+npm --prefix dashboard ci
+npm --prefix dashboard run build
+npm --prefix dashboard run test   # style tokens + 15 routes × light/dark jsdom snapshots
+./scripts/audit-ui.sh --static    # CSS / index.html static rules
+./scripts/audit-ui.sh --dom       # all routes × both themes (jsdom)
+./scripts/audit-ui.sh --url       # Chrome page load (skipped without a browser)
 ```
 
 ## Config / Run
@@ -151,7 +163,7 @@ The management listener serves a Vite React SPA at `http://{mgmt}/` when `dashbo
 |-----------------------------|--------|
 | **Local (router Dashboard)** | Login / Register · API keys (`sk-aria_…`) · Users (admin) |
 | **OAuth (Aria Compute)** | Account — linked user, `sk-bf-…` reveal/paste/OAuth |
-| **Routing** | Config · Topology · Providers · Replay · **Playground** (multi-turn chat, SSE, route headers; no MCP/Claw) |
+| **Routing** | Config · Topology · Providers · Replay · **Playground** (multi-turn chat, SSE, route headers; no MCP/Claw) · Cost · Cost by Competence · **Model Performance** · **Trust Tiers** |
 
 Cost splits **Local users** vs **OAuth users**. Build:
 
@@ -166,6 +178,23 @@ cargo run -p aria-router -- serve \
 ```
 
 `--no-dashboard` serves JSON APIs only (keys/cost CRUD still work via curl). There is no Grafana or ML wizard; local Login is required when users exist. Bind `127.0.0.1` unless you accept an open admin port.
+
+**Design contract & UI regression audit**: the dashboard is monochrome / flat / square / AA / ≥12px with transform-or-opacity-only motion and a local font stack (no web-font CDN). See [`PRODUCT.md`](PRODUCT.md) for the contract. UI guard tests: `npm --prefix dashboard run test`.
+
+### Local rendering check (re-run)
+
+`scripts/audit-ui.sh` runs the impeccable-style audit in five modes: `--static` (CSS + `index.html` primary rules), `--dom` (jsdom render of 15 routes × light/dark), `--url` (live page + Chrome + impeccable binary), `--browser` (same, but a missing browser is a hard error), and `--list-rules` (print rule ids + page matrix). A mode that cannot run is reported as `skipped`, never as a pass.
+
+```bash
+npm --prefix dashboard ci
+npm --prefix dashboard run build
+npm --prefix dashboard run test
+./scripts/audit-ui.sh --list-rules
+./scripts/audit-ui.sh --static
+./scripts/audit-ui.sh --dom
+# On a machine with Chrome and the impeccable binary:
+IMPECCABLE_BROWSER=/usr/bin/google-chrome ./scripts/audit-ui.sh --url
+```
 
 ### API keys and cost
 
@@ -258,7 +287,7 @@ curl -s http://127.0.0.1:8090/v1/router/topology | jq .
 curl -s http://127.0.0.1:8090/v1/router/config | jq .
 ```
 
-Response headers: `x-aria-router-layer`, `x-aria-router-decision`, `x-aria-router-model`. When retention emits are set: `x-aria-router-retention-keep-current-model`, `x-aria-router-retention-ttl-turns`, `x-aria-router-retention-drop`, `x-aria-router-retention-prefer-prefix`.
+Response headers: `x-aria-router-layer`, `x-aria-router-decision`, `x-aria-router-model`, and `x-aria-router-redecision` (the explicit cross-request boundary: `new-user-message` / `context-compaction` / `tool-continuation` / `same-turn` / `unknown`). When retention emits are set: `x-aria-router-retention-keep-current-model`, `x-aria-router-retention-ttl-turns`, `x-aria-router-retention-drop`, `x-aria-router-retention-prefer-prefix`.
 
 ## SDK Bindings
 
@@ -565,6 +594,7 @@ Python ≥3.10 **report-only** harness under [`bench/`](bench/) (stdlib; aligns 
 | `build-routing-eval` | Generate `routing_gateway_eval.json` (≥200 templates; optional MMLU/DRACO) |
 | `research` | Perplexity DRACO-shaped JSONL + rubric axes vs always_X + routers |
 | `compare` | MCQ **accuracy + E2E latency + tokens** (parity with VSR public bench narrative) |
+| `policy-consistency` | Offline recompute of 4 deterministic policies (cheapest / strongest / expected-label / by-config-expected) from saved decision records — no live router; report-only, `ci_fail: false` |
 | `list-corpus` | Print bundled tiny fixtures |
 | `download-draco` / `download-mmlu` | Optional HF fetch (skip on network failure) |
 
@@ -951,6 +981,8 @@ See [`semantic-stateful.yaml`](config/examples/semantic-stateful.yaml) and the `
 | Pluggable decision-model extension API | ✅ | ✅ | ❌ |
 | Multi-tenant / auth / billing (API key · OAuth · Users · six-factor cost) | ✅ | ❌ | ❌ |
 | Cost & competence observability (tier-attributed cost + dashboard) | ✅ | △ | ❌ |
+| Explicit re-decision boundary observability (`x-aria-router-redecision`) | ✅ | ❌ | ❌ |
+| Offline policy-consistency reporting (recompute from saved records, no router) | ✅ | ❌ | ❌ |
 | Context-prefix reuse (frozen decision within a turn) | ✅ | ✅ | ❌ |
 | Integration surface (C ABI + eight-language SDK / deploy form) | ✅ | △ | △ |
 | Production server-side posture (multi-tenant · governance · operable) | ✅ | ❌ | ❌ |

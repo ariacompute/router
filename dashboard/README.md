@@ -31,7 +31,7 @@ Dev (proxy to a running serve):
 npm --prefix dashboard run dev
 ```
 
-UI regression guards and impeccable-style audit (see [`../docs/impeccable-audit.md`](../docs/impeccable-audit.md)):
+UI regression guards and impeccable-style audit (see the “Local rendering check (re-run)” section in the top-level [`README.md`](../README.md)):
 
 ```bash
 npm --prefix dashboard run test        # style tokens + 15 routes x light/dark jsdom snapshots
