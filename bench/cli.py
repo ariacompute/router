@@ -11,6 +11,7 @@ from pathlib import Path
 from .accuracy.runner import run_routing_accuracy
 from .build_routing_eval import main as build_routing_eval_main
 from .compare.runner import load_compare_corpus, run_compare
+from .consistency import POLICIES, load_decision_records, run_policy_consistency
 from .http_client import EndpointConfig
 from .prices import load_prices
 from .report import write_reports
@@ -160,6 +161,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pa.add_argument("--timeout", type=float, default=120.0)
     pa.add_argument("--max-tokens", type=int, default=16)
+
+    pcons = sub.add_parser(
+        "policy-consistency",
+        help="Offline policy-consistency recompute from saved decision records (no live router)",
+    )
+    pcons.add_argument("--records", required=True, help=".json / .jsonl decision records")
+    pcons.add_argument(
+        "--policy",
+        action="append",
+        default=[],
+        choices=list(POLICIES),
+        help="repeatable deterministic policy (default: cheapest + expected_label)",
+    )
+    pcons.add_argument("--plan-version", default=None)
+    pcons.add_argument("--rubric-version", default=None)
+    pcons.add_argument("--task-category", default=None)
+    pcons.add_argument("--entrypoint", default=None)
+    pcons.add_argument("--min-evidence", type=int, default=1)
+    pcons.add_argument("--report", default="bench_consistency.json")
+    pcons.add_argument("--report-md", default=None)
 
     pre = sub.add_parser("research", help="DRACO-shaped research rubric eval")
     add_common(pre)
@@ -317,6 +338,37 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.cmd == "download-mmlu":
             return _download_urls(_MMLU_URLS, Path(args.out), args.timeout, "mmlu")
+
+        if args.cmd == "policy-consistency":
+            records = load_decision_records(args.records)
+            policies = list(args.policy) if args.policy else ["cheapest", "expected_label"]
+            report = run_policy_consistency(
+                records=records,
+                policies=policies,
+                records_path=args.records,
+                plan_version=args.plan_version,
+                rubric_version=args.rubric_version,
+                task_category=args.task_category,
+                entrypoint=args.entrypoint,
+                min_evidence=args.min_evidence,
+            )
+            jp = Path(args.report)
+            mp = Path(args.report_md) if args.report_md else None
+            jp, mp = write_reports(report, jp, mp)
+            print(
+                json.dumps(
+                    {
+                        "report": str(jp),
+                        "report_md": str(mp),
+                        "status": report.get("status"),
+                        "summary": report.get("summary"),
+                        "ci_fail": report.get("ci_fail"),
+                        "mode": report.get("mode"),
+                    },
+                    indent=2,
+                )
+            )
+            return 0
 
         if args.cmd == "routing-accuracy":
             keys = _parse_kv_list(args.api_key)

@@ -1,6 +1,8 @@
 //! Boolean decisions + projections.
 
-use aria_router_config::{CompetenceCfg, DecisionCfg, ProjectionCfg, Recipe, RuleNode};
+use aria_router_config::{
+    CompetenceCfg, DecisionCfg, ProjectionCfg, ProtectionCfg, Recipe, RuleNode,
+};
 use aria_router_core::{ModelCard, RouterError};
 use aria_router_signal::SignalSet;
 use serde_json::Value;
@@ -175,6 +177,136 @@ fn tier_rank(m: Option<&ModelCard>) -> u8 {
         Some("large") => 2,
         _ => 1,
     }
+}
+
+/// Low-score protection state (C3). A single bad score triggers protection;
+/// only a *release* observation (problem continuation below the configured
+/// threshold) clears it. Difficulty still decides the group: releasing only
+/// removes the historical constraint.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProtectionState {
+    pub active: bool,
+    pub last_evidence_key: Option<String>,
+    pub triggered_score: Option<f32>,
+    pub category: Option<String>,
+    pub plan_version: Option<String>,
+    pub rubric_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtectionAction {
+    Unchanged,
+    Triggered,
+    Released,
+    /// Evidence was stale / partial / from another category or plan version.
+    Rejected,
+}
+
+impl ProtectionAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unchanged => "unchanged",
+            Self::Triggered => "triggered",
+            Self::Released => "released",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+/// One scored execution observation. `score = None` means "unscored", which is
+/// deliberately different from a score of zero.
+#[derive(Debug, Clone)]
+pub struct ProtectionEvidence {
+    pub key: String,
+    pub score: Option<f32>,
+    pub category: String,
+    pub plan_version: String,
+    pub rubric_version: String,
+    pub continuation: f32,
+    pub complete: bool,
+    pub age_secs: u64,
+}
+
+/// Pure state transition. The caller owns the per-session state; this function
+/// never mutates the eligible pool (hard filters have already run upstream).
+pub fn next_protection_state(
+    prev: &ProtectionState,
+    ev: Option<&ProtectionEvidence>,
+    cfg: &ProtectionCfg,
+    expected_category: &str,
+) -> (ProtectionState, ProtectionAction) {
+    if !cfg.enabled {
+        return (prev.clone(), ProtectionAction::Unchanged);
+    }
+    let Some(ev) = ev else {
+        return (prev.clone(), ProtectionAction::Unchanged);
+    };
+    let same_plan = cfg
+        .plan_version
+        .as_deref()
+        .is_none_or(|v| v == ev.plan_version);
+    let same_rubric = cfg
+        .rubric_version
+        .as_deref()
+        .is_none_or(|v| v == ev.rubric_version);
+    let valid = ev.complete
+        && ev.score.is_some()
+        && !ev.key.is_empty()
+        && ev.age_secs <= cfg.max_evidence_age_secs
+        && !expected_category.is_empty()
+        && ev.category == expected_category
+        && same_plan
+        && same_rubric
+        && (0.0..=1.0).contains(&ev.continuation)
+        && prev.category.as_deref().is_none_or(|c| c == ev.category);
+    if !valid {
+        return (prev.clone(), ProtectionAction::Rejected);
+    }
+    let mut state = prev.clone();
+    state.last_evidence_key = Some(ev.key.clone());
+    state.category = Some(ev.category.clone());
+    state.plan_version = Some(ev.plan_version.clone());
+    state.rubric_version = Some(ev.rubric_version.clone());
+    if prev.active {
+        if ev.continuation < cfg.continuation_release {
+            state.active = false;
+            state.triggered_score = None;
+            return (state, ProtectionAction::Released);
+        }
+        return (state, ProtectionAction::Unchanged);
+    }
+    let score = ev.score.unwrap_or(1.0);
+    if score < cfg.floor && prev.last_evidence_key.as_deref() != Some(ev.key.as_str()) {
+        state.active = true;
+        state.triggered_score = Some(score);
+        return (state, ProtectionAction::Triggered);
+    }
+    (state, ProtectionAction::Unchanged)
+}
+
+/// While protection is active, prefer the strongest tier *within the eligible
+/// pool* and forbid the competence downgrade. Never invents a new model.
+pub fn apply_protection(
+    selected: &str,
+    eligible: &[ModelCard],
+    state: &ProtectionState,
+) -> Option<String> {
+    if !state.active {
+        return None;
+    }
+    let selected_card = eligible.iter().find(|m| m.name == selected)?;
+    let selected_rank = tier_rank(Some(selected_card));
+    let mut best: Option<(u8, &ModelCard)> = None;
+    for m in eligible {
+        let r = tier_rank(Some(m));
+        if r <= selected_rank || m.name == selected {
+            continue;
+        }
+        if best.is_none_or(|(br, _)| r > br) {
+            best = Some((r, m));
+        }
+    }
+    best.map(|(_, m)| m.name.clone())
 }
 
 pub fn eval_rule(
@@ -431,6 +563,148 @@ mod tests {
         }
     }
 
+    fn evidence(key: &str, score: Option<f32>, continuation: f32) -> ProtectionEvidence {
+        ProtectionEvidence {
+            key: key.into(),
+            score,
+            category: "draft".into(),
+            plan_version: "plan-1".into(),
+            rubric_version: "rubric-1".into(),
+            continuation,
+            complete: true,
+            age_secs: 10,
+        }
+    }
+
+    fn protection_cfg() -> ProtectionCfg {
+        ProtectionCfg {
+            enabled: true,
+            ..ProtectionCfg::default()
+        }
+    }
+
+    #[test]
+    fn protection_triggers_and_releases_as_a_pair() {
+        let cfg = protection_cfg();
+        let state = ProtectionState::default();
+        let (triggered, action) =
+            next_protection_state(&state, Some(&evidence("r1", Some(0.2), 0.9)), &cfg, "draft");
+        assert_eq!(action, ProtectionAction::Triggered);
+        assert!(triggered.active);
+        assert_eq!(triggered.triggered_score, Some(0.2));
+        let pool = vec![card("small", "small"), card("large", "large")];
+        assert_eq!(
+            apply_protection("small", &pool, &triggered),
+            Some("large".into())
+        );
+        assert!(apply_protection("small", &pool, &state).is_none());
+        // Same evidence must not re-trigger; a continuing problem keeps protection.
+        let (kept, action) = next_protection_state(
+            &triggered,
+            Some(&evidence("r1", Some(0.2), 0.9)),
+            &cfg,
+            "draft",
+        );
+        assert_eq!(action, ProtectionAction::Unchanged);
+        assert!(kept.active);
+        // Problem no longer continues → release (difficulty still decides group).
+        let (released, action) =
+            next_protection_state(&kept, Some(&evidence("r2", Some(0.9), 0.1)), &cfg, "draft");
+        assert_eq!(action, ProtectionAction::Released);
+        assert!(!released.active);
+        assert!(released.triggered_score.is_none());
+        assert!(apply_protection("small", &pool, &released).is_none());
+        assert_eq!(ProtectionAction::Rejected.as_str(), "rejected");
+    }
+
+    #[test]
+    fn protection_rejects_stale_partial_or_mismatched_evidence() {
+        let cfg = ProtectionCfg {
+            plan_version: Some("plan-1".into()),
+            rubric_version: Some("rubric-1".into()),
+            ..protection_cfg()
+        };
+        let state = ProtectionState::default();
+        let mut partial = evidence("r1", Some(0.1), 0.9);
+        partial.complete = false;
+        assert_eq!(
+            next_protection_state(&state, Some(&partial), &cfg, "draft").1,
+            ProtectionAction::Rejected
+        );
+        // Unscored is not zero: it must not trigger protection.
+        assert_eq!(
+            next_protection_state(&state, Some(&evidence("r1", None, 0.9)), &cfg, "draft").1,
+            ProtectionAction::Rejected
+        );
+        let mut stale = evidence("r1", Some(0.1), 0.9);
+        stale.age_secs = cfg.max_evidence_age_secs + 1;
+        assert_eq!(
+            next_protection_state(&state, Some(&stale), &cfg, "draft").1,
+            ProtectionAction::Rejected
+        );
+        let mut wrong_category = evidence("r1", Some(0.1), 0.9);
+        wrong_category.category = "review".into();
+        assert_eq!(
+            next_protection_state(&state, Some(&wrong_category), &cfg, "draft").1,
+            ProtectionAction::Rejected
+        );
+        let mut wrong_plan = evidence("r1", Some(0.1), 0.9);
+        wrong_plan.plan_version = "plan-2".into();
+        assert_eq!(
+            next_protection_state(&state, Some(&wrong_plan), &cfg, "draft").1,
+            ProtectionAction::Rejected
+        );
+        let mut wrong_rubric = evidence("r1", Some(0.1), 0.9);
+        wrong_rubric.rubric_version = "rubric-2".into();
+        assert_eq!(
+            next_protection_state(&state, Some(&wrong_rubric), &cfg, "draft").1,
+            ProtectionAction::Rejected
+        );
+        let mut bad_continuation = evidence("r1", Some(0.1), 0.9);
+        bad_continuation.continuation = 1.5;
+        assert_eq!(
+            next_protection_state(&state, Some(&bad_continuation), &cfg, "draft").1,
+            ProtectionAction::Rejected
+        );
+        assert_eq!(
+            next_protection_state(&state, Some(&evidence("r1", Some(0.1), 0.9)), &cfg, "").1,
+            ProtectionAction::Rejected
+        );
+        // High score never triggers; disabled config never changes state.
+        assert_eq!(
+            next_protection_state(&state, Some(&evidence("r1", Some(0.9), 0.9)), &cfg, "draft").1,
+            ProtectionAction::Unchanged
+        );
+        let off = ProtectionCfg::default();
+        assert_eq!(
+            next_protection_state(&state, Some(&evidence("r1", Some(0.1), 0.9)), &off, "draft").1,
+            ProtectionAction::Unchanged
+        );
+        assert_eq!(
+            next_protection_state(&state, None, &cfg, "draft").1,
+            ProtectionAction::Unchanged
+        );
+        assert_eq!(ProtectionAction::Triggered.as_str(), "triggered");
+        assert_eq!(ProtectionAction::Released.as_str(), "released");
+        assert_eq!(ProtectionAction::Unchanged.as_str(), "unchanged");
+    }
+
+    #[test]
+    fn protection_only_reorders_eligible_models() {
+        let active = ProtectionState {
+            active: true,
+            ..ProtectionState::default()
+        };
+        let pool = vec![card("small", "small"), card("mid", "mid")];
+        assert_eq!(
+            apply_protection("small", &pool, &active),
+            Some("mid".into())
+        );
+        // Already strongest / not in eligible pool → no invented model.
+        assert!(apply_protection("mid", &pool, &active).is_none());
+        assert!(apply_protection("absent", &pool, &active).is_none());
+    }
+
     #[test]
     fn competence_downgrade_prefers_cheaper_tier() {
         let eligible = vec![
@@ -442,6 +716,7 @@ mod tests {
             enabled: true,
             floor: 0.6,
             simple_threshold: 0.7,
+            protection: None,
         };
         // Simple + competent → downgrade large → small.
         let down = apply_competence(
@@ -835,6 +1110,7 @@ mod tests {
             enabled: true,
             floor: 0.6,
             simple_threshold: 0.7,
+            protection: None,
         };
         // Cheapest candidate first: the later mid-tier candidate must not replace it.
         let eligible = vec![

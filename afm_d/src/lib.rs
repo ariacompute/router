@@ -4,7 +4,7 @@
 //! run before System One so Encoder Choice cannot over-promote teaching/large.
 //! Successful System One answers are cached by (normalized text × eligible set).
 
-use aria_router_config::{AfmDRecipe, AfmDTrack};
+use aria_router_config::{AfmDQuestionTemplate, AfmDRecipe, AfmDTrack};
 use aria_router_core::{ChatRequest, ModelCard, RouteDecision, RouterError};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, VecDeque};
@@ -332,6 +332,43 @@ pub struct AfmDTask {
     pub fallback: Option<String>,
     /// Optional System One track; drives eligible-pool size cap.
     pub track: Option<AfmDTrack>,
+    /// C2: `single` keeps the historical one-choice contract; `three` adds
+    /// stage-competence / difficulty / continuation questions.
+    pub question_template: AfmDQuestionTemplate,
+}
+
+/// The three normalized answers of the C2 template. They are folded into one
+/// typed `RouteDecision`, never exposed as three independent decisions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AfmDAnswers {
+    pub stage_competence: f32,
+    pub difficulty: String,
+    pub continuation: f32,
+}
+
+impl AfmDAnswers {
+    /// Recover normalized answers from the single decision reason, so callers
+    /// can attach them as execution evidence without a second decision call.
+    pub fn from_reason(reason: &str) -> Option<Self> {
+        let tail = reason.strip_prefix("afm-d:")?;
+        let mut score = None;
+        let mut difficulty = None;
+        let mut continuation = None;
+        for part in tail.split('|') {
+            if let Some(v) = part.strip_prefix("competence=") {
+                score = v.parse::<f32>().ok();
+            } else if let Some(v) = part.strip_prefix("difficulty=") {
+                difficulty = Some(v.to_string());
+            } else if let Some(v) = part.strip_prefix("continuation=") {
+                continuation = v.parse::<f32>().ok();
+            }
+        }
+        Some(Self {
+            stage_competence: score?,
+            difficulty: difficulty?,
+            continuation: continuation?,
+        })
+    }
 }
 
 impl AfmDTask {
@@ -567,16 +604,53 @@ pub fn build_systemone_body(task: &AfmDTask) -> Value {
             .unwrap_or_else(|| synthesize_description(m));
         criteria.insert(m.name.clone(), Value::String(desc));
     }
-    json!({
-        "state": task.state,
-        "questions": {
-            "route": {
+    let mut questions = Map::new();
+    questions.insert(
+        "route".into(),
+        json!({
+            "type": "choice",
+            "instructions": task.instructions,
+            "criteria": criteria
+        }),
+    );
+    if task.question_template == AfmDQuestionTemplate::Three {
+        questions.insert(
+            "stage_competence".into(),
+            json!({
                 "type": "choice",
-                "instructions": task.instructions,
-                "criteria": criteria
-            }
-        }
-    })
+                "instructions": "Score the competence demonstrated by the previous step (not this one).",
+                "criteria": {
+                    "low": "previous answer was wrong or incomplete",
+                    "medium": "previous answer was partially correct",
+                    "high": "previous answer was complete and verified"
+                }
+            }),
+        );
+        questions.insert(
+            "difficulty".into(),
+            json!({
+                "type": "choice",
+                "instructions": "Judge the difficulty of THIS step independently of the route choice.",
+                "criteria": {
+                    "easy": "single fact or short answer",
+                    "medium": "comparison or multi-step but bounded",
+                    "hard": "long reasoning, teaching or open-ended synthesis"
+                }
+            }),
+        );
+        questions.insert(
+            "continuation".into(),
+            json!({
+                "type": "choice",
+                "instructions": "Is the current request a continuation of the previously scored problem?",
+                "criteria": {
+                    "new": "a new problem; the previous low score no longer applies",
+                    "continued": "the same problem is still being worked on"
+                }
+            }),
+        );
+    }
+    json!({"state": task.state, "questions": Value::Object(questions)})
 }
 
 pub fn synthesize_description(m: &ModelCard) -> String {
@@ -594,6 +668,74 @@ pub fn synthesize_description(m: &ModelCard) -> String {
         "tier={tier}; locality={}; modality={}; capabilities={caps}",
         m.locality, m.modality
     )
+}
+
+fn answer_choice<'a>(resp: &'a Value, key: &str) -> Result<&'a str, RouterError> {
+    resp.pointer(&format!("/answers/{key}/choice"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            RouterError::FailClosed(format!(
+                "afm-d three-question template missing answers.{key}.choice"
+            ))
+        })
+}
+
+/// Fold the three answers into ONE typed RouteDecision.
+///
+/// Normalisation is deterministic and stays inside the hard-filtered eligible
+/// pool: a `hard` difficulty may promote a small choice to the strongest
+/// eligible tier, never to an unknown model. Missing / invalid answers fail
+/// closed through the existing fallback path.
+fn normalize_three_answers(
+    resp: &Value,
+    task: &AfmDTask,
+    choice: &str,
+    confidence: f32,
+) -> Result<(String, f32, String), RouterError> {
+    let competence = answer_choice(resp, "stage_competence")?;
+    let difficulty = answer_choice(resp, "difficulty")?;
+    let continuation = answer_choice(resp, "continuation")?;
+    let (score, comp_factor) = match competence {
+        "low" => (0.2_f32, 0.8_f32),
+        "medium" => (0.5, 0.9),
+        "high" => (0.8, 1.0),
+        other => {
+            return Err(RouterError::FailClosed(format!(
+                "afm-d invalid stage_competence answer {other}"
+            )))
+        }
+    };
+    if !matches!(difficulty, "easy" | "medium" | "hard") {
+        return Err(RouterError::FailClosed(format!(
+            "afm-d invalid difficulty answer {difficulty}"
+        )));
+    }
+    let (cont, cont_factor) = match continuation {
+        "new" => (0.0_f32, 1.0_f32),
+        "continued" => (1.0, 0.95),
+        other => {
+            return Err(RouterError::FailClosed(format!(
+                "afm-d invalid continuation answer {other}"
+            )))
+        }
+    };
+    let mut model = choice.to_string();
+    if difficulty == "hard" {
+        let chosen = task.eligible.iter().find(|m| m.name == choice);
+        if chosen.is_some_and(|m| tier_of(m) == "small") {
+            if let Some(strongest) =
+                pick_tier(&task.eligible, "large").or_else(|| pick_tier(&task.eligible, "mid"))
+            {
+                model = strongest.name.clone();
+            }
+        }
+    }
+    let normalized = confidence * comp_factor * cont_factor;
+    Ok((
+        model.clone(),
+        normalized,
+        format!("afm-d:{model}|competence={score}|difficulty={difficulty}|continuation={cont}"),
+    ))
 }
 
 pub fn decision_from_systemone(
@@ -618,6 +760,12 @@ pub fn decision_from_systemone(
         .and_then(|c| c.as_f64())
         .map(|c| c as f32)
         .unwrap_or(1.0);
+    let (final_model, confidence, reason) = if task.question_template == AfmDQuestionTemplate::Three
+    {
+        normalize_three_answers(resp, task, &choice, confidence)?
+    } else {
+        (choice.clone(), confidence, format!("afm-d:{choice}"))
+    };
     if let Some(min_c) = task.min_confidence {
         if confidence < min_c {
             return Err(RouterError::FailClosed(format!(
@@ -626,9 +774,9 @@ pub fn decision_from_systemone(
         }
     }
     Ok(RouteDecision {
-        model: choice.clone(),
+        model: final_model,
         algorithm: Some("static".into()),
-        reason: format!("afm-d:{choice}"),
+        reason,
         confidence,
         layer: "afm-d".into(),
         decision: "afm-d".into(),
@@ -666,6 +814,7 @@ pub fn task_from(req: &ChatRequest, eligible: Vec<ModelCard>, recipe: &AfmDRecip
         min_confidence: recipe.min_confidence,
         fallback: recipe.fallback.clone(),
         track: recipe.track,
+        question_template: recipe.question_template.unwrap_or_default(),
     }
 }
 
@@ -747,6 +896,7 @@ mod tests {
             min_confidence: None,
             fallback: None,
             track: None,
+            question_template: AfmDQuestionTemplate::Single,
         }
     }
 
@@ -955,11 +1105,183 @@ mod tests {
         server.shutdown().await;
     }
 
+    fn three_task() -> AfmDTask {
+        let mut t = base_task(vec![
+            card_tier("a/small", "small"),
+            card_tier("a/large", "large"),
+        ]);
+        t.question_template = AfmDQuestionTemplate::Three;
+        t
+    }
+
+    #[test]
+    fn hard_difficulty_without_a_stronger_tier_stays_in_the_pool() {
+        let mut task = base_task(vec![card_tier("a/small", "small")]);
+        task.question_template = AfmDQuestionTemplate::Three;
+        let resp = three_answers("a/small", "low", "hard", "continued", 0.9);
+        let d = decision_from_systemone(&resp, &task).unwrap();
+        assert_eq!(d.model, "a/small");
+
+        // The mid tier is the fallback when no large tier is eligible.
+        let mut mid = base_task(vec![
+            card_tier("a/small", "small"),
+            card_tier("a/mid", "mid"),
+        ]);
+        mid.question_template = AfmDQuestionTemplate::Three;
+        let d = decision_from_systemone(&resp, &mid).unwrap();
+        assert_eq!(d.model, "a/mid");
+        assert!(d.reason.contains("difficulty=hard"));
+
+        // Hard difficulty with an already-strong choice leaves the pool alone.
+        let mut strong = base_task(vec![
+            card_tier("a/small", "small"),
+            card_tier("a/large", "large"),
+        ]);
+        strong.question_template = AfmDQuestionTemplate::Three;
+        let strong_resp = three_answers("a/large", "high", "hard", "continued", 0.9);
+        let d = decision_from_systemone(&strong_resp, &strong).unwrap();
+        assert_eq!(d.model, "a/large");
+    }
+
+    fn three_answers(
+        route: &str,
+        competence: &str,
+        difficulty: &str,
+        continuation: &str,
+        confidence: f64,
+    ) -> Value {
+        json!({"answers": {
+            "route": {"choice": route, "confidence": confidence},
+            "stage_competence": {"choice": competence},
+            "difficulty": {"choice": difficulty},
+            "continuation": {"choice": continuation}
+        }})
+    }
+
+    #[test]
+    fn three_question_template_is_opt_in_and_sends_all_questions() {
+        let single = build_systemone_body(&base_task(vec![card("a"), card("b")]));
+        assert_eq!(single["questions"].as_object().unwrap().len(), 1);
+        assert!(single["questions"]["stage_competence"].is_null());
+
+        let body = build_systemone_body(&three_task());
+        let q = body["questions"].as_object().unwrap();
+        assert_eq!(q.len(), 4, "route + three context questions");
+        assert_eq!(q["route"]["type"], "choice");
+        assert_eq!(
+            q["stage_competence"]["criteria"]["low"],
+            "previous answer was wrong or incomplete"
+        );
+        assert_eq!(
+            q["difficulty"]["criteria"]["hard"],
+            "long reasoning, teaching or open-ended synthesis"
+        );
+        assert_eq!(
+            q["continuation"]["criteria"]["new"],
+            "a new problem; the previous low score no longer applies"
+        );
+        assert_eq!(body["state"], three_task().state);
+    }
+
+    #[test]
+    fn three_answers_normalize_into_one_typed_decision() {
+        let task = three_task();
+        let resp = three_answers("a/small", "low", "hard", "continued", 0.8);
+        let d = decision_from_systemone(&resp, &task).unwrap();
+        // Hard difficulty promotes within the eligible pool only.
+        assert_eq!(d.model, "a/large");
+        assert_eq!(d.decision, "afm-d");
+        assert!((d.confidence - 0.608).abs() < 1e-5);
+        let parsed = AfmDAnswers::from_reason(&d.reason).unwrap();
+        assert_eq!(
+            parsed,
+            AfmDAnswers {
+                stage_competence: 0.2,
+                difficulty: "hard".into(),
+                continuation: 1.0,
+            }
+        );
+        assert!(AfmDAnswers::from_reason("afm-d:a/small").is_none());
+
+        let easy =
+            decision_from_systemone(&three_answers("a/small", "high", "easy", "new", 1.0), &task)
+                .unwrap();
+        assert_eq!(easy.model, "a/small");
+        assert_eq!(easy.confidence, 1.0);
+        assert_eq!(
+            AfmDAnswers::from_reason(&easy.reason).unwrap().continuation,
+            0.0
+        );
+    }
+
+    #[test]
+    fn three_answers_fail_closed_on_missing_invalid_or_low_confidence() {
+        let task = three_task();
+        for key in ["stage_competence", "difficulty", "continuation"] {
+            let mut resp = three_answers("a/small", "low", "easy", "new", 1.0);
+            resp["answers"].as_object_mut().unwrap().remove(key);
+            let err = decision_from_systemone(&resp, &task).unwrap_err();
+            assert!(err.to_string().contains(key), "{err}");
+        }
+        for (comp, diff, cont) in [
+            ("bogus", "easy", "new"),
+            ("low", "bogus", "new"),
+            ("low", "easy", "bogus"),
+        ] {
+            let resp = three_answers("a/small", comp, diff, cont, 1.0);
+            assert!(decision_from_systemone(&resp, &task).is_err());
+        }
+        let mut strict = three_task();
+        strict.min_confidence = Some(0.9);
+        let resp = three_answers("a/small", "low", "easy", "continued", 0.8);
+        let err = decision_from_systemone(&resp, &strict).unwrap_err();
+        assert!(err.to_string().contains("min_confidence"), "{err}");
+        // Existing fallback still applies to a failed three-question answer.
+        let mut with_fallback = strict;
+        with_fallback.fallback = Some("a/small".into());
+        let fb = apply_fallback_or_err(
+            &with_fallback,
+            RouterError::FailClosed("bad three answers".into()),
+        )
+        .unwrap();
+        assert_eq!(fb.model, "a/small");
+    }
+
+    #[test]
+    fn task_from_reads_three_question_template_from_recipe() {
+        let recipe = AfmDRecipe {
+            endpoint: None,
+            track: None,
+            question_template: Some(AfmDQuestionTemplate::Three),
+            timeout_ms: None,
+            fallback: None,
+            instructions: None,
+            descriptions: HashMap::new(),
+            min_confidence: None,
+            prefix_reuse: None,
+        };
+        let req = ChatRequest {
+            model: "ariacompute/afm-d-auto".into(),
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: json!("a nontrivial question about trade offs"),
+            }],
+            stream: false,
+            max_tokens: None,
+            temperature: None,
+            extra: Default::default(),
+        };
+        let task = task_from(&req, vec![card("a/small")], &recipe);
+        assert_eq!(task.question_template, AfmDQuestionTemplate::Three);
+        assert_eq!(AfmDQuestionTemplate::Three.as_str(), "three");
+    }
+
     #[test]
     fn task_from_builds_state() {
         let recipe = AfmDRecipe {
             endpoint: None,
             track: Some(AfmDTrack::Encoder),
+            question_template: None,
             timeout_ms: Some(1234),
             fallback: Some("local/general".into()),
             instructions: Some("pick".into()),
@@ -993,6 +1315,7 @@ mod tests {
         }
         .route(AfmDTask {
             track: Some(AfmDTrack::Decoder),
+            question_template: AfmDQuestionTemplate::Single,
             ..base_task(eligible)
         })
         .await
@@ -1198,6 +1521,7 @@ mod tests {
             min_confidence: None,
             fallback: None,
             track: None,
+            question_template: AfmDQuestionTemplate::Single,
         };
         let d = AfmDDecisioner {
             // Would fail if we actually called this endpoint.
@@ -1225,6 +1549,7 @@ mod tests {
             min_confidence: None,
             fallback: None,
             track: None,
+            question_template: AfmDQuestionTemplate::Single,
         };
         let d = AfmDDecisioner {
             endpoint: Some("http://127.0.0.1:1".into()),
@@ -1276,6 +1601,7 @@ mod tests {
             min_confidence: None,
             fallback: None,
             track: None,
+            question_template: AfmDQuestionTemplate::Single,
         };
         let decisioner = AfmDDecisioner {
             endpoint: Some(server.base.clone()),
@@ -1458,6 +1784,7 @@ mod tests {
         let recipe = AfmDRecipe {
             endpoint: None,
             track: None,
+            question_template: None,
             timeout_ms: None,
             fallback: None,
             instructions: None,
@@ -1492,6 +1819,7 @@ mod tests {
         }
         .route(AfmDTask {
             track: Some(AfmDTrack::Encoder),
+            question_template: AfmDQuestionTemplate::Single,
             ..base_task(eligible.clone())
         })
         .await

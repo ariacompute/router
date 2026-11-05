@@ -14,7 +14,8 @@
   --panel-bg-muted: #f4f4f5;
   --text-main: #18181b;
   --text-muted: #71717a;
-  --text-soft: #a1a1aa;
+  --text-soft: #52525b;
+  --font-size-min: 12px;
   --text-on-solid: #ffffff;
   --line: rgba(0, 0, 0, 0.12);
   --line-soft: rgba(0, 0, 0, 0.06);
@@ -57,12 +58,12 @@
   --radius-card: 0;
   --radius-panel: 0;
   --radius-field: 0;
-  --radius-pill: 999px;
+  --radius-pill: 0;
 
   /* Type */
-  --font-display: "Newsreader", "Iowan Old Style", "Palatino", Georgia, ui-serif, serif;
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-label: 'Chakra Petch', var(--font-sans);
+  --font-display: ui-serif, Georgia, "Times New Roman", serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-label: var(--font-sans);
   --font: var(--font-sans);
   --mono: ui-monospace, 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
   --content-width: 1100px;
@@ -84,7 +85,7 @@ html[data-theme="dark"],
   --panel-bg-muted: #27272a;
   --text-main: #fafafa;
   --text-muted: #a1a1aa;
-  --text-soft: #71717a;
+  --text-soft: #a1a1aa;
   /* Solid buttons invert in dark mode (near-white fill), so their label has
      to flip to near-black — otherwise it renders white on white. */
   --text-on-solid: #0a0a0a;
@@ -135,7 +136,7 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.25s ease, color 0.25s ease;
+  transition: transform 0.18s ease, opacity 0.18s ease;
 }
 
 a {
@@ -190,7 +191,7 @@ button {
   background: transparent;
   color: var(--text-main);
   font-weight: 500;
-  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  transition: transform 0.18s ease, opacity 0.18s ease;
 }
 button:hover:not(:disabled) {
   background: var(--fill-hover);
@@ -210,7 +211,7 @@ select {
   padding: 0.55rem 0.75rem;
   width: 100%;
   color: var(--text-main);
-  transition: border-color 0.18s ease;
+  transition: transform 0.18s ease, opacity 0.18s ease;
 }
 textarea:focus,
 input:focus,
@@ -240,7 +241,7 @@ code {
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   padding: 1rem 1.25rem;
-  transition: border-color 0.18s ease;
+  transition: transform 0.18s ease, opacity 0.18s ease;
 }
 .card:hover {
   border-color: var(--line-strong);
@@ -285,7 +286,7 @@ code {
   padding: 0.5rem 1rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.18s ease, border-color 0.18s ease;
+  transition: transform 0.18s ease, opacity 0.18s ease;
 }
 .btn-danger:hover {
   background: var(--danger-wash);
@@ -300,7 +301,7 @@ code {
   padding: 0.5rem 1rem;
   font-weight: 500;
   cursor: pointer;
-  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+  transition: transform 0.18s ease, opacity 0.18s ease;
 }
 .btn-ghost:hover {
   color: var(--text-main);
@@ -322,7 +323,7 @@ code {
   border-radius: var(--radius-field);
   font-size: 0.875rem;
   width: 100%;
-  transition: border-color 0.2s ease;
+  transition: transform 0.18s ease, opacity 0.18s ease;
 }
 .input-field:focus {
   outline: none;
@@ -342,11 +343,9 @@ code {
   text-align: left;
   padding: 0.7rem 1rem;
   font-family: var(--font-label);
-  font-size: 0.68rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
   border-bottom: 1px solid var(--line);
 }
 .data-table td {
@@ -366,9 +365,8 @@ code {
   padding: 0.15rem 0.55rem;
   border-radius: var(--radius-field);
   font-family: var(--font-label);
-  font-size: 0.7rem;
+  font-size: 0.8125rem;
   font-weight: 500;
-  letter-spacing: 0.04em;
   background: var(--chip-warn-bg);
   color: var(--chip-warn-fg);
   border: 1px solid transparent;
@@ -441,18 +439,14 @@ code {
 /* Serve-style uppercase label / eyebrow */
 .label {
   font-family: var(--font-label);
-  font-size: 0.72rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
   color: var(--text-muted);
 }
 .eyebrow {
   font-family: var(--font-label);
-  font-size: 0.7rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
   color: var(--text-muted);
 }
 
@@ -466,7 +460,6 @@ code {
   font-family: var(--font-display);
   font-size: clamp(1.75rem, 3vw, 2.25rem);
   font-weight: 600;
-  letter-spacing: -0.03em;
   line-height: 1.15;
   margin: 0 0 1.25rem;
 }
@@ -474,7 +467,6 @@ code {
   font-family: var(--font-display);
   font-size: 1.35rem;
   font-weight: 600;
-  letter-spacing: -0.02em;
   margin: 1.5rem 0 0.85rem;
 }
 .grid-cards {
@@ -486,16 +478,13 @@ code {
 .stat-label {
   font-family: var(--font-label);
   color: var(--text-muted);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 .stat-value {
   font-size: 1.6rem;
   font-weight: 600;
   margin-top: 0.35rem;
-  letter-spacing: -0.02em;
 }
 .row {
   display: flex;

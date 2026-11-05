@@ -114,7 +114,6 @@
   font-size: 1.75rem;
   font-weight: 600;
   margin: 0 0 0.5rem;
-  letter-spacing: -0.02em;
 }
 
 .emptyHint {
@@ -240,10 +239,8 @@
 
 .headerLabel {
   font-family: var(--font-label);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
   color: var(--text-soft);
-  font-size: 0.65rem;
+  font-size: 0.8125rem;
 }
 
 .headerValue {
@@ -290,9 +287,7 @@
 
 .modelLabel {
   font-family: var(--font-label);
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+  font-size: 0.8125rem;
   color: var(--text-soft);
 }
 

@@ -701,3 +701,7 @@ python -m bench routing \
 ### 8.9 非范围（本次交付）
 
 本需求章节、任务卡 T99 与 `task.md` T99 均为**文档计划**。以下属人审通过后的实施阶段，**本次交付不创建、不安装、不修改**：`PRODUCT.md`、`scripts/audit-ui.sh`、`dashboard/.impeccable/config.json`、`docs/impeccable-audit.md`、`dashboard/tests/*`、`dashboard/package.json` 的依赖与 scripts、4 个 CSS 与组件、`.github/workflows/ci.yml`、`.gitignore`。
+
+### 8.10 实施状态补记（2026-11-05，纯追加）
+
+§8.1–§8.9 为计划稿原文，保留不动。2026-11-05 用户明确要求实现 `docs/implementation-plan.md` 全部特性，M0 人审门禁据此激活，U1/T99 已完成：上述 §8.9 列出的文件均已创建或修改，`.tsx` 静态解析按风险 1 的降级方案处理（`.css` + `index.html` 静态扫描，元素级规则交给 `--dom` / `--url`），G11 裁决为允许新增 vitest / jsdom / testing-library devDependency。审计基线与残余项见 `docs/impeccable-audit.md`，逐项结果见 `docs/implementation-plan.md` §11。

@@ -74,6 +74,7 @@ const ROUTE_HEADER_KEYS = [
   'x-aria-router-confidence',
   'x-aria-router-bypass',
   'x-aria-router-latency-ms',
+  'x-aria-router-redecision',
 ] as const;
 
 export function pickRouteHeaders(headers: Headers): RouteHeaders {

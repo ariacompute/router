@@ -30,6 +30,37 @@ python -m bench build-routing-eval
 python -m bench build-routing-eval --from-mmlu ./out/mmlu_pro.jsonl --from-draco ./out/draco_test.jsonl
 ```
 
+## Decision records (`policy-consistency`)
+
+`policy-consistency` is an **offline, report-only** recomputation: it never calls
+a live router and never fails CI (`ci_fail: false`). Input is a `.json` (list or
+`{"records": [...]}`) or `.jsonl` file of saved decision records:
+
+```json
+{"id":"q1","decision":{"model":"m/small","confidence":0.9},
+ "eligible":["m/small","m/large"],"expected_model":"m/small",
+ "plan_version":"plan-1","rubric_version":"rubric-1",
+ "task_category":"draft","entrypoint":"ep"}
+```
+
+- `decision.model` (or `routed_model`) = the recorded route; `eligible` = the
+  hard-filtered pool at decision time; `expected_model` = saved label.
+- `plan_version` / `rubric_version` / `task_category` / `entrypoint` are
+  evidence metadata. Records with mismatched versions are excluded (reported in
+  `errors`), so scores from different plan / rubric / entrypoint are never mixed.
+- No data is reported as `has_data: false` and `consistency: null`, never zero.
+
+```bash
+python -m bench policy-consistency --records ./out/decisions.jsonl \
+  --policy cheapest --policy expected_label \
+  --plan-version plan-1 --rubric-version rubric-1 \
+  --report ./out/consistency.json
+```
+
+Deterministic policies: `cheapest`, `strongest`, `expected_label`,
+`recorded_confidence`. Live `routing-accuracy` reports also embed a
+`summary.policy_consistency` recomputed from saved result rows.
+
 ## Download full DRACO (optional)
 
 Dataset: [perplexity-ai/draco](https://huggingface.co/datasets/perplexity-ai/draco) on Hugging Face.

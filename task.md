@@ -586,3 +586,7 @@ host 套件暴露）。
 **编号映射**：`T90↔C1`、`T91↔C2`、`T92↔C3`、`T93↔C4`、`T94↔C5`、`T95↔C6`、`T96↔C7`、`T97↔C8`、`T98↔C9`、`T99↔U1`。
 
 **计划稿声明**：本章不含待办勾选项、验收记录或提交记录。M0 通过前，不产生任何实施任务、不进入编码；审核通过后另行按 Harness 流程生成 / 执行实施清单。
+
+---
+
+**实施记录（2026-11-05，纯追加）**：用户明确要求实现 `docs/implementation-plan.md` 全部特性，视为 M0 人审门禁激活。T90–T99（C1–C9 / U1）均已落地：`cargo fmt`/`clippy -D warnings`/`cargo test --workspace --all-features`、`npm --prefix dashboard ci && build && test`、`python -m unittest discover -s bench/tests -t .`、`./scripts/audit-ui.sh --static|--dom` 均通过；`--url` 在无 Chrome 环境按约定记录 `skipped`。逐项落地清单、验证结果与残余项见 `docs/implementation-plan.md` §11、`docs/impeccable-audit.md`。`./scripts/coverage.sh report` 实测 100.00%（22637/22637 行）；C7 依 G6 裁决为默认关闭的软额度。

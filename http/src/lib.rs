@@ -6,6 +6,7 @@ mod decision_ext;
 mod embed;
 pub(crate) mod keys;
 mod memory;
+mod policy;
 mod ratelimit;
 mod replay;
 mod semantic_cache;
@@ -17,8 +18,10 @@ use aria_router_afm_d::{task_from as afm_d_task_from, AfmDDecisioner};
 use aria_router_agent::{request_view, task_from, BuiltinAgent, ToolRuntime};
 use aria_router_algorithm::{global_elo, hard_filter, select, RuntimeStats};
 use aria_router_config::{resolve_keys_path, resolve_users_path, Recipe, RouterDocument};
-use aria_router_core::{ChatRequest, RouteDecision, RouterError, RouterKind};
-use aria_router_decision::select_decision;
+use aria_router_core::{
+    ChatRequest, RedecisionBoundary, RedecisionTracker, RouteDecision, RouterError, RouterKind,
+};
+use aria_router_decision::{apply_protection, next_protection_state, select_decision};
 use aria_router_plugin::{
     apply_request, extra_headers, has_response_cache, remember_response, PluginHost, PluginOutcome,
 };
@@ -33,6 +36,7 @@ use axum::{Json, Router};
 use cost::{cost_usd, estimate_tokens, now_rfc3339, CostEvent, CostLedger};
 pub use keys::{extract_bearer, validate_oauth_key, AuthIdentity, KeyStore};
 use memory::SessionMemory;
+use policy::{model_performance, now_unix, preview, EvidenceSeed, RuntimeState};
 use ratelimit::RateLimiter;
 use replay::{ReplayLog, ReplayRecord};
 use semantic_cache::SemanticCache;
@@ -63,6 +67,10 @@ pub struct AppState {
     pub keys: Mutex<KeyStore>,
     pub cost: Mutex<CostLedger>,
     pub users: Mutex<UserStore>,
+    /// Explicit re-decision boundary classification (C1).
+    pub redecision: RedecisionTracker,
+    /// Decision-feedback runtime state (C3/C4/C6/C7).
+    pub runtime: Mutex<RuntimeState>,
 }
 
 impl AppState {
@@ -110,6 +118,8 @@ impl AppState {
             keys: Mutex::new(keys),
             cost: Mutex::new(CostLedger::default()),
             users: Mutex::new(users),
+            redecision: RedecisionTracker::new(),
+            runtime: Mutex::new(RuntimeState::default()),
         }
     }
 
@@ -201,6 +211,9 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
         .route("/v1/router/validate", post(validate_ep))
         .route("/v1/router/replay", get(replay_ep))
         .route("/v1/router/replay/{id}/reroute", post(replay_reroute_ep))
+        .route("/v1/router/trust", get(trust_ep))
+        .route("/v1/router/trust/suggest", post(trust_suggest_ep))
+        .route("/v1/router/trust/publish", post(trust_publish_ep))
         .route(
             "/v1/router/providers",
             put(upsert_provider).get(list_providers),
@@ -212,8 +225,17 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
         .route("/v1/router/chat", post(chat_mgmt))
         .route("/v1/router/cost", get(cost_ep))
         .route("/v1/router/cost/by-competence", get(cost_by_competence_ep))
+        .route(
+            "/v1/router/cost/model-performance",
+            get(model_performance_ep),
+        )
         .route("/v1/router/keys", get(list_keys).post(create_key))
         .route("/v1/router/keys/{id}", delete(revoke_key))
+        .route(
+            "/v1/router/keys/{id}/spend",
+            put(set_spend_policy_ep).get(spend_view_ep),
+        )
+        .route("/v1/router/quota", get(quota_ep))
         .with_state(state)
 }
 
@@ -267,6 +289,10 @@ fn replay_items(st: &AppState, n: usize) -> Vec<RouteDecision> {
 struct RerouteQ {
     #[serde(default)]
     forward: bool,
+    /// Pure offline estimate from a saved record: never routes, never
+    /// forwards, never mutates decision caches or online configuration.
+    #[serde(default)]
+    estimate: bool,
 }
 
 async fn replay_reroute_ep(
@@ -278,6 +304,28 @@ async fn replay_reroute_ep(
         .replay_log
         .get(&id)
         .ok_or_else(|| AppError(RouterError::InvalidParam(format!("replay {id} not found"))))?;
+    if q.estimate {
+        // Replay is an estimate only: it does not call route_request, does not
+        // mutate the decision cache / sticky memory and does not forward.
+        let published = st
+            .runtime
+            .lock()
+            .unwrap()
+            .published()
+            .map(|p| json!({"version": p.version, "tier": p.tier, "action": p.action}))
+            .unwrap_or(json!(null));
+        return Ok(Json(json!({
+            "estimate": true,
+            "original_id": id,
+            "original_model": rec.decision.model,
+            "recorded_model": rec.decision.model,
+            "entrypoint": rec.entrypoint,
+            "stage_competence": rec.stage_competence,
+            "task_category": rec.task_category,
+            "published_trust": published,
+            "online_routing_unchanged": true,
+        })));
+    }
     let preview = rec.prompt_preview.clone().unwrap_or_default();
     let model = rec.decision.model.clone();
     let entrypoint = {
@@ -478,6 +526,8 @@ fn replace_config(st: &AppState, doc: RouterDocument, raw: &str) -> Result<(), R
         });
     let keys = KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path));
     *st.keys.lock().unwrap() = keys;
+    // Re-apply replay persistence when the hot-reloaded document changes it.
+    st.replay_log.configure(&doc.global.services.router_replay);
     *st.doc.lock().unwrap() = doc;
     Ok(())
 }
@@ -516,6 +566,156 @@ async fn cost_ep(State(st): State<Arc<AppState>>, Query(q): Query<CostQ>) -> Jso
 /// downgrades.
 async fn cost_by_competence_ep(State(st): State<Arc<AppState>>) -> Json<Value> {
     Json(st.cost.lock().unwrap().by_competence_tier())
+}
+
+/// Model / tier performance (C5). `has_evidence: false` renders as "no data".
+async fn model_performance_ep(State(st): State<Arc<AppState>>) -> Json<Value> {
+    let evidence = st.runtime.lock().unwrap().all_evidence();
+    let ledger = st.cost.lock().unwrap();
+    Json(model_performance(ledger.events(), &evidence))
+}
+
+fn trust_entrypoint(doc: &RouterDocument) -> String {
+    doc.entrypoints
+        .first()
+        .and_then(|e| e.model_names.first().cloned())
+        .unwrap_or_else(|| "ariacompute/semantic-auto".into())
+}
+
+/// Read-only trust status: drafts and publications, never online config.
+async fn trust_ep(State(st): State<Arc<AppState>>) -> Json<Value> {
+    let doc = snapshot_doc(&st);
+    let cfg = doc.global.services.trust.clone();
+    let entrypoint = trust_entrypoint(&doc);
+    let rt = st.runtime.lock().unwrap();
+    Json(json!({
+        "enabled": cfg.enabled,
+        "thresholds": {
+            "min_evidence": cfg.min_evidence,
+            "min_confidence": cfg.min_confidence,
+            "promote_at": cfg.promote_at,
+            "demote_below": cfg.demote_below,
+            "plan_version": cfg.plan_version,
+            "rubric_version": cfg.rubric_version,
+        },
+        "entrypoint": entrypoint,
+        "evidence_count": rt.all_evidence().len(),
+        "drafts": rt.drafts(),
+        "publications": rt.publications(),
+        "published": rt.published(),
+        "online_config_unchanged": true,
+    }))
+}
+
+/// Build a suggestion from saved replay evidence. Insufficient evidence or
+/// low confidence produce no draft; replay never rewrites online routing.
+async fn trust_suggest_ep(State(st): State<Arc<AppState>>) -> Json<Value> {
+    let doc = snapshot_doc(&st);
+    let cfg = doc.global.services.trust.clone();
+    let entrypoint = trust_entrypoint(&doc);
+    let evidence = st.runtime.lock().unwrap().all_evidence();
+    let out = st
+        .runtime
+        .lock()
+        .unwrap()
+        .suggest_trust(&cfg, &evidence, &entrypoint, now_unix());
+    Json(json!({
+        "status": out.status,
+        "usable": out.usable,
+        "total": out.total,
+        "min_evidence": out.min_evidence,
+        "confidence": out.confidence,
+        "draft": out.draft,
+        "entrypoint": entrypoint,
+        "online_routing_unchanged": true,
+    }))
+}
+
+#[derive(Deserialize)]
+struct PublishBody {
+    draft_id: String,
+    #[serde(default)]
+    confirm: bool,
+}
+
+/// Explicit publication. Requires `confirm: true` and a known unpublished
+/// draft; it never calls `PUT /v1/router/config` or reloads the document.
+async fn trust_publish_ep(
+    State(st): State<Arc<AppState>>,
+    Json(body): Json<PublishBody>,
+) -> Result<Json<Value>, AppError> {
+    let pub_ = st
+        .runtime
+        .lock()
+        .unwrap()
+        .publish_trust(&body.draft_id, body.confirm, now_unix())
+        .map_err(AppError)?;
+    Ok(Json(json!({
+        "published": pub_,
+        "online_routing_unchanged": true,
+    })))
+}
+
+#[derive(Deserialize)]
+struct SpendPolicyBody {
+    #[serde(default)]
+    limit_usd: Option<f64>,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    period: Option<String>,
+}
+
+fn period_key() -> String {
+    chrono::Utc::now().format("%Y-%m").to_string()
+}
+
+async fn set_spend_policy_ep(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<SpendPolicyBody>,
+) -> Result<Json<Value>, AppError> {
+    auth_api::gate_if_users(&st, &headers).map_err(AppError)?;
+    st.keys
+        .lock()
+        .unwrap()
+        .set_spend_policy(&id, body.limit_usd, body.group, body.period)
+        .map_err(AppError)?;
+    let view = st
+        .keys
+        .lock()
+        .unwrap()
+        .spend_view(&id, &period_key())
+        .map_err(AppError)?;
+    Ok(Json(view))
+}
+
+/// Spend-quota observability. Settlement failures are recorded here rather than
+/// swallowed inside the request path.
+async fn quota_ep(State(st): State<Arc<AppState>>) -> Json<Value> {
+    let enabled = snapshot_doc(&st).global.services.quota.enabled;
+    let rt = st.runtime.lock().unwrap();
+    Json(json!({
+        "enabled": enabled,
+        "pending_reservations": rt.spend.len(),
+        "settlement_errors": rt.settlement_errors(),
+    }))
+}
+
+async fn spend_view_ep(
+    State(st): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AppError> {
+    auth_api::gate_if_users(&st, &headers).map_err(AppError)?;
+    let view = st
+        .keys
+        .lock()
+        .unwrap()
+        .spend_view(&id, &period_key())
+        .map_err(AppError)?;
+    Ok(Json(view))
 }
 
 async fn list_keys(
@@ -714,6 +914,7 @@ async fn chat_with_auth(
             serve_site: auth.serve_site,
             session,
             entrypoint,
+            reservation_id: None,
         },
     )
     .await
@@ -740,6 +941,8 @@ struct CostCtx {
     serve_site: Option<String>,
     session: String,
     entrypoint: String,
+    /// Pending spend reservation (C7), settled in `record_cost`.
+    reservation_id: Option<String>,
 }
 
 struct CostUsage<'a> {
@@ -748,6 +951,9 @@ struct CostUsage<'a> {
     prompt_tokens: u64,
     completion_tokens: u64,
     tokens_source: &'a str,
+    outcome: &'a str,
+    accepted_output: Option<String>,
+    tool_outcomes: Option<Value>,
 }
 
 fn resolve_chat_auth(
@@ -856,12 +1062,280 @@ fn ephemeral_session_id() -> String {
     )
 }
 
+fn next_replay_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    format!("rp_{}", SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
+fn set_boundary_header(h: &mut HeaderMap, boundary: Option<&str>) {
+    if let Some(b) = boundary {
+        if let Ok(v) = b.parse() {
+            h.insert("x-aria-router-redecision", v);
+        }
+    }
+}
+
+fn json_preview(body: &Value) -> Option<String> {
+    let text = body
+        .pointer("/choices/0/message/content")
+        .and_then(|v| v.as_str())
+        .or_else(|| body.pointer("/choices/0/text").and_then(|v| v.as_str()))?;
+    Some(preview(text, 200))
+}
+
+fn sse_preview(text: &str) -> Option<String> {
+    let mut out = String::new();
+    for line in text.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(data) {
+            if let Some(delta) = v
+                .pointer("/choices/0/delta/content")
+                .and_then(|v| v.as_str())
+            {
+                out.push_str(delta);
+            }
+        }
+    }
+    (!out.is_empty()).then(|| preview(&out, 200))
+}
+
+fn tool_outcomes_from(body: &Value) -> Option<Value> {
+    let calls = body.pointer("/choices/0/message/tool_calls")?;
+    Some(json!(calls
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| json!({"tool": c.pointer("/function/name").and_then(|v| v.as_str()).unwrap_or("unknown"), "ok": true}))
+        .collect::<Vec<_>>()))
+}
+
+/// Capture explicit client-side grading metadata. Absent metadata means
+/// "unscored", never zero; values are truncated previews only.
+fn evidence_seed_from(req: &ChatRequest, ctx: &CostCtx, replay_id: &str) -> EvidenceSeed {
+    let extra = &req.extra;
+    let string_field = |k: &str| extra.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let float_field = |k: &str| {
+        extra
+            .get(k)
+            .and_then(|v| v.as_f64())
+            .map(|v| v.clamp(0.0, 1.0) as f32)
+    };
+    EvidenceSeed {
+        replay_id: replay_id.to_string(),
+        session: ctx.session.clone(),
+        entrypoint: ctx.entrypoint.clone(),
+        task_category: string_field("task_category").unwrap_or_else(|| "general".into()),
+        score: float_field("stage_competence"),
+        plan_version: string_field("plan_version"),
+        rubric_version: string_field("rubric_version"),
+        continuation: float_field("continuation"),
+        tools_declared: extra.contains_key("tools"),
+        tool_outcomes: extra.get("tool_outcomes").cloned(),
+        ..EvidenceSeed::default()
+    }
+}
+
+/// Estimated cost of the forwarded traffic (not a provider balance).
+fn estimate_forward_cost(doc: &RouterDocument, req: &ChatRequest, prompt_est: u64) -> f64 {
+    let prompt = req.prompt_text();
+    let _ = prompt;
+    let completion = u64::from(req.max_tokens.unwrap_or(0));
+    doc.providers
+        .models
+        .first()
+        .and_then(|m| m.pricing.as_ref())
+        .map(|p| {
+            cost_usd(
+                prompt_est,
+                completion,
+                p.input_per_mtok.max(0.0),
+                p.output_per_mtok.max(0.0),
+            )
+        })
+        .unwrap_or(0.0)
+        .max(doc.global.services.quota.default_reserve_usd)
+}
+
+fn reserve_spend(
+    st: &AppState,
+    key_id: Option<&str>,
+    estimate: f64,
+) -> Result<Option<String>, RouterError> {
+    if !snapshot_doc(st).global.services.quota.enabled {
+        return Ok(None);
+    }
+    let Some(kid) = key_id else {
+        return Ok(None);
+    };
+    let mut rt = st.runtime.lock().unwrap();
+    let pending = rt.spend.pending_for(kid);
+    let mut keys = st.keys.lock().unwrap();
+    if let Some(remaining) = keys.spend_remaining(kid, &period_key(), pending)? {
+        if remaining < estimate {
+            return Err(RouterError::QuotaExceeded(format!(
+                "key {kid} has no remaining spend allowance"
+            )));
+        }
+    }
+    Ok(Some(rt.spend.open(Some(kid), estimate)))
+}
+
+fn settle_spend(st: &AppState, reservation_id: Option<&str>, actual: f64) {
+    let Some(id) = reservation_id else {
+        return;
+    };
+    let taken = st.runtime.lock().unwrap().spend.take(id);
+    let Some(r) = taken else {
+        return;
+    };
+    if let Some(kid) = r.key_id {
+        if let Err(e) = st
+            .keys
+            .lock()
+            .unwrap()
+            .record_spend(&kid, actual, &period_key())
+        {
+            // Never swallow a settlement failure: record it for the quota view.
+            st.runtime.lock().unwrap().record_settlement_error(&e);
+        }
+    }
+}
+
+/// Attach execution evidence to replay records and runtime state (C6), then
+/// advance the low-score protection state machine (C3).
+fn finalize_evidence(
+    st: &AppState,
+    session: &str,
+    model: &str,
+    outcome: &str,
+    accepted_output: Option<String>,
+    tool_outcomes: Option<Value>,
+) {
+    let now = now_unix();
+    let Some(seed) = st.runtime.lock().unwrap().seed(session) else {
+        return;
+    };
+    let mut ev = seed.finish(outcome, accepted_output, tool_outcomes, now);
+    ev.model = model.to_string();
+    ev.tier = aria_router_core::tier_of_model(model).to_string();
+    st.replay_log.patch_evidence(&seed.replay_id, &ev);
+    let protection_cfg = {
+        let doc = snapshot_doc(st);
+        doc.recipes.iter().find_map(|r| {
+            r.routing
+                .as_ref()
+                .and_then(|ro| ro.competence.as_ref())
+                .and_then(|c| c.protection.clone())
+        })
+    };
+    let mut rt = st.runtime.lock().unwrap();
+    rt.put_evidence(ev.clone());
+    if protection_cfg.as_ref().is_some_and(|c| c.enabled) {
+        let cfg = protection_cfg.unwrap();
+        let prev = rt.protection(session).unwrap_or_default();
+        let (next, _) = next_protection_state(
+            &prev,
+            Some(&ev.to_protection_evidence(now)),
+            &cfg,
+            &seed.task_category,
+        );
+        rt.set_protection(session, next);
+    }
+}
+
+/// Per-request setup: classify the cross-request boundary, seed evidence,
+/// reserve spend, and guarantee cleanup on an early failure.
 async fn route_and_forward(
     st: Arc<AppState>,
     req: ChatRequest,
     want_stream: bool,
     metadata: HashMap<String, String>,
+    mut ctx: CostCtx,
+) -> Result<Response, RouterError> {
+    let doc = snapshot_doc(&st);
+    let cfg = doc.global.services.redecision.clone();
+    let boundary = if cfg.enabled {
+        st.redecision
+            .observe(&ctx.session, &req.messages, req.extra.get("tools"))
+    } else {
+        RedecisionBoundary::Unknown
+    };
+    let boundary_label = if cfg.enabled {
+        boundary.as_str()
+    } else {
+        "disabled"
+    };
+    let header_value = (cfg.enabled && cfg.emit_header).then_some(boundary_label.to_string());
+    {
+        let mut rt = st.runtime.lock().unwrap();
+        rt.set_boundary(&ctx.session, boundary_label);
+        if let Some(explicit) = metadata.get("session") {
+            rt.set_boundary(explicit, boundary_label);
+        }
+    }
+    let replay_id = if doc.global.services.router_replay.enabled {
+        next_replay_id()
+    } else {
+        String::new()
+    };
+    if !replay_id.is_empty() {
+        let mut rt = st.runtime.lock().unwrap();
+        rt.set_current_replay(&ctx.session, &replay_id);
+        rt.set_seed(evidence_seed_from(&req, &ctx, &replay_id));
+    }
+    let turns = req.messages.iter().filter(|m| m.role == "user").count() as u32;
+    let prompt_est = estimate_tokens(&req.prompt_text());
+    ctx.reservation_id = reserve_spend(
+        &st,
+        ctx.key_id.as_deref(),
+        estimate_forward_cost(&doc, &req, prompt_est),
+    )?;
+    let result = route_and_forward_inner(
+        st.clone(),
+        req,
+        want_stream,
+        metadata,
+        ctx.clone(),
+        header_value,
+        turns,
+        prompt_est,
+        replay_id,
+    )
+    .await;
+    if result.is_err() {
+        if let Some(id) = ctx.reservation_id.as_deref() {
+            st.runtime.lock().unwrap().spend.take(id);
+        }
+        finalize_evidence(
+            &st,
+            &ctx.session,
+            "",
+            "error",
+            None,
+            Some(json!([{"status": "request-failed"}])),
+        );
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn route_and_forward_inner(
+    st: Arc<AppState>,
+    req: ChatRequest,
+    want_stream: bool,
+    metadata: HashMap<String, String>,
     ctx: CostCtx,
+    boundary_header: Option<String>,
+    turns_in_request: u32,
+    prompt_est: u64,
+    replay_id: String,
 ) -> Result<Response, RouterError> {
     {
         let doc = snapshot_doc(&st);
@@ -872,12 +1346,11 @@ async fn route_and_forward(
         st.ratelimit
             .check(&bucket, &doc.global.services.ratelimit)?;
     }
-    let turns_in_request = req.messages.iter().filter(|m| m.role == "user").count() as u32;
-    let prompt_est = estimate_tokens(&req.prompt_text());
     let last_user = req.last_user_text();
     let session = ctx.session.clone();
     let route_t0 = std::time::Instant::now();
-    let (mut decision, mut fwd, extra, hdrs) = route_request(&st, req, &metadata).await?;
+    let (mut decision, mut fwd, extra, hdrs) =
+        route_request_with_context(&st, req, &metadata, &ctx.session, &replay_id).await?;
     if decision.routing_latency_ms.is_none() {
         decision.routing_latency_ms = Some(route_t0.elapsed().as_secs_f64() * 1000.0);
     }
@@ -892,8 +1365,9 @@ async fn route_and_forward(
             &doc.global.stores.semantic_cache,
         ) {
             decision.semantic_cache_hit = Some(true);
-            record(&st, decision.clone());
+            record(&st, decision.clone(), &session);
             let completion = estimate_tokens(&cached.to_string());
+            let accepted = json_preview(&cached);
             record_cost(
                 &st,
                 &ctx,
@@ -904,17 +1378,23 @@ async fn route_and_forward(
                     prompt_tokens: prompt_est,
                     completion_tokens: completion,
                     tokens_source: "estimate",
+                    outcome: "ok",
+                    accepted_output: accepted,
+                    tool_outcomes: None,
                 },
             );
             let mut res = Json(cached).into_response();
             attach_route_headers(res.headers_mut(), &decision);
+            set_boundary_header(res.headers_mut(), boundary_header.as_deref());
             return Ok(res);
         }
     }
-    record(&st, decision.clone());
+    record(&st, decision.clone(), &session);
     match extra {
         Some(fast) => {
             let completion = estimate_tokens(&fast.to_string());
+            let accepted = json_preview(&fast);
+            let tools = tool_outcomes_from(&fast);
             record_cost(
                 &st,
                 &ctx,
@@ -925,11 +1405,15 @@ async fn route_and_forward(
                     prompt_tokens: prompt_est,
                     completion_tokens: completion,
                     tokens_source: "estimate",
+                    outcome: "ok",
+                    accepted_output: accepted,
+                    tool_outcomes: tools,
                 },
             );
             maybe_store_semantic(&st, &decision, &last_user, &fast);
             let mut res = Json(fast).into_response();
             attach_route_headers(res.headers_mut(), &decision);
+            set_boundary_header(res.headers_mut(), boundary_header.as_deref());
             Ok(res)
         }
         None => {
@@ -951,6 +1435,7 @@ async fn route_and_forward(
                     .body(body)
                     .unwrap();
                 attach_route_headers(res.headers_mut(), &decision);
+                set_boundary_header(res.headers_mut(), boundary_header.as_deref());
                 Ok(res)
             } else {
                 let body = forward(&doc, &decision.model, &fwd, &hdrs, &st.pool).await?;
@@ -968,6 +1453,8 @@ async fn route_and_forward(
                     &[],
                 );
                 let (pt, ct, src) = parse_json_usage(&body, prompt_est);
+                let accepted = json_preview(&body);
+                let tools = tool_outcomes_from(&body);
                 record_cost(
                     &st,
                     &ctx,
@@ -978,10 +1465,14 @@ async fn route_and_forward(
                         prompt_tokens: pt,
                         completion_tokens: ct,
                         tokens_source: src,
+                        outcome: "ok",
+                        accepted_output: accepted,
+                        tool_outcomes: tools,
                     },
                 );
                 let mut res = Json(body).into_response();
                 attach_route_headers(res.headers_mut(), &decision);
+                set_boundary_header(res.headers_mut(), boundary_header.as_deref());
                 Ok(res)
             }
         }
@@ -1051,6 +1542,7 @@ impl SseCostStream {
             .record(self.inner.model(), self.inner.elapsed_ms(), ok);
         let text = self.inner.accumulated();
         let (pt, ct, src) = parse_sse_usage(&text, self.prompt_est);
+        let outcome = if ok { "ok" } else { "interrupted" };
         record_cost(
             &self.st,
             &self.ctx,
@@ -1061,6 +1553,13 @@ impl SseCostStream {
                 prompt_tokens: pt,
                 completion_tokens: ct,
                 tokens_source: src,
+                outcome,
+                accepted_output: sse_preview(&text),
+                tool_outcomes: if ok {
+                    None
+                } else {
+                    Some(json!([{"status": "stream-interrupted"}]))
+                },
             },
         );
     }
@@ -1174,6 +1673,20 @@ fn record_cost(st: &AppState, ctx: &CostCtx, decision: &RouteDecision, usage: Co
         priced,
     };
     st.cost.lock().unwrap().record(ev);
+    // C6: execution evidence is attached only here (all completion paths), so
+    // replay-disabled requests never pay for previews or JSONL patches.
+    if !usage.outcome.is_empty() {
+        finalize_evidence(
+            st,
+            &ctx.session,
+            &decision.model,
+            usage.outcome,
+            usage.accepted_output.clone(),
+            usage.tool_outcomes.clone(),
+        );
+    }
+    // C7: settle with the actual traffic estimate (also on SSE interruption).
+    settle_spend(st, ctx.reservation_id.as_deref(), cost);
 }
 
 fn attach_route_headers(h: &mut HeaderMap, d: &RouteDecision) {
@@ -1253,7 +1766,7 @@ fn attach_route_headers(h: &mut HeaderMap, d: &RouteDecision) {
     }
 }
 
-fn record(st: &AppState, d: RouteDecision) {
+fn record(st: &AppState, d: RouteDecision, session: &str) {
     *st.last_route.lock().unwrap() = Some(d.clone());
     let mut r = st.replay.lock().unwrap();
     r.push(d.clone());
@@ -1262,22 +1775,33 @@ fn record(st: &AppState, d: RouteDecision) {
     }
     let doc = snapshot_doc(st);
     let cfg = doc.global.services.router_replay.clone();
+    let rt = st.runtime.lock().unwrap();
+    let replay_id = rt.current_replay(session).unwrap_or_default();
+    let boundary = rt.boundary(session);
+    let seed = rt.seed(session);
+    drop(rt);
     let selected_group = aria_router_core::tier_of_model(&d.model).to_string();
     st.replay_log.push(
         ReplayRecord {
-            id: d.replay_id.clone().unwrap_or_default(),
+            id: replay_id,
             decision: d,
             signals_summary: None,
             projections: None,
             emits: None,
             retention: None,
-            session: None,
+            session: (!session.is_empty()).then(|| session.to_string()),
             prompt_preview: None,
-            task_category: None,
+            task_category: seed.as_ref().map(|s| s.task_category.clone()),
             selected_group: Some(selected_group),
             tool_outcomes: None,
             accepted_output: None,
-            stage_competence: None,
+            stage_competence: seed.as_ref().and_then(|s| s.score),
+            entrypoint: seed.as_ref().map(|s| s.entrypoint.clone()),
+            plan_version: seed.as_ref().and_then(|s| s.plan_version.clone()),
+            rubric_version: seed.as_ref().and_then(|s| s.rubric_version.clone()),
+            continuation: seed.as_ref().and_then(|s| s.continuation),
+            evidence_outcome: None,
+            redecision_boundary: boundary,
         },
         &cfg,
     );
@@ -1298,6 +1822,26 @@ pub async fn route_request(
     st: &AppState,
     req: ChatRequest,
     metadata: &HashMap<String, String>,
+) -> Result<
+    (
+        RouteDecision,
+        ChatRequest,
+        Option<Value>,
+        Vec<(String, String)>,
+    ),
+    RouterError,
+> {
+    // Direct callers (SDK helpers, tests) keep the historical behaviour: no
+    // request-scoped evidence / boundary context.
+    route_request_with_context(st, req, metadata, "", "").await
+}
+
+async fn route_request_with_context(
+    st: &AppState,
+    req: ChatRequest,
+    metadata: &HashMap<String, String>,
+    request_session: &str,
+    replay_id: &str,
 ) -> Result<
     (
         RouteDecision,
@@ -1344,6 +1888,38 @@ pub async fn route_request(
             .unwrap_or(true),
     };
     let memory_on = doc.global.stores.memory.enabled;
+    // C1: explicit cross-request boundaries. A single request still runs one
+    // decisioner; only the *frozen* decision is invalidated here.
+    {
+        let cfg = &doc.global.services.redecision;
+        let runtime_key = if request_session.is_empty() {
+            session.as_str()
+        } else {
+            request_session
+        };
+        let classified = st.runtime.lock().unwrap().boundary(runtime_key);
+        if cfg.enabled {
+            match classified.as_deref() {
+                Some("unknown") => {
+                    // Unrecognisable history: fail closed, never reuse a frozen decision.
+                    st.decision_cache.clear_session(&session);
+                    st.memory.clear(&session);
+                }
+                Some("context-compaction") if cfg.context_compaction => {
+                    st.decision_cache.clear_session(&session);
+                    st.memory.clear(&session);
+                }
+                Some("tool-continuation") if cfg.tool_continuation => {
+                    st.decision_cache.clear_session(&session);
+                }
+                Some("new-user-message") if cfg.new_user_message => {
+                    st.decision_cache.clear_session(&session);
+                }
+                // `None` = direct callers (tests / SDK helpers): legacy behaviour.
+                _ => {}
+            }
+        }
+    }
     if prefix_reuse && !session.is_empty() {
         let compacted = st
             .decision_cache
@@ -1393,10 +1969,17 @@ pub async fn route_request(
             }
         }
     }
+    let runtime_key = if request_session.is_empty() {
+        session.as_str()
+    } else {
+        request_session
+    };
     let (mut decision, fwd, extra, hdrs) = match ep.router {
-        RouterKind::Semantic => route_semantic(st, &doc, &recipe, req, metadata).await,
+        RouterKind::Semantic => {
+            route_semantic(st, &doc, &recipe, req, metadata, runtime_key, replay_id).await
+        }
         RouterKind::Agent => route_agent(st, &doc, &recipe, req, metadata).await,
-        RouterKind::AfmD => route_afm_d(st, &doc, &recipe, req, metadata).await,
+        RouterKind::AfmD => route_afm_d(st, &doc, &recipe, req, metadata, runtime_key).await,
     }?;
     if prefix_reuse && !session.is_empty() {
         st.decision_cache
@@ -1426,6 +2009,8 @@ async fn route_semantic(
     recipe: &Recipe,
     req: ChatRequest,
     metadata: &HashMap<String, String>,
+    runtime_key: &str,
+    replay_id: &str,
 ) -> Result<
     (
         RouteDecision,
@@ -1543,25 +2128,40 @@ async fn route_semantic(
     if let Some(sticky) = sticky_override {
         model = sticky;
     }
+    // C3: low-score protection is a Preference-layer signal. `eligible` has
+    // already been hard-filtered (Location / auth / modality), so protection
+    // can only reorder that pool — it can never widen it.
+    let mut protected = false;
+    if let Some(state) = st.runtime.lock().unwrap().protection(runtime_key) {
+        if state.active {
+            protected = true;
+            if let Some(stronger) = apply_protection(&model, &eligible, &state) {
+                model = stronger;
+            }
+        }
+    }
     // Competence-aware downgrade: if the task is simple enough and
     // historical competence is above the floor, prefer the cheapest eligible tier.
     // `simple_prob` is approximated by the strongest projection score; `competence`
     // comes from the per-session tracker (None ⇒ unknown ⇒ no downgrade).
-    if let Some(comp_cfg) = &routing.competence {
-        let simple_prob = proj
-            .values
-            .values()
-            .filter_map(|v| v.as_f64())
-            .fold(0.0_f64, f64::max) as f32;
-        let competence = st.competence.score(&session);
-        if let Some(down) = aria_router_decision::apply_competence(
-            &model,
-            &eligible,
-            simple_prob,
-            competence,
-            comp_cfg,
-        ) {
-            model = down;
+    // Active protection forbids downgrading until the problem is released.
+    if !protected {
+        if let Some(comp_cfg) = &routing.competence {
+            let simple_prob = proj
+                .values
+                .values()
+                .filter_map(|v| v.as_f64())
+                .fold(0.0_f64, f64::max) as f32;
+            let competence = st.competence.score(&session);
+            if let Some(down) = aria_router_decision::apply_competence(
+                &model,
+                &eligible,
+                simple_prob,
+                competence,
+                comp_cfg,
+            ) {
+                model = down;
+            }
         }
     }
     // Decision-model extension point: an external decision service
@@ -1642,7 +2242,17 @@ async fn route_semantic(
     match apply_request(&st.plugins, &plugins, req_for_plugins)? {
         PluginOutcome::FastResponse(v) => {
             let d = decision(model.clone(), algo, dname, cache_response);
-            push_rich_replay(st, &d, &signals_summary, &proj, &emits, &retention, &req);
+            push_rich_replay(
+                st,
+                &d,
+                &signals_summary,
+                &proj,
+                &emits,
+                &retention,
+                &req,
+                runtime_key,
+                replay_id,
+            );
             Ok((
                 d,
                 ChatRequest {
@@ -1659,7 +2269,17 @@ async fn route_semantic(
         }
         PluginOutcome::Continue(fwd) => {
             let d = decision(model.clone(), algo, dname, cache_response);
-            push_rich_replay(st, &d, &signals_summary, &proj, &emits, &retention, &req);
+            push_rich_replay(
+                st,
+                &d,
+                &signals_summary,
+                &proj,
+                &emits,
+                &retention,
+                &req,
+                runtime_key,
+                replay_id,
+            );
             Ok((
                 d,
                 {
@@ -1674,6 +2294,7 @@ async fn route_semantic(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_rich_replay(
     st: &AppState,
     d: &RouteDecision,
@@ -1682,35 +2303,66 @@ fn push_rich_replay(
     emits: &[aria_router_config::EmitDirective],
     retention: &Option<aria_router_config::RetentionDirective>,
     req: &ChatRequest,
+    runtime_key: &str,
+    replay_id: &str,
 ) {
     let doc = snapshot_doc(st);
     let cfg = &doc.global.services.router_replay;
+    if !cfg.enabled {
+        return;
+    }
+    let rt = st.runtime.lock().unwrap();
+    let rid = if replay_id.is_empty() {
+        rt.current_replay(runtime_key).unwrap_or_default()
+    } else {
+        replay_id.to_string()
+    };
+    let seed = rt.seed(runtime_key);
+    let boundary = rt.boundary(runtime_key);
+    drop(rt);
+    let id = if rid.is_empty() {
+        String::new()
+    } else {
+        format!("{rid}:route")
+    };
     st.replay_log.push(
         ReplayRecord {
-            id: String::new(),
+            id,
             decision: d.clone(),
             signals_summary: Some(signals.clone()),
             projections: serde_json::to_value(&proj.values).ok(),
             emits: serde_json::to_value(emits).ok(),
             retention: retention.clone(),
             session: d.session.clone(),
-            prompt_preview: Some(req.last_user_text().chars().take(200).collect()),
-            task_category: None,
+            prompt_preview: Some(preview(&req.last_user_text(), 200)),
+            // Routing-time evidence: execution evidence is patched in later by
+            // finalize_evidence, once the response is known.
+            task_category: seed
+                .as_ref()
+                .map(|s| s.task_category.clone())
+                .or_else(|| Some(d.decision.clone())),
             selected_group: Some(aria_router_core::tier_of_model(&d.model).to_string()),
-            tool_outcomes: None,
+            tool_outcomes: seed.as_ref().and_then(|s| s.tool_outcomes.clone()),
             accepted_output: None,
-            stage_competence: None,
+            stage_competence: seed.as_ref().and_then(|s| s.score),
+            entrypoint: seed.as_ref().map(|s| s.entrypoint.clone()),
+            plan_version: seed.as_ref().and_then(|s| s.plan_version.clone()),
+            rubric_version: seed.as_ref().and_then(|s| s.rubric_version.clone()),
+            continuation: seed.as_ref().and_then(|s| s.continuation),
+            evidence_outcome: None,
+            redecision_boundary: boundary,
         },
         cfg,
     );
 }
 
 async fn route_afm_d(
-    _st: &AppState,
+    st: &AppState,
     doc: &RouterDocument,
     recipe: &Recipe,
     req: ChatRequest,
     _metadata: &HashMap<String, String>,
+    runtime_key: &str,
 ) -> Result<
     (
         RouteDecision,
@@ -1745,6 +2397,15 @@ async fn route_afm_d(
     // handed back here is always usable.
     let mut decision = decisioner.route(task).await?;
     decision.layer = "afm-d".into();
+    // C2: fold the three normalized answers into execution evidence. The
+    // decision itself stays a single typed RouteDecision.
+    if let Some(answers) = aria_router_afm_d::AfmDAnswers::from_reason(&decision.reason) {
+        st.runtime.lock().unwrap().amend_seed(
+            runtime_key,
+            Some(answers.stage_competence),
+            Some(answers.continuation),
+        );
+    }
     let mut fwd = req;
     fwd.model = decision.model.clone();
     Ok((decision, fwd, None, vec![]))
@@ -1865,7 +2526,9 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = match &self.0 {
             RouterError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-            RouterError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
+            RouterError::RateLimited(_) | RouterError::QuotaExceeded(_) => {
+                StatusCode::TOO_MANY_REQUESTS
+            }
             RouterError::FailClosed(_) => StatusCode::FORBIDDEN,
             RouterError::Unsupported(_) => StatusCode::NOT_IMPLEMENTED,
             RouterError::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
@@ -2634,6 +3297,7 @@ global:
                 tool_outcomes: None,
                 accepted_output: None,
                 stage_competence: None,
+                ..Default::default()
             },
             &cfg,
         );
@@ -2653,6 +3317,7 @@ global:
                 tool_outcomes: None,
                 accepted_output: None,
                 stage_competence: None,
+                ..Default::default()
             },
             &cfg,
         );
@@ -5809,7 +6474,7 @@ global:
         assert_eq!(last_route_json(&st), json!({}));
 
         for _ in 0..260 {
-            record(&st, RouteDecision::bypass("local/general"));
+            record(&st, RouteDecision::bypass("local/general"), "test-session");
         }
         assert_eq!(st.replay.lock().unwrap().len(), 256);
         assert_eq!(last_route_json(&st)["model"], "local/general");
@@ -5966,6 +6631,7 @@ global:
                 tool_outcomes: None,
                 accepted_output: None,
                 stage_competence: None,
+                ..Default::default()
             },
             &cfg,
         );
@@ -6474,5 +7140,678 @@ global:
             .await
             .unwrap_err();
         assert!(err.to_string().contains("decision_ext"), "{err}");
+    }
+
+    fn evidence_body(text: &str, score: f64, continuation: f64) -> Value {
+        json!({
+            "model": "ariacompute/semantic-auto",
+            "messages": [{"role": "user", "content": text}],
+            "stage_competence": score,
+            "plan_version": "plan-1",
+            "rubric_version": "rubric-1",
+            "task_category": "draft",
+            "continuation": continuation,
+            "tool_outcomes": [{"tool": "echo", "ok": true}]
+        })
+    }
+
+    #[test]
+    fn evidence_preview_helpers_are_bounded_and_explicit() {
+        let body = json!({"choices": [{"message": {"content": "hello", "tool_calls": [{"function": {"name": "echo"}}]}}]});
+        assert_eq!(json_preview(&body).as_deref(), Some("hello"));
+        assert_eq!(tool_outcomes_from(&body).unwrap()[0]["tool"], "echo");
+        assert!(json_preview(&json!({})).is_none());
+        assert!(tool_outcomes_from(&json!({})).is_none());
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"ab\"}}]}\n\ndata: [DONE]\n\n";
+        assert_eq!(sse_preview(sse).as_deref(), Some("ab"));
+        assert!(sse_preview("data: [DONE]\n\n").is_none());
+        let mut h = HeaderMap::new();
+        set_boundary_header(&mut h, Some("same-turn"));
+        assert_eq!(h["x-aria-router-redecision"], "same-turn");
+        let mut h2 = HeaderMap::new();
+        set_boundary_header(&mut h2, None);
+        assert!(h2.get("x-aria-router-redecision").is_none());
+    }
+
+    #[tokio::test]
+    async fn c1_c6_c5_boundaries_production_evidence_and_model_performance() {
+        use crate::policy::StageEvidence;
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+        let mgmt = mgmt_router(st.clone());
+
+        // Empty state: no evidence must be rendered as "no data", not zero.
+        let (_, _, empty) =
+            call(&mgmt, "GET", "/v1/router/cost/model-performance", None, &[]).await;
+        assert_eq!(empty["has_evidence"], false);
+        assert_eq!(empty["by_model"].as_array().unwrap().len(), 0);
+
+        let (status, headers, v) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(evidence_body("please explain rust", 0.42, 0.9)),
+            &[("x-aria-session", "s-ev")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert_eq!(v["choices"][0]["message"]["content"], "ok");
+        assert_eq!(
+            headers["x-aria-router-redecision"].to_str().unwrap(),
+            "new-user-message"
+        );
+
+        // Same turn reuse, tool continuation, compaction: three explicit boundaries.
+        let (_, h2, _) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(evidence_body("please explain rust", 0.42, 0.9)),
+            &[("x-aria-session", "s-ev")],
+        )
+        .await;
+        assert_eq!(h2["x-aria-router-redecision"], "same-turn");
+        let mut with_tool = evidence_body("please explain rust", 0.42, 0.9);
+        with_tool["messages"] = json!([
+            {"role": "user", "content": "please explain rust"},
+            {"role": "tool", "content": "tool result"}
+        ]);
+        let (_, h3, _) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(with_tool),
+            &[("x-aria-session", "s-ev")],
+        )
+        .await;
+        assert_eq!(h3["x-aria-router-redecision"], "tool-continuation");
+        let (_, h4, _) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(evidence_body("compacted", 0.42, 0.9)),
+            &[("x-aria-session", "s-ev")],
+        )
+        .await;
+        assert_eq!(h4["x-aria-router-redecision"], "context-compaction");
+
+        // Production replay records carry queryable execution evidence.
+        let (_, _, replay) = call(&mgmt, "GET", "/v1/router/replay?n=20", None, &[]).await;
+        let records = replay["records"].as_array().unwrap();
+        let evidence = records
+            .iter()
+            .find(|r| {
+                r["evidence_outcome"] == "ok" && r["redecision_boundary"] == "new-user-message"
+            })
+            .expect("production evidence was not patched");
+        assert_eq!(evidence["task_category"], "draft");
+        assert!((evidence["stage_competence"].as_f64().unwrap() - 0.42).abs() < 1e-5);
+        assert_eq!(evidence["accepted_output"], "ok");
+        assert_eq!(evidence["entrypoint"], "ariacompute/semantic-auto");
+        assert_eq!(evidence["plan_version"], "plan-1");
+        assert_eq!(evidence["rubric_version"], "rubric-1");
+        assert_eq!(evidence["redecision_boundary"], "new-user-message");
+        assert_eq!(evidence["tool_outcomes"][0]["tool"], "echo");
+        assert_eq!(evidence["selected_group"], "unknown");
+
+        let (_, _, perf) = call(&mgmt, "GET", "/v1/router/cost/model-performance", None, &[]).await;
+        assert_eq!(perf["has_evidence"], true);
+        assert_eq!(perf["by_model"].as_array().unwrap().len(), 1);
+        assert!(perf["by_model"][0]["stage_score"].is_number());
+        assert!(perf["estimate_note"]
+            .as_str()
+            .unwrap()
+            .contains("heuristic"));
+
+        // Cross-entrypoint evidence is excluded from trust suggestions.
+        let other = StageEvidence {
+            session: "s-other".into(),
+            entrypoint: "other-entrypoint".into(),
+            score: Some(0.9),
+            complete: true,
+            outcome: "ok".into(),
+            ..Default::default()
+        };
+        st.runtime.lock().unwrap().put_evidence(other);
+        assert_eq!(st.runtime.lock().unwrap().all_evidence().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn c1_disabled_or_unemitted_boundary_and_replay_off() {
+        let backend = mock_upstream().await;
+        let raw = tiny_yaml(&backend).replace(
+            "global:\n  require_api_key: false",
+            "global:\n  require_api_key: false\n  services:\n    redecision:\n      enabled: false\n",
+        );
+        let doc = RouterDocument::from_yaml_str(&raw).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+        let (status, headers, v) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(evidence_body("please explain", 0.5, 0.9)),
+            &[("x-aria-session", "s-off")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert!(headers.get("x-aria-router-redecision").is_none());
+
+        let raw2 = tiny_yaml(&backend).replace(
+            "global:\n  require_api_key: false",
+            "global:\n  require_api_key: false\n  services:\n    redecision:\n      emit_header: false\n    router_replay:\n      enabled: false\n",
+        );
+        let doc2 = RouterDocument::from_yaml_str(&raw2).unwrap();
+        let (st2, _dir2) = isolated_state(doc2);
+        let app2 = data_router(st2.clone());
+        let (status2, headers2, _) = call(
+            &app2,
+            "POST",
+            "/v1/chat/completions",
+            Some(evidence_body("please explain", 0.5, 0.9)),
+            &[("x-aria-session", "s-noem")],
+        )
+        .await;
+        assert_eq!(status2, StatusCode::OK);
+        assert!(headers2.get("x-aria-router-redecision").is_none());
+        let mgmt = mgmt_router(st2.clone());
+        let (_, _, replay) = call(&mgmt, "GET", "/v1/router/replay", None, &[]).await;
+        assert_eq!(replay["records"].as_array().unwrap().len(), 0);
+        let (_, _, perf) = call(&mgmt, "GET", "/v1/router/cost/model-performance", None, &[]).await;
+        assert_eq!(perf["has_evidence"], false);
+    }
+
+    fn protection_yaml(backend: &str) -> String {
+        format!(
+            r#"
+version: v0.3
+providers:
+  defaults:
+    default_model: tier/small
+  models:
+    - name: tier/small
+      provider_model_id: echo-small
+      tier: small
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: {backend}
+    - name: tier/large
+      provider_model_id: echo-large
+      tier: large
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: {backend}
+entrypoints:
+  - model_names: [ariacompute/semantic-auto]
+    router: semantic
+    recipe: prot
+recipes:
+  - name: prot
+    router: semantic
+    routing:
+      strategy: priority
+      competence:
+        enabled: false
+        protection: {{enabled: true, floor: 0.4, continuation_release: 0.5}}
+      signals:
+        keywords:
+          - name: needs_explain
+            operator: OR
+            keywords: ["explain"]
+      decisions:
+        - name: explanatory
+          priority: 100
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: needs_explain
+          modelRefs:
+            - model: tier/small
+            - model: tier/large
+          algorithm: static
+global:
+  require_api_key: false
+"#
+        )
+    }
+
+    #[tokio::test]
+    async fn c3_low_score_protection_triggers_and_releases() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&protection_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st.clone());
+        let mut models = Vec::new();
+        for (i, (score, cont)) in [(0.2, 0.9), (0.9, 0.9), (0.9, 0.1), (0.9, 0.9)]
+            .iter()
+            .enumerate()
+        {
+            let body = evidence_body(&format!("please explain turn {i}"), *score, *cont);
+            let (status, headers, v) = call(
+                &app,
+                "POST",
+                "/v1/chat/completions",
+                Some(body),
+                &[("x-aria-session", "s-prot")],
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{v}");
+            models.push(headers["x-aria-router-model"].to_str().unwrap().to_string());
+        }
+        assert_eq!(
+            models,
+            vec!["tier/small", "tier/large", "tier/large", "tier/small"]
+        );
+        assert!(
+            !st.runtime
+                .lock()
+                .unwrap()
+                .protection("s-prot")
+                .unwrap()
+                .active
+        );
+    }
+
+    fn trust_yaml(backend: &str) -> String {
+        tiny_yaml(backend).replace(
+            "global:\n  require_api_key: false",
+            "global:\n  require_api_key: false\n  services:\n    trust:\n      enabled: true\n      min_evidence: 2\n      min_confidence: 0.3\n      promote_at: 0.8\n      demote_below: 0.4\n",
+        )
+    }
+
+    #[tokio::test]
+    async fn c4_trust_evidence_gate_explicit_publish_and_offline_estimate() {
+        use crate::policy::StageEvidence;
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&trust_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let mgmt = mgmt_router(st.clone());
+        let before = st.doc.lock().unwrap().to_yaml().unwrap();
+
+        let (_, _, status) = call(&mgmt, "GET", "/v1/router/trust", None, &[]).await;
+        assert_eq!(status["enabled"], true);
+        assert_eq!(status["online_config_unchanged"], true);
+        let (_, _, empty) = call(
+            &mgmt,
+            "POST",
+            "/v1/router/trust/suggest",
+            Some(json!({})),
+            &[],
+        )
+        .await;
+        assert_eq!(empty["status"], "insufficient_evidence");
+        assert!(empty["draft"].is_null());
+
+        // Cross-entrypoint evidence never counts towards the gate.
+        let other = StageEvidence {
+            session: "s-x".into(),
+            entrypoint: "another".into(),
+            score: Some(0.9),
+            complete: true,
+            outcome: "ok".into(),
+            ..Default::default()
+        };
+        st.runtime.lock().unwrap().put_evidence(other);
+        let (_, _, cross) = call(
+            &mgmt,
+            "POST",
+            "/v1/router/trust/suggest",
+            Some(json!({})),
+            &[],
+        )
+        .await;
+        assert_eq!(cross["status"], "insufficient_evidence");
+
+        for i in 0..2 {
+            let e = StageEvidence {
+                session: format!("s-{i}"),
+                replay_id: format!("r-{i}"),
+                entrypoint: "ariacompute/semantic-auto".into(),
+                model: "local/general".into(),
+                tier: "unknown".into(),
+                task_category: "draft".into(),
+                score: Some(0.9),
+                complete: true,
+                outcome: "ok".into(),
+                ts_unix: now_unix(),
+                ..Default::default()
+            };
+            st.runtime.lock().unwrap().put_evidence(e);
+        }
+        let (_, _, ready) = call(
+            &mgmt,
+            "POST",
+            "/v1/router/trust/suggest",
+            Some(json!({})),
+            &[],
+        )
+        .await;
+        assert_eq!(ready["status"], "ready");
+        assert_eq!(ready["online_routing_unchanged"], true);
+        let draft_id = ready["draft"]["id"].as_str().unwrap().to_string();
+        assert_eq!(ready["draft"]["tier"], "aggressive");
+
+        let (bad, _, v) = call(
+            &mgmt,
+            "POST",
+            "/v1/router/trust/publish",
+            Some(json!({"draft_id": draft_id})),
+            &[],
+        )
+        .await;
+        assert_eq!(bad, StatusCode::BAD_REQUEST);
+        assert!(v["error"]["message"].as_str().unwrap().contains("confirm"));
+        let (ok, _, pub_) = call(
+            &mgmt,
+            "POST",
+            "/v1/router/trust/publish",
+            Some(json!({"draft_id": draft_id, "confirm": true})),
+            &[],
+        )
+        .await;
+        assert_eq!(ok, StatusCode::OK);
+        assert_eq!(pub_["published"]["version"], 1);
+        assert_eq!(pub_["online_routing_unchanged"], true);
+        let (again, _, _) = call(
+            &mgmt,
+            "POST",
+            "/v1/router/trust/publish",
+            Some(json!({"draft_id": draft_id, "confirm": true})),
+            &[],
+        )
+        .await;
+        assert_eq!(again, StatusCode::BAD_REQUEST);
+        assert_eq!(st.doc.lock().unwrap().to_yaml().unwrap(), before);
+
+        // Offline estimate: no routing, no forwarding, no mutation.
+        let cfg = st.doc.lock().unwrap().global.services.router_replay.clone();
+        st.replay_log.push(
+            ReplayRecord {
+                id: "r-est".into(),
+                decision: RouteDecision::bypass("local/general"),
+                ..Default::default()
+            },
+            &cfg,
+        );
+        let (s, _, est) = call(
+            &mgmt,
+            "POST",
+            "/v1/router/replay/r-est/reroute?estimate=true",
+            Some(json!({})),
+            &[],
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(est["estimate"], true);
+        assert_eq!(est["online_routing_unchanged"], true);
+        assert_eq!(est["published_trust"]["version"], 1);
+        assert_eq!(st.doc.lock().unwrap().to_yaml().unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn c7_quota_reserves_settles_and_fails_distinctly() {
+        let backend = mock_upstream().await;
+        let raw = tiny_yaml_priced(&backend, false).replace(
+            "global:\n  require_api_key: false",
+            "global:\n  require_api_key: false\n  services:\n    quota:\n      enabled: true\n      default_reserve_usd: 0.0001\n",
+        );
+        let doc = RouterDocument::from_yaml_str(&raw).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let created = st.keys.lock().unwrap().create("quota").unwrap();
+        let mgmt = mgmt_router(st.clone());
+        let uri = format!("/v1/router/keys/{}/spend", created.id);
+        let (s, _, v) = call(
+            &mgmt,
+            "PUT",
+            &uri,
+            Some(json!({"limit_usd": 0.000001, "period": "once"})),
+            &[],
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let app = data_router(st.clone());
+        let auth = format!("Bearer {}", created.secret);
+        let body = json!({
+            "model": "ariacompute/semantic-auto",
+            "messages": [{"role": "user", "content": "please explain"}]
+        });
+        let (blocked, _, err) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(body.clone()),
+            &[("authorization", auth.as_str())],
+        )
+        .await;
+        assert_eq!(blocked, StatusCode::TOO_MANY_REQUESTS);
+        assert!(err["error"]["type"]
+            .as_str()
+            .unwrap()
+            .contains("QuotaExceeded"));
+        assert!(
+            !err.to_string().contains("0.000001"),
+            "quota amount must not be logged"
+        );
+        assert_eq!(st.runtime.lock().unwrap().spend.len(), 0);
+
+        let (_, _, _) = call(
+            &mgmt,
+            "PUT",
+            &uri,
+            Some(json!({"limit_usd": 10.0, "group": "team"})),
+            &[],
+        )
+        .await;
+        let (ok, _, _) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(body),
+            &[("authorization", auth.as_str())],
+        )
+        .await;
+        assert_eq!(ok, StatusCode::OK);
+        assert_eq!(st.runtime.lock().unwrap().spend.len(), 0);
+        let (_, _, view) = call(&mgmt, "GET", &uri, None, &[]).await;
+        assert!(view["used_usd"].as_f64().unwrap() > 0.0);
+        assert_eq!(view["group"], "team");
+    }
+
+    #[tokio::test]
+    async fn quota_edge_paths_and_settlement_error_observability() {
+        let backend = mock_upstream().await;
+        let raw = tiny_yaml(&backend).replace(
+            "global:\n  require_api_key: false",
+            "global:\n  require_api_key: false\n  services:\n    quota:\n      enabled: true\n",
+        );
+        let (st, _dir) = isolated_state(RouterDocument::from_yaml_str(&raw).unwrap());
+        // No key: no reservation.
+        assert_eq!(reserve_spend(&st, None, 0.01).unwrap(), None);
+        // Key without a spend limit: accounting only, never blocking.
+        let key = st.keys.lock().unwrap().create("unlimited").unwrap();
+        let id = reserve_spend(&st, Some(&key.id), 0.01).unwrap().unwrap();
+        settle_spend(&st, Some(&id), 0.01);
+        // Unknown reservation / reservation without a key are harmless.
+        settle_spend(&st, Some("spend_missing"), 1.0);
+        let no_key = st.runtime.lock().unwrap().spend.open(None, 0.1);
+        settle_spend(&st, Some(&no_key), 0.1);
+        assert_eq!(st.runtime.lock().unwrap().spend.len(), 0);
+
+        // A settlement failure is recorded, not swallowed or logged with amounts.
+        let bogus = {
+            let mut rt = st.runtime.lock().unwrap();
+            rt.spend.open(Some("deleted-key"), 0.1)
+        };
+        settle_spend(&st, Some(&bogus), 0.1);
+        let mgmt = mgmt_router(st.clone());
+        let (status, _, view) = call(&mgmt, "GET", "/v1/router/quota", None, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(view["enabled"], true);
+        assert_eq!(view["pending_reservations"], 0);
+        assert_eq!(view["settlement_errors"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_forward_releases_its_spend_reservation() {
+        let raw = tiny_yaml("http://127.0.0.1:9").replace(
+            "global:\n  require_api_key: false",
+            "global:\n  require_api_key: false\n  services:\n    quota:\n      enabled: true\n",
+        );
+        let (st, _dir) = isolated_state(RouterDocument::from_yaml_str(&raw).unwrap());
+        let key = st.keys.lock().unwrap().create("failing").unwrap();
+        let ctx = CostCtx {
+            user: "u".into(),
+            key_id: Some(key.id.clone()),
+            key_name: None,
+            identity: "u".into(),
+            serve_user_id: None,
+            serve_email: None,
+            serve_site: None,
+            session: "s-fail".into(),
+            entrypoint: "ariacompute/semantic-auto".into(),
+            reservation_id: None,
+        };
+        let err = route_and_forward(
+            st.clone(),
+            text_req("ariacompute/semantic-auto"),
+            false,
+            HashMap::new(),
+            ctx,
+        )
+        .await
+        .unwrap_err();
+        assert!(!err.to_string().is_empty());
+        assert_eq!(st.runtime.lock().unwrap().spend.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn redecision_unknown_and_tool_continuation_clear_frozen_decisions() {
+        let backend = mock_upstream().await;
+        let mut md = HashMap::new();
+        md.insert("session".into(), "s-boundary".into());
+
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap());
+        st.decision_cache.put(
+            "s-boundary".into(),
+            1,
+            RouteDecision::bypass("frozen/model"),
+        );
+        st.runtime
+            .lock()
+            .unwrap()
+            .set_boundary("s-boundary", "unknown");
+        let (d, _, _, _) = route_request(&st, text_req("ariacompute/semantic-auto"), &md)
+            .await
+            .unwrap();
+        assert_ne!(d.model, "frozen/model");
+
+        let raw = tiny_yaml(&backend).replace(
+            "global:\n  require_api_key: false",
+            "global:\n  require_api_key: false\n  services:\n    redecision:\n      tool_continuation: true\n",
+        );
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&raw).unwrap());
+        st.decision_cache.put(
+            "s-boundary".into(),
+            1,
+            RouteDecision::bypass("frozen/model"),
+        );
+        st.runtime
+            .lock()
+            .unwrap()
+            .set_boundary("s-boundary", "tool-continuation");
+        let (d, _, _, _) = route_request(&st, text_req("ariacompute/semantic-auto"), &md)
+            .await
+            .unwrap();
+        assert_ne!(d.model, "frozen/model");
+    }
+
+    #[test]
+    fn previews_ignore_non_data_lines_and_unusable_json() {
+        let sse = "event: ping\n\ndata: {\"choices\": []}\n\ndata: not-json\n\ndata: [DONE]\n\n";
+        assert_eq!(sse_preview(sse), None);
+        assert!(json_preview(&json!({"choices": [{"text": "plain"}]})).is_some());
+        assert!(json_preview(&json!({"choices": []})).is_none());
+    }
+
+    #[tokio::test]
+    async fn afm_d_three_answers_fold_into_execution_evidence() {
+        use axum::routing::post as system_one_post;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let system_one = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().route(
+            "/v1/systemone",
+            system_one_post(|| async {
+                Json(json!({
+                    "answers": {
+                        "route": {"choice": "local/general", "confidence": 0.9},
+                        "stage_competence": {"choice": "low"},
+                        "difficulty": {"choice": "easy"},
+                        "continuation": {"choice": "continued"}
+                    },
+                    "model": "fake-system-one"
+                }))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let yaml = format!(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+    - name: local/fast
+      provider_model_id: echo-fast
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: 127.0.0.1:9
+entrypoints:
+  - model_names: [ariacompute/afm-d-auto]
+    router: afm-d
+    recipe: afm-d-default
+recipes:
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      endpoint: {system_one}
+      timeout_ms: 2000
+      question_template: three
+global:
+  require_api_key: false
+"#
+        );
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&yaml).unwrap());
+        let (d, _, _, _) = route_request(&st, text_req("ariacompute/afm-d-auto"), &HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(d.model, "local/general");
+        assert!(d.reason.contains("competence="), "{}", d.reason);
+        assert!(aria_router_afm_d::AfmDAnswers::from_reason(&d.reason).is_some());
     }
 }

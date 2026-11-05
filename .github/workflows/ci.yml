@@ -74,6 +74,65 @@ jobs:
           path: lcov.info
           if-no-files-found: ignore
 
+  dashboard:
+    name: dashboard (build + UI guards)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install dashboard dependencies
+        run: npm --prefix dashboard ci
+      - name: Build dashboard (must pass)
+        run: npm --prefix dashboard run build
+      - name: UI guard tests (style + jsdom render snapshots)
+        run: npm --prefix dashboard run test
+      - name: impeccable-style static audit
+        run: |
+          chmod +x scripts/audit-ui.sh
+          ./scripts/audit-ui.sh --static
+      - name: impeccable-style DOM audit (all routes x both themes)
+        run: ./scripts/audit-ui.sh --dom
+      - name: URL audit (records skipped when no browser is available)
+        run: ./scripts/audit-ui.sh --url
+      - name: Upload audit status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-audit-status
+          path: detect-out/*-status.json
+          if-no-files-found: ignore
+
+  bench:
+    name: bench (report-only metrics + offline consistency)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bench unit tests
+        run: python -m unittest discover -s bench/tests -t .
+      - name: Offline policy consistency smoke run (no live router)
+        run: |
+          python - <<'PY'
+          import json, pathlib, subprocess, sys, tempfile
+          rec = {"id": "smoke", "decision": {"model": "m/small", "confidence": 0.9},
+                 "eligible": ["m/small", "m/large"], "expected_model": "m/small",
+                 "plan_version": "plan-1", "rubric_version": "rubric-1",
+                 "task_category": "draft", "entrypoint": "ep"}
+          p = pathlib.Path(tempfile.mkdtemp()) / "decisions.jsonl"
+          p.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+          subprocess.run([sys.executable, "-m", "bench", "policy-consistency",
+                          "--records", str(p), "--report", str(p.with_suffix(".json"))],
+                         check=True)
+          PY
+
   bindings:
     name: bindings
     needs: [test]

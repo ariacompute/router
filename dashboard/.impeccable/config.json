@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "tool": "impeccable",
+  "toolVersion": "4.8.0",
+  "product": "../../PRODUCT.md",
+  "engineMap": {
+    ".css": "css",
+    ".html": "html",
+    ".tsx": "dom",
+    ".ts": "dom"
+  },
+  "static": {
+    "include": ["src/**/*.css", "index.html"],
+    "exclude": ["src/**/*.tsx", "src/**/*.ts", "dist/**", "node_modules/**"],
+    "note": "impeccable static engine is HTML/CSS oriented; TSX is covered by dom/url"
+  },
+  "dom": {
+    "renderer": "vitest + jsdom + @testing-library/react",
+    "routes": [
+      "/login",
+      "/register",
+      "/",
+      "/account",
+      "/cost",
+      "/cost-competence",
+      "/model-performance",
+      "/trust",
+      "/keys",
+      "/users",
+      "/config",
+      "/topology",
+      "/providers",
+      "/replay",
+      "/playground"
+    ],
+    "themes": ["light", "dark"]
+  },
+  "url": {
+    "requiresBrowser": true,
+    "routes": "AUDIT_ROUTES (defaults to dom.routes)",
+    "themes": "AUDIT_THEMES (defaults to light,dark)",
+    "pageTimeoutMs": "AUDIT_PAGE_TIMEOUT (default 15000)"
+  },
+  "rules": {
+    "primary": [
+      "color/aa-contrast",
+      "type/min-font-size",
+      "shape/no-gradient",
+      "shape/square-corners",
+      "motion/transform-opacity-only",
+      "assets/no-web-font-cdn",
+      "a11y/lang-attribute"
+    ],
+    "secondary": [
+      "type/no-uppercase",
+      "type/no-letter-spacing",
+      "type/local-font-stack"
+    ]
+  },
+  "outDir": "detect-out"
+}

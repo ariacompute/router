@@ -2,7 +2,6 @@
   font-family: var(--font-display);
   font-size: clamp(1.75rem, 3vw, 2.25rem);
   font-weight: 600;
-  letter-spacing: -0.03em;
   line-height: 1.15;
   margin: 0 0 1.25rem;
 }
@@ -11,7 +10,6 @@
   font-family: var(--font-display);
   font-size: 1.35rem;
   font-weight: 600;
-  letter-spacing: -0.02em;
   margin: 1.5rem 0 0.85rem;
 }
 
@@ -27,7 +25,7 @@
   background: var(--panel-bg);
   border-radius: var(--radius-card);
   padding: 1rem 1.2rem;
-  transition: border-color 0.18s ease;
+  transition: transform 0.18s ease, opacity 0.18s ease;
 }
 
 .card:hover {
@@ -37,9 +35,7 @@
 .label {
   font-family: var(--font-label);
   color: var(--text-muted);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 
@@ -47,7 +43,6 @@
   font-size: 1.6rem;
   font-weight: 600;
   margin-top: 0.35rem;
-  letter-spacing: -0.02em;
   word-break: break-word;
 }
 
@@ -83,11 +78,9 @@
 .table th {
   border-bottom: 1px solid var(--line);
   font-family: var(--font-label);
-  font-size: 0.68rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
 }
 
 .table td {
@@ -138,8 +131,6 @@
 .kind {
   font-family: var(--font-label);
   color: var(--text-soft);
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+  font-size: 0.8125rem;
   font-weight: 600;
 }

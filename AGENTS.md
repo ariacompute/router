@@ -56,6 +56,7 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 **T87** 绑定套件 Kotlin 编译失败（CI 钉 JDK 17）已落地。
 **T88** 依赖「连接被拒」的用例改为 accept-后-关闭的本地套接字（跨平台确定性）已落地。
 **T89** dashboard 入口点与 keys 不可写路径用例改为构建/平台无关。
+阶段 **T（T90–T99）** 已落地（C1–C9 + U1）：重判边界/响应头、afm-d 三问模板、低分保护状态机、信任度证据门槛与显式发布、模型表现页、生产执行证据、Key 软额度、backend failover、离线策略一致性、impeccable 风格 UI 审计与视觉重做；见 `docs/implementation-plan.md` §11。
 
 ## Trust stores (eMudhra/emSign CA key compromise, 2026-10)
 

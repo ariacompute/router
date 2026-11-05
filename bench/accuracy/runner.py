@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
+from ..consistency import consistency_from_accuracy_rows
 from ..http_client import ChatFn, EndpointConfig, chat_completion
 from ..quality.label import label_score
 from ..router_targets import resolve_pick
@@ -194,6 +195,8 @@ def run_routing_accuracy(
             "overall_accuracy": overall,
             "recall_by_expected_tier": recall,
             "by_expected_tier": {k: dict(v) for k, v in sorted(by_expected.items())},
+            # Offline recompute from the saved rows, never a second live call.
+            "policy_consistency": consistency_from_accuracy_rows(rows),
         },
         "confusion": confusion_table,
         "results": rows,

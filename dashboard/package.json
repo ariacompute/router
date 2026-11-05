@@ -6,7 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.app.json && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "audit": "bash ../scripts/audit-ui.sh --static",
+    "audit:dom": "bash ../scripts/audit-ui.sh --dom",
+    "audit:url": "bash ../scripts/audit-ui.sh --url",
+    "audit:browser": "bash ../scripts/audit-ui.sh --browser",
+    "audit:rules": "bash ../scripts/audit-ui.sh --list-rules"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -16,11 +22,15 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/react": "^16.1.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^25.0.1",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^2.1.9"
   },
   "allowScripts": {
     "esbuild@0.21.5": true

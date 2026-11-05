@@ -43,6 +43,11 @@ def render_markdown(report: dict[str, Any]) -> str:
             "eps",
             "ref_model",
             "routers",
+            "records",
+            "policies",
+            "plan_version",
+            "rubric_version",
+            "task_category",
         ):
             if k in meta and meta[k] is not None:
                 lines.append(f"- {k}: `{meta[k]}`")
@@ -59,6 +64,24 @@ def render_markdown(report: dict[str, Any]) -> str:
                 lines.append(f"| {k} | `{json.dumps(v, ensure_ascii=False)}` |")
             else:
                 lines.append(f"| {k} | {_fmt(v)} |")
+        lines.append("")
+
+    pc = report.get("policy_consistency") or {}
+    if pc:
+        lines.append("## Policy consistency (offline recompute)")
+        lines.append("")
+        lines.append("| policy | comparable | agreements | consistency | mismatches |")
+        lines.append("|--------|------------|------------|-------------|------------|")
+        for name, row in pc.items():
+            lines.append(
+                "| {name} | {n} | {a} | {c} | {m} |".format(
+                    name=name,
+                    n=row.get("comparable", 0),
+                    a=row.get("agreements", 0),
+                    c=_fmt(row.get("consistency")),
+                    m=len(row.get("mismatches") or []),
+                )
+            )
         lines.append("")
 
     confusion = report.get("confusion") or {}

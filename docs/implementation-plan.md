@@ -1,14 +1,13 @@
-# aria router 特性实施计划（计划稿 · 待人审激活）
+# aria router 特性实施计划（已激活 · 2026-11-05 实施完成）
 
 > **基线日期**：2026-11-04。**依据**：[`requirements.md`](../requirements.md) §7（HiRoute 对标候选 C1–C9）与 §8（Router Web UI 独立需求 U1）、[`task.md`](../task.md) 候选池、[`hiroute-vs-aria-router.md`](hiroute-vs-aria-router.md) 特性矩阵、[`AGENTS.md`](../AGENTS.md) 命令与硬约定，以及 2026-11-04 的源码核实结果。
 >
-> **状态声明（勿略过）**：本文是**实施计划（计划稿 · 待人审激活）**，不是已批准的实施清单。
-> 依 `requirements.md` 第 3 行「须经人工逐项审核，审核通过后方可据其生成 / 执行 `task.md`」与 `AGENTS.md` 的 Harness 约定：
+> **状态声明（勿略过）**：本文原为**实施计划（计划稿 · 待人审激活）**，2026-11-05 用户明确要求「实现本文所有特性」，据此视为 **M0 人审门禁已激活**，C1–C9 / U1（T90–T99）已全部落地，实施结果与验证见 **§11**。
+> 保留的硬约定：
 >
-> - **M0 人审门禁未通过前，不进入编码**，不把 C1–C9 / U1 变成已激活待办；
-> - §7 候选池、`C1–C9` 编号、T0–T89 的勾选状态与文字**保持原样**；
-> - 本文与 `requirements.md` §8、`task.md` 阶段 T 统一使用「计划稿 · 待人审激活」标注，编号用表格表达而非勾选清单；
-> - **本次交付是纯文档**：只生成/更新本文、`requirements.md` §8、`task.md` 阶段 T。任务卡中描述的「新增前端依赖、修改 CSS/组件、运行 impeccable 扫描、视觉重做」属于**人审通过后的实施阶段**，不在本次交付范围。
+> - `requirements.md` §7 候选池、`C1–C9` 编号、T0–T89 的勾选状态与文字**保持原样**；
+> - 本文 §1–§10 保留计划稿原文作为历史记录；§9/§10 表格描述的是「计划稿阶段」的改动范围；
+> - 实施阶段按任务卡目标文件触碰了 Rust / TS / Python 源码、`package.json`、CI、CSS 与新增文档；未改 `requirements.md` §1–§7 与 T0–T89。
 
 ---
 
@@ -367,3 +366,36 @@
 **编号映射**：`T90↔C1`、`T91↔C2`、`T92↔C3`、`T93↔C4`、`T94↔C5`、`T95↔C6`、`T96↔C7`、`T97↔C8`、`T98↔C9`、`T99↔U1`。
 
 **写入方式**：两个既有文件均在**文件末尾纯追加**、零删除；`task.md` 相对 HEAD 已有 47 行历史 CRLF→LF 规范化差异（既有 staged 状态），本次不得用 `git show HEAD:task.md` 恢复，也不得引入新的行尾规范化。
+
+---
+
+## 11. 实施结果（2026-11-05）
+
+M0 由用户的实施指令激活；以下均为已合入工作区代码，非计划描述。
+
+| 编号 | 落地位置 | 关键行为 |
+|------|----------|----------|
+| C6/T95 | `http/src/replay.rs`、`http/src/policy.rs`、`http/src/lib.rs` | 生产路径接通 `task_category` / `stage_competence` / `accepted_output` / `tool_outcomes` / `plan_version` / `rubric_version` / `continuation` / `evidence_outcome` / `entrypoint` / `redecision_boundary`；JSONL 旧字段向后兼容、按 id 末次写入生效；关闭 replay 时不做证据计算 |
+| C1/T90 | `core/src/lib.rs`、`config/src/lib.rs`、`http/src/lib.rs` | `RedecisionTracker` 显式判定新用户消息 / 上下文压缩 / 工具续跑 / 同 turn / 未知（未知 fail closed）；`global.services.redecision` 可配；响应头 `x-aria-router-redecision` 可观测 |
+| C2/T91 | `afm_d/src/lib.rs`、`config/src/lib.rs` | `question_template: single\|three`；三问 + `route` 归一为单个 typed `RouteDecision`（难度 hard 在 eligible 池内升档，低置信度经原有 fallback/fail-closed）；答案可写入执行证据 |
+| C3/T92 | `decision/src/lib.rs`、`http/src/policy.rs` | 新鲜 / 完整 / 同类目 / 同 plan+rubric 版本证据门槛；触发 → 问题解除 → 释放状态机；旧低分不重复生效、未评分≠0；保护只重排硬剪枝后的 eligible 池 |
+| C4/T93 | `config/src/lib.rs`、`http/src/lib.rs`、`http/src/policy.rs`、`dashboard/src/pages/Trust.tsx` | 阈值可配；证据不足/低置信度不出建议；草稿需 `confirm: true` 显式发布；`?estimate=true` 纯离线估算；发布不调用 `PUT /v1/router/config`、不改线上路由；跨 entrypoint 证据排除 |
+| C5/T94 | `http/src/policy.rs`、`http/src/cost.rs`、`dashboard/src/pages/ModelPerformance.tsx` | `/v1/router/cost/model-performance` 按模型/档位给承担比例、成本、阶段评分；`has_evidence=false` 显示 No data 而非 0；估算带 heuristic 标注 |
+| C7/T96 | `http/src/keys.rs`、`http/src/policy.rs`、`http/src/lib.rs` | `global.services.quota` 默认关闭（软记账）；按 Key / 共享 group 的持久累计，预留 → 实际结算（含 SSE 中断）；额度耗尽是与限流可区分的 `QuotaExceeded`（429），金额不入日志 |
+| C8/T97 | `provider/src/lib.rs`、`config/src/lib.rs` | `global.services.backend_failover` 默认关闭；开启后按权重降序生成候选链，失败逐个切换，非 SSE / SSE 双路径；全部失败聚合报错且不泄露密钥 |
+| C9/T98 | `bench/consistency.py`、`bench/cli.py`、`bench/accuracy/runner.py`、`bench/report.py`、`bench/tests/` | `policy-consistency` 离线重算 4 种确定性策略；版本/类目/entrypoint 证据门槛；`summary.policy_consistency` 内嵌 live 报告；report-only，`ci_fail=false`，无数据显示 `null` |
+| U1/T99 | `PRODUCT.md`、`.impeccable/config.json`、`scripts/audit-ui.sh`、`docs/impeccable-audit.md`、`dashboard/tests/`、4 个 CSS、`index.html`、CI | 设计契约 + 五模式审计脚本 + 样式/渲染护栏；单色直角、≥12px、AA、无渐变、动效仅 transform/opacity、本地字体栈；15 路由 × 双主题；CI 新增 dashboard / bench 必过 job |
+
+### 验证结果
+
+- `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`、`cargo test --workspace --all-features` → 全绿。
+- `./scripts/coverage.sh report` → **22637 / 22637 行，100.00% 行覆盖门禁通过**（本机安装 `llvm-tools-preview` + `cargo-llvm-cov 0.6.16` 后实测）。
+- `npm --prefix dashboard ci && npm --prefix dashboard run build && npm --prefix dashboard run test` → 全绿（9 个 UI 护栏测试）。
+- `python -m unittest discover -s bench/tests -t .` → 70 个测试全绿。
+- `./scripts/audit-ui.sh --static` → `passed / 0 primary findings`；`--dom` → `passed`；`--url` → `skipped`（无 Chrome，不伪造成功）；`--browser` → 1；未知参数 → 2。
+
+### 残余 / 需人工环境复跑
+
+1. `--url` / `--browser` 需要 Chrome 与 `IMPECCABLE_BIN`（impeccable 4.8.0）；在有浏览器的机器上复跑后把结果补入 `docs/impeccable-audit.md`。
+2. `C7` 按 G6 裁决实现为**默认关闭的软额度**：只有显式配置 `quota.enabled` 与 `spend_limit_usd` 才拦截，未激活硬 quota。结算失败不会中断已完成的响应，而是记录在 `GET /v1/router/quota` 的 `settlement_errors` 中，避免吞错。
+3. `bindings/testdata/cases.json` 与 C ABI 未改动；`./scripts/run-binding-tests.sh` 需具备 Go/JDK/Flutter 等工具链的机器复跑。

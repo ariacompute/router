@@ -51,7 +51,7 @@ pub struct ExchangeInput {
     pub owner_user_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct KeyRecord {
     #[serde(default)]
     pub kind: KeyKind,
@@ -88,6 +88,22 @@ pub struct KeyRecord {
     /// for display so the dashboard can show which key was removed.
     #[serde(default)]
     pub api_key_deleted: bool,
+    /// Opt-in spend quota (C7). `None` = unlimited. All amounts are USD
+    /// estimates derived from forwarded traffic, never provider balances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spend_limit_usd: Option<f64>,
+    /// Keys sharing a group share one cumulative spend counter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spend_group: Option<String>,
+    /// `once` (default) or `calendar_month`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spend_period: Option<String>,
+    /// Persistent accumulator — independent of the 4096-event cost ring.
+    #[serde(default)]
+    pub spend_used_usd: f64,
+    /// Calendar bucket the accumulator belongs to (YYYY-MM).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spend_period_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -279,6 +295,7 @@ impl KeyStore {
                 link_expires_at: data.link_expires_at,
                 link_token: data.link_token,
                 api_key_deleted: false,
+                ..Default::default()
             };
             self.keys.push(rec);
             self.persist()?;
@@ -384,6 +401,7 @@ impl KeyStore {
             link_expires_at: None,
             link_token: None,
             api_key_deleted: false,
+            ..Default::default()
         };
         self.keys.push(rec);
         self.persist()?;
@@ -491,6 +509,134 @@ impl KeyStore {
         k.revoked = true;
         self.persist()?;
         Ok(())
+    }
+
+    /// Configure an opt-in spend quota for one key (C7). `None` removes the
+    /// limit but keeps the recorded spend. Grouped keys share one cumulative
+    /// counter; calendar-month periods roll over at the month boundary.
+    pub fn set_spend_policy(
+        &mut self,
+        id: &str,
+        limit: Option<f64>,
+        group: Option<String>,
+        period: Option<String>,
+    ) -> Result<(), RouterError> {
+        if limit.is_some_and(|v| !v.is_finite() || v < 0.0) {
+            return Err(RouterError::InvalidParam(
+                "spend_limit_usd must be a finite non-negative number".into(),
+            ));
+        }
+        if period
+            .as_deref()
+            .is_some_and(|p| p != "once" && p != "calendar_month")
+        {
+            return Err(RouterError::InvalidParam(
+                "spend_period must be once|calendar_month".into(),
+            ));
+        }
+        let Some(k) = self.keys.iter_mut().find(|k| k.id == id) else {
+            return Err(RouterError::InvalidParam(format!("unknown key id {id}")));
+        };
+        k.spend_limit_usd = limit;
+        k.spend_group = group.filter(|g| !g.trim().is_empty());
+        k.spend_period = period;
+        self.persist()?;
+        Ok(())
+    }
+
+    fn roll_calendar(&mut self, id: &str, period_key: &str) -> Result<(), RouterError> {
+        let group = self
+            .keys
+            .iter()
+            .find(|k| k.id == id)
+            .and_then(|k| k.spend_group.clone());
+        let in_scope = |k: &KeyRecord| match group.as_deref() {
+            Some(g) => k.spend_group.as_deref() == Some(g),
+            None => k.id == id,
+        };
+        let needs_roll = self.keys.iter().any(|k| {
+            k.spend_period.as_deref() == Some("calendar_month")
+                && k.spend_period_key.as_deref() != Some(period_key)
+                && in_scope(k)
+        });
+        if !needs_roll {
+            return Ok(());
+        }
+        for k in &mut self.keys {
+            if k.spend_period.as_deref() == Some("calendar_month") && in_scope(k) {
+                k.spend_used_usd = 0.0;
+                k.spend_period_key = Some(period_key.to_string());
+            }
+        }
+        self.persist()
+    }
+
+    fn spend_group_limit_and_used(&self, id: &str) -> Result<(Option<f64>, f64), RouterError> {
+        let key = self
+            .keys
+            .iter()
+            .find(|k| k.id == id)
+            .ok_or_else(|| RouterError::InvalidParam(format!("unknown key id {id}")))?;
+        let group = key.spend_group.clone();
+        let members: Vec<&KeyRecord> = self
+            .keys
+            .iter()
+            .filter(|k| {
+                k.id == id
+                    || group
+                        .as_deref()
+                        .is_some_and(|g| k.spend_group.as_deref() == Some(g))
+            })
+            .collect();
+        let limit = members
+            .iter()
+            .filter_map(|k| k.spend_limit_usd)
+            .reduce(f64::min);
+        let used: f64 = members.iter().map(|k| k.spend_used_usd).sum();
+        Ok((limit, used))
+    }
+
+    /// Remaining allowance before a reservation may be made. `None` means the
+    /// key (or its group) has no configured limit.
+    pub fn spend_remaining(
+        &mut self,
+        id: &str,
+        period_key: &str,
+        pending_usd: f64,
+    ) -> Result<Option<f64>, RouterError> {
+        self.roll_calendar(id, period_key)?;
+        let (limit, used) = self.spend_group_limit_and_used(id)?;
+        Ok(limit.map(|l| l - used - pending_usd))
+    }
+
+    /// Persist settled spend. Settlement uses the actual estimate, so an
+    /// interrupted stream only consumes the traffic that actually happened.
+    pub fn record_spend(
+        &mut self,
+        id: &str,
+        usd: f64,
+        period_key: &str,
+    ) -> Result<(), RouterError> {
+        self.roll_calendar(id, period_key)?;
+        let Some(k) = self.keys.iter_mut().find(|k| k.id == id) else {
+            return Err(RouterError::InvalidParam(format!("unknown key id {id}")));
+        };
+        k.spend_used_usd += usd.max(0.0);
+        self.persist()
+    }
+
+    pub fn spend_view(&self, id: &str, period_key: &str) -> Result<serde_json::Value, RouterError> {
+        let (limit, used) = self.spend_group_limit_and_used(id)?;
+        let k = self.keys.iter().find(|k| k.id == id).unwrap();
+        Ok(serde_json::json!({
+            "key_id": id,
+            "limit_usd": limit,
+            "used_usd": used,
+            "remaining_usd": limit.map(|l| l - used),
+            "group": k.spend_group,
+            "period": k.spend_period,
+            "period_key": if k.spend_period.as_deref() == Some("calendar_month") { Some(period_key) } else { None },
+        }))
     }
 
     fn active_oauth(&self) -> Option<&KeyRecord> {
@@ -608,6 +754,7 @@ impl KeyStore {
                 link_expires_at: None,
                 link_token: None,
                 api_key_deleted: false,
+                ..Default::default()
             });
         }
         self.persist()
@@ -693,6 +840,7 @@ impl KeyStore {
                 link_expires_at: None,
                 link_token: None,
                 api_key_deleted: false,
+                ..Default::default()
             });
         }
         self.persist()
@@ -808,6 +956,7 @@ impl KeyStore {
                 link_expires_at: None,
                 link_token: None,
                 api_key_deleted: false,
+                ..Default::default()
             });
         }
         let k = self.active_oauth_mut().expect("oauth row");
@@ -985,6 +1134,90 @@ mod tests {
         let mut store = KeyStore::empty(std::path::PathBuf::from("/"));
         let err = store.create("rootless").unwrap_err();
         assert!(matches!(err, RouterError::Io(_)), "{err}");
+    }
+
+    #[test]
+    fn spend_quota_reserve_settle_and_shared_group() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        let mut store = KeyStore::empty(path.clone());
+        let a = store.create("a").unwrap();
+        let b = store.create("b").unwrap();
+        assert_eq!(store.spend_remaining(&a.id, "2026-11", 0.0).unwrap(), None);
+        store
+            .set_spend_policy(&a.id, Some(1.0), Some("team".into()), Some("once".into()))
+            .unwrap();
+        store
+            .set_spend_policy(&b.id, Some(1.0), Some("team".into()), Some("once".into()))
+            .unwrap();
+        assert_eq!(
+            store.spend_remaining(&a.id, "2026-11", 0.3).unwrap(),
+            Some(0.7)
+        );
+        store.record_spend(&a.id, 0.4, "2026-11").unwrap();
+        // Both keys share the cumulative counter.
+        assert_eq!(
+            store.spend_remaining(&b.id, "2026-11", 0.1).unwrap(),
+            Some(0.5)
+        );
+        store.record_spend(&b.id, 0.6, "2026-11").unwrap();
+        assert_eq!(
+            store.spend_remaining(&a.id, "2026-11", 0.0).unwrap(),
+            Some(0.0)
+        );
+        // Persistent accumulator survives a reload (not the 4096-event ring).
+        let reloaded = KeyStore::load(&path).unwrap();
+        assert_eq!(
+            reloaded.spend_view(&a.id, "2026-11").unwrap()["used_usd"],
+            1.0
+        );
+    }
+
+    #[test]
+    fn spend_quota_calendar_rollover_and_validation_errors() {
+        let dir = tempdir().unwrap();
+        let mut store = KeyStore::empty(dir.path().join("keys.json"));
+        let a = store.create("a").unwrap();
+        store
+            .set_spend_policy(&a.id, Some(2.0), None, Some("calendar_month".into()))
+            .unwrap();
+        store.record_spend(&a.id, 1.5, "2026-10").unwrap();
+        assert_eq!(
+            store.spend_remaining(&a.id, "2026-10", 0.0).unwrap(),
+            Some(0.5)
+        );
+        assert_eq!(
+            store.spend_remaining(&a.id, "2026-11", 0.0).unwrap(),
+            Some(2.0)
+        );
+        assert!(matches!(
+            store.set_spend_policy(&a.id, Some(-1.0), None, None),
+            Err(RouterError::InvalidParam(_))
+        ));
+        assert!(matches!(
+            store.set_spend_policy(&a.id, None, None, Some("weekly".into())),
+            Err(RouterError::InvalidParam(_))
+        ));
+        assert!(matches!(
+            store.set_spend_policy("missing", Some(1.0), None, None),
+            Err(RouterError::InvalidParam(_))
+        ));
+        assert!(matches!(
+            store.record_spend("missing", 1.0, "2026-11"),
+            Err(RouterError::InvalidParam(_))
+        ));
+        assert!(matches!(
+            store.spend_remaining("missing", "2026-11", 0.0),
+            Err(RouterError::InvalidParam(_))
+        ));
+        // Removing the limit keeps accounting but never blocks.
+        store
+            .set_spend_policy(&a.id, None, None, Some("once".into()))
+            .unwrap();
+        assert_eq!(store.spend_remaining(&a.id, "2026-11", 0.0).unwrap(), None);
+        let view = store.spend_view(&a.id, "2026-11").unwrap();
+        assert!(view["limit_usd"].is_null());
+        assert!(view["period_key"].is_null());
     }
 
     #[test]
@@ -1638,5 +1871,38 @@ mod tests {
         assert!(extract_bearer(&h).is_none());
         h.insert("authorization", "Bearer tok".parse().unwrap());
         assert_eq!(extract_bearer(&h).as_deref(), Some("tok"));
+    }
+
+    #[test]
+    fn calendar_rollover_resets_the_whole_shared_group() {
+        let dir = tempdir().unwrap();
+        let mut store = KeyStore::empty(dir.path().join("keys.json"));
+        let a = store.create("a").unwrap();
+        let b = store.create("b").unwrap();
+        for k in [&a, &b] {
+            store
+                .set_spend_policy(
+                    &k.id,
+                    Some(5.0),
+                    Some("team".into()),
+                    Some("calendar_month".into()),
+                )
+                .unwrap();
+        }
+        store.record_spend(&a.id, 2.0, "2026-10").unwrap();
+        store.record_spend(&b.id, 1.0, "2026-10").unwrap();
+        assert_eq!(
+            store.spend_remaining(&a.id, "2026-10", 0.0).unwrap(),
+            Some(2.0)
+        );
+        // A new period resets every member of the shared group, not just `a`.
+        assert_eq!(
+            store.spend_remaining(&a.id, "2026-11", 0.0).unwrap(),
+            Some(5.0)
+        );
+        assert_eq!(
+            store.spend_remaining(&b.id, "2026-11", 0.0).unwrap(),
+            Some(5.0)
+        );
     }
 }

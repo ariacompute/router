@@ -18,6 +18,8 @@ import Replay from './pages/Replay';
 import Playground from './pages/Playground';
 import Cost from './pages/Cost';
 import CostByCompetence from './pages/CostByCompetence';
+import ModelPerformance from './pages/ModelPerformance';
+import Trust from './pages/Trust';
 import Keys from './pages/Keys';
 import Account from './pages/Account';
 import Users from './pages/Users';
@@ -35,6 +37,7 @@ const groups: NavGroup[] = [
       { to: '/', label: 'Overview', end: true },
       { to: '/cost', label: 'Cost' },
       { to: '/cost-competence', label: 'Cost by Competence' },
+      { to: '/model-performance', label: 'Model Performance' },
       { to: '/account', label: 'Account' },
     ],
   },
@@ -52,6 +55,7 @@ const groups: NavGroup[] = [
       { to: '/topology', label: 'Topology' },
       { to: '/providers', label: 'Providers' },
       { to: '/replay', label: 'Replay' },
+      { to: '/trust', label: 'Trust Tiers' },
       { to: '/playground', label: 'Playground' },
     ],
   },
@@ -171,6 +175,8 @@ export default function App() {
       <Route path="/account" element={<Account />} />
       <Route path="/cost" element={<Cost />} />
       <Route path="/cost-competence" element={<CostByCompetence />} />
+      <Route path="/model-performance" element={<ModelPerformance />} />
+      <Route path="/trust" element={<Trust />} />
       <Route path="/keys" element={<Keys />} />
       <Route path="/users" element={<Users />} />
       <Route path="/config" element={<Config />} />

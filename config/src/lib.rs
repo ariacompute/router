@@ -165,6 +165,144 @@ pub struct ServicesCfg {
     pub ratelimit: RateLimitCfg,
     #[serde(default)]
     pub router_replay: RouterReplayCfg,
+    /// C1: explicit cross-request re-decision boundaries + observable header.
+    #[serde(default)]
+    pub redecision: RedecisionCfg,
+    /// C4: trust tiers, evidence gate and explicit publication.
+    #[serde(default)]
+    pub trust: TrustCfg,
+    /// C7: opt-in API-key spend quota (soft accounting unless a limit is set).
+    #[serde(default)]
+    pub quota: QuotaCfg,
+    /// C8: ordered backend candidate chain / same-model failover.
+    #[serde(default)]
+    pub backend_failover: BackendFailoverCfg,
+}
+
+/// Explicit re-decision boundaries (C1). All re-decisions happen *across*
+/// requests; a single request never runs two decisioners.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedecisionCfg {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub emit_header: bool,
+    #[serde(default = "default_true")]
+    pub new_user_message: bool,
+    #[serde(default = "default_true")]
+    pub context_compaction: bool,
+    /// Opt-in: a `tool` message inside the same turn invalidates the frozen
+    /// decision. Off by default to preserve the existing ContextHold behaviour.
+    #[serde(default)]
+    pub tool_continuation: bool,
+}
+
+impl Default for RedecisionCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            emit_header: true,
+            new_user_message: true,
+            context_compaction: true,
+            tool_continuation: false,
+        }
+    }
+}
+
+/// Trust-tier thresholds / evidence gate (C4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrustCfg {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_min_evidence")]
+    pub min_evidence: u32,
+    #[serde(default = "default_trust_confidence")]
+    pub min_confidence: f32,
+    #[serde(default = "default_promote_at")]
+    pub promote_at: f32,
+    #[serde(default = "default_demote_below")]
+    pub demote_below: f32,
+    #[serde(default)]
+    pub plan_version: Option<String>,
+    #[serde(default)]
+    pub rubric_version: Option<String>,
+}
+
+impl Default for TrustCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_evidence: 5,
+            min_confidence: 0.6,
+            promote_at: 0.8,
+            demote_below: 0.4,
+            plan_version: None,
+            rubric_version: None,
+        }
+    }
+}
+
+fn default_min_evidence() -> u32 {
+    5
+}
+fn default_trust_confidence() -> f32 {
+    0.6
+}
+fn default_promote_at() -> f32 {
+    0.8
+}
+fn default_demote_below() -> f32 {
+    0.4
+}
+
+/// Opt-in API-key spend accounting (C7). No limit is enforced unless a key
+/// declares `spend_limit_usd`; the accounting itself never blocks a request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaCfg {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_reserve_usd")]
+    pub default_reserve_usd: f64,
+}
+
+impl Default for QuotaCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_reserve_usd: default_reserve_usd(),
+        }
+    }
+}
+
+fn default_reserve_usd() -> f64 {
+    0.01
+}
+
+/// Ordered backend candidate chain (C8). Disabled by default: the historical
+/// single highest-weight backend is still selected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackendFailoverCfg {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_max_attempts")]
+    pub max_attempts: u32,
+}
+
+impl Default for BackendFailoverCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_attempts: default_max_attempts(),
+        }
+    }
+}
+
+fn default_max_attempts() -> u32 {
+    2
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,6 +552,57 @@ pub struct CompetenceCfg {
     /// considered cheap enough to route to a cheaper tier.
     #[serde(default = "default_simple_threshold")]
     pub simple_threshold: f32,
+    /// C3: low-score protection state machine (trigger → resolve → release).
+    #[serde(default)]
+    pub protection: Option<ProtectionCfg>,
+}
+
+/// Low-score protection (C3). Evidence must be fresh, complete, of the same
+/// task category and of the same plan / rubric version before it can trigger
+/// or release protection. Protection only reorders the already hard-filtered
+/// eligible pool, so it can never override Location / auth / modality.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtectionCfg {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Score below this (0..1) triggers protection.
+    #[serde(default = "default_protection_floor")]
+    pub floor: f32,
+    /// Maximum evidence age in seconds (freshness).
+    #[serde(default = "default_max_evidence_age")]
+    pub max_evidence_age_secs: u64,
+    /// Problem continuation below this releases protection.
+    #[serde(default = "default_continuation_release")]
+    pub continuation_release: f32,
+    /// When set, evidence must carry the same plan / rubric version.
+    #[serde(default)]
+    pub plan_version: Option<String>,
+    #[serde(default)]
+    pub rubric_version: Option<String>,
+}
+
+impl Default for ProtectionCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            floor: default_protection_floor(),
+            max_evidence_age_secs: default_max_evidence_age(),
+            continuation_release: default_continuation_release(),
+            plan_version: None,
+            rubric_version: None,
+        }
+    }
+}
+
+fn default_protection_floor() -> f32 {
+    0.4
+}
+fn default_max_evidence_age() -> u64 {
+    604_800
+}
+fn default_continuation_release() -> f32 {
+    0.5
 }
 
 fn default_competence_floor() -> f32 {
@@ -686,6 +875,26 @@ impl std::fmt::Display for AfmDTrack {
     }
 }
 
+/// System One question template (C2). `single` is the historical one-choice
+/// contract; `three` adds the stage-competence / difficulty / continuation
+/// questions whose answers are normalised into one typed `RouteDecision`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AfmDQuestionTemplate {
+    #[default]
+    Single,
+    Three,
+}
+
+impl AfmDQuestionTemplate {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Three => "three",
+        }
+    }
+}
+
 /// AFM-D System One decisioner recipe (`router: afm-d`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -713,6 +922,9 @@ pub struct AfmDRecipe {
     /// same (session, turn) instead of re-deciding within an agent turn.
     #[serde(default)]
     pub prefix_reuse: Option<bool>,
+    /// Optional three-question System One template (default `single`).
+    #[serde(default)]
+    pub question_template: Option<AfmDQuestionTemplate>,
 }
 
 const LEARNED_SIGNAL_KEYS: &[&str] = &[
@@ -842,6 +1054,13 @@ impl RouterDocument {
                         ))
                     })?;
                     self.validate_routing(routing)?;
+                    if let Some(p) = routing
+                        .competence
+                        .as_ref()
+                        .and_then(|c| c.protection.as_ref())
+                    {
+                        self.validate_protection(p)?;
+                    }
                 }
                 RouterKind::Agent => {
                     if recipe.afm_d.is_some() {
@@ -938,6 +1157,60 @@ impl RouterDocument {
                     }
                 }
             }
+        }
+        self.validate_services()
+    }
+
+    fn validate_protection(&self, p: &ProtectionCfg) -> Result<(), RouterError> {
+        if !p.enabled {
+            return Ok(());
+        }
+        for (name, v) in [
+            ("floor", p.floor),
+            ("continuation_release", p.continuation_release),
+        ] {
+            if !(0.0..=1.0).contains(&v) {
+                return Err(RouterError::Config(format!(
+                    "protection {name} must be 0..=1, got {v}"
+                )));
+            }
+        }
+        if p.max_evidence_age_secs == 0 {
+            return Err(RouterError::Config(
+                "protection max_evidence_age_secs must be > 0".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_services(&self) -> Result<(), RouterError> {
+        let s = &self.global.services;
+        let t = &s.trust;
+        if t.enabled {
+            if t.min_evidence == 0 {
+                return Err(RouterError::Config("trust min_evidence must be > 0".into()));
+            }
+            if !(0.0..=1.0).contains(&t.min_confidence)
+                || !(0.0..=1.0).contains(&t.promote_at)
+                || !(0.0..=1.0).contains(&t.demote_below)
+                || t.promote_at <= t.demote_below
+            {
+                return Err(RouterError::Config(
+                    "trust thresholds must be 0..=1 with promote_at > demote_below".into(),
+                ));
+            }
+        }
+        let f = &s.backend_failover;
+        if f.enabled && !(1..=8).contains(&f.max_attempts) {
+            return Err(RouterError::Config(format!(
+                "backend_failover max_attempts must be 1..=8, got {}",
+                f.max_attempts
+            )));
+        }
+        if s.quota.default_reserve_usd < 0.0 {
+            return Err(RouterError::Config(
+                "quota default_reserve_usd must be >= 0".into(),
+            ));
         }
         Ok(())
     }
@@ -1626,6 +1899,116 @@ recipes:
         assert!(comp.enabled);
         assert!((comp.floor - 0.5).abs() < 1e-6);
         assert!((comp.simple_threshold - 0.8).abs() < 1e-6);
+    }
+
+    fn with_services(extra: &str) -> String {
+        format!("{TINY}global:\n  services:\n{extra}")
+    }
+
+    #[test]
+    fn new_service_configs_parse_and_default_to_off() {
+        let base = RouterDocument::from_yaml_str(TINY).unwrap();
+        let s = &base.global.services;
+        assert!(s.redecision.enabled);
+        assert!(s.redecision.emit_header);
+        assert!(s.redecision.new_user_message);
+        assert!(s.redecision.context_compaction);
+        assert!(!s.redecision.tool_continuation);
+        assert!(!s.trust.enabled);
+        assert_eq!(s.trust.min_evidence, 5);
+        assert!(!s.quota.enabled);
+        assert!(!s.backend_failover.enabled);
+        assert_eq!(s.backend_failover.max_attempts, 2);
+
+        let doc = RouterDocument::from_yaml_str(&with_services(
+            "    redecision:\n      tool_continuation: true\n      emit_header: false\n    trust:\n      enabled: true\n      min_evidence: 3\n      promote_at: 0.9\n      demote_below: 0.2\n    quota:\n      enabled: true\n      default_reserve_usd: 0.5\n    backend_failover:\n      enabled: true\n      max_attempts: 3\n",
+        ))
+        .unwrap();
+        let s = &doc.global.services;
+        assert!(s.redecision.tool_continuation);
+        assert!(!s.redecision.emit_header);
+        assert!(s.trust.enabled);
+        assert_eq!(s.trust.min_evidence, 3);
+        assert!((s.trust.promote_at - 0.9).abs() < 1e-6);
+        assert!(s.quota.enabled);
+        assert!((s.quota.default_reserve_usd - 0.5).abs() < 1e-9);
+        assert!(s.backend_failover.enabled);
+        assert_eq!(s.backend_failover.max_attempts, 3);
+        // Round-trip keeps the new keys (deny_unknown_fields on both sides).
+        let yaml = doc.to_yaml().unwrap();
+        assert!(yaml.contains("tool_continuation"));
+        assert!(RouterDocument::from_yaml_str(&yaml).is_ok());
+    }
+
+    #[test]
+    fn disabled_protection_skips_threshold_validation() {
+        let raw = TINY.replace(
+            "      strategy: priority",
+            "      strategy: priority\n      competence:\n        enabled: false\n        protection:\n          enabled: false\n          floor: 9.0\n          max_evidence_age_secs: 0\n",
+        );
+        assert!(raw.contains("protection:"));
+        assert!(RouterDocument::from_yaml_str(&raw).is_ok());
+    }
+
+    #[test]
+    fn new_service_configs_reject_invalid_or_unknown_keys() {
+        expect_config_err(
+            &with_services("    trust:\n      enabled: true\n      min_evidence: 0\n"),
+            "trust min_evidence must be > 0",
+        );
+        expect_config_err(
+            &with_services(
+                "    trust:\n      enabled: true\n      promote_at: 0.1\n      demote_below: 0.9\n",
+            ),
+            "trust thresholds",
+        );
+        expect_config_err(
+            &with_services("    backend_failover:\n      enabled: true\n      max_attempts: 0\n"),
+            "max_attempts must be 1..=8",
+        );
+        expect_config_err(
+            &with_services("    quota:\n      default_reserve_usd: -1.0\n"),
+            "default_reserve_usd must be >= 0",
+        );
+        expect_config_err(
+            &with_services("    trust:\n      typo: 1\n"),
+            "unknown field",
+        );
+    }
+
+    #[test]
+    fn protection_and_question_template_configs_parse() {
+        let raw = TINY.replace("      strategy: priority", "      strategy: priority\n      competence:\n        enabled: true\n        protection:\n          enabled: true\n          floor: 0.3\n          plan_version: plan-1");
+        let doc = RouterDocument::from_yaml_str(&raw).unwrap();
+        let p = doc.recipes[0]
+            .routing
+            .as_ref()
+            .unwrap()
+            .competence
+            .as_ref()
+            .unwrap()
+            .protection
+            .as_ref()
+            .unwrap();
+        assert!(p.enabled);
+        assert!((p.floor - 0.3).abs() < 1e-6);
+        assert_eq!(p.plan_version.as_deref(), Some("plan-1"));
+        expect_config_err(
+            &TINY.replace("      strategy: priority", "      strategy: priority\n      competence:\n        enabled: true\n        protection:\n          enabled: true\n          floor: 2.0"),
+            "protection floor must be 0..=1",
+        );
+        expect_config_err(
+            &TINY.replace("      strategy: priority", "      strategy: priority\n      competence:\n        enabled: true\n        protection:\n          enabled: true\n          max_evidence_age_secs: 0"),
+            "max_evidence_age_secs must be > 0",
+        );
+
+        let single: AfmDRecipe = serde_yaml::from_str("{}").unwrap();
+        assert_eq!(single.question_template, None);
+        let three: AfmDRecipe = serde_yaml::from_str("question_template: three").unwrap();
+        assert_eq!(three.question_template, Some(AfmDQuestionTemplate::Three));
+        assert_eq!(AfmDQuestionTemplate::Three.as_str(), "three");
+        assert_eq!(AfmDQuestionTemplate::default().as_str(), "single");
+        assert!(serde_yaml::from_str::<AfmDRecipe>("question_template: bogus").is_err());
     }
 
     #[test]

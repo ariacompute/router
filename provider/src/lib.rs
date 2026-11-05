@@ -1,6 +1,6 @@
 //! OpenAI-compatible upstream forwarding + health/latency.
 
-use aria_router_config::{ProviderModel, RouterDocument};
+use aria_router_config::{BackendRef, ProviderModel, RouterDocument};
 use aria_router_core::{ChatRequest, RouterError};
 use bytes::Bytes;
 use futures_util::Stream;
@@ -76,33 +76,69 @@ impl PoolState {
     }
 }
 
-pub async fn forward(
-    doc: &RouterDocument,
+/// Ordered backend candidate chain (C8). With failover disabled the historical
+/// single highest-weight backend is used; when enabled, candidates are sorted
+/// by weight (descending, stable) and truncated to `max_attempts`.
+fn backend_candidates<'a>(
+    doc: &'a RouterDocument,
     model: &str,
-    req: &ChatRequest,
-    extra_headers: &[(String, String)],
-    pool: &PoolState,
-) -> Result<Value, RouterError> {
+) -> Result<Vec<&'a BackendRef>, RouterError> {
     let provider = doc
         .provider(model)
         .ok_or_else(|| RouterError::FailClosed(format!("unknown provider model {model}")))?;
-    let backend = pick_backend(provider)?;
-    let url = format!("{}/v1/chat/completions", backend.url());
-    let mut body =
-        serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
-    let upstream_model = if provider.provider_model_id.is_empty() {
-        model.to_string()
-    } else {
-        provider.provider_model_id.clone()
-    };
-    body["model"] = Value::String(upstream_model);
-    let mut builder = pool.client.post(&url).json(&body);
+    let cfg = &doc.global.services.backend_failover;
+    if !cfg.enabled {
+        return Ok(vec![pick_backend(provider)?]);
+    }
+    if provider.backend_refs.is_empty() {
+        return Err(RouterError::Config(format!(
+            "model {} has no backend_refs",
+            provider.name
+        )));
+    }
+    let mut refs: Vec<&BackendRef> = provider.backend_refs.iter().collect();
+    refs.sort_by_key(|b| std::cmp::Reverse(b.weight));
+    refs.truncate(cfg.max_attempts.max(1) as usize);
+    Ok(refs)
+}
+
+/// Join all candidate failures without leaking keys or request bodies.
+fn candidates_exhausted(n: usize, errors: &[String], last: RouterError) -> RouterError {
+    if n == 1 {
+        return last;
+    }
+    RouterError::Upstream(format!(
+        "all {n} backend candidates failed: {}",
+        errors.join("; ")
+    ))
+}
+
+fn request_builder(
+    pool: &PoolState,
+    url: &str,
+    body: &Value,
+    backend: &BackendRef,
+    extra_headers: &[(String, String)],
+) -> reqwest::RequestBuilder {
+    let mut builder = pool.client.post(url).json(body);
     if let Some(key) = api_key(backend) {
         builder = builder.bearer_auth(key);
     }
     for (k, v) in extra_headers {
         builder = builder.header(k.as_str(), v.as_str());
     }
+    builder
+}
+
+async fn forward_once(
+    pool: &PoolState,
+    model: &str,
+    body: &Value,
+    backend: &BackendRef,
+    extra_headers: &[(String, String)],
+) -> Result<Value, RouterError> {
+    let url = format!("{}/v1/chat/completions", backend.url());
+    let builder = request_builder(pool, &url, body, backend, extra_headers);
     let t0 = Instant::now();
     let resp = builder.send().await.map_err(|e| {
         pool.record(model, t0.elapsed().as_millis() as f32, false);
@@ -118,8 +154,46 @@ pub async fn forward(
         pool.record(model, ms, false);
         return Err(RouterError::Upstream(format!("{status}: {text}")));
     }
+    let parsed: Value = serde_json::from_str(&text).map_err(|e| {
+        pool.record(model, ms, false);
+        RouterError::Upstream(e.to_string())
+    })?;
     pool.record(model, ms, true);
-    serde_json::from_str(&text).map_err(|e| RouterError::Upstream(e.to_string()))
+    Ok(parsed)
+}
+
+pub async fn forward(
+    doc: &RouterDocument,
+    model: &str,
+    req: &ChatRequest,
+    extra_headers: &[(String, String)],
+    pool: &PoolState,
+) -> Result<Value, RouterError> {
+    let provider = doc
+        .provider(model)
+        .ok_or_else(|| RouterError::FailClosed(format!("unknown provider model {model}")))?;
+    let candidates = backend_candidates(doc, model)?;
+    let mut body =
+        serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
+    let upstream_model = if provider.provider_model_id.is_empty() {
+        model.to_string()
+    } else {
+        provider.provider_model_id.clone()
+    };
+    body["model"] = Value::String(upstream_model);
+    let n = candidates.len();
+    let mut errors = Vec::new();
+    let mut last = RouterError::Config(format!("model {model} has no backend_refs"));
+    for (i, backend) in candidates.into_iter().enumerate() {
+        match forward_once(pool, model, &body, backend, extra_headers).await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                errors.push(format!("candidate {}: {e}", i + 1));
+                last = e;
+            }
+        }
+    }
+    Err(candidates_exhausted(n, &errors, last))
 }
 
 /// Buffered SSE read (tests / callers that need the full body). Prefer [`forward_sse_stream`].
@@ -142,34 +216,15 @@ pub async fn forward_sse_text(
 type BoxByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, RouterError>> + Send>>;
 
 /// Open upstream SSE as a passthrough byte stream. Records pool latency when the stream ends.
-pub async fn forward_sse_stream(
-    doc: &RouterDocument,
-    model: &str,
-    req: &ChatRequest,
-    extra_headers: &[(String, String)],
+async fn open_sse_once(
     pool: &PoolState,
+    model: &str,
+    body: &Value,
+    backend: &BackendRef,
+    extra_headers: &[(String, String)],
 ) -> Result<SseByteStream, RouterError> {
-    let provider = doc
-        .provider(model)
-        .ok_or_else(|| RouterError::FailClosed(format!("unknown provider model {model}")))?;
-    let backend = pick_backend(provider)?;
     let url = format!("{}/v1/chat/completions", backend.url());
-    let mut body =
-        serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
-    let upstream_model = if provider.provider_model_id.is_empty() {
-        model.to_string()
-    } else {
-        provider.provider_model_id.clone()
-    };
-    body["model"] = Value::String(upstream_model);
-    body["stream"] = Value::Bool(true);
-    let mut builder = pool.client.post(&url).json(&body);
-    if let Some(key) = api_key(backend) {
-        builder = builder.bearer_auth(key);
-    }
-    for (k, v) in extra_headers {
-        builder = builder.header(k.as_str(), v.as_str());
-    }
+    let builder = request_builder(pool, &url, body, backend, extra_headers);
     let t0 = Instant::now();
     let resp = builder.send().await.map_err(|e| {
         pool.record(model, t0.elapsed().as_millis() as f32, false);
@@ -201,6 +256,41 @@ pub async fn forward_sse_stream(
         started: Instant::now(),
         model: model.to_string(),
     })
+}
+
+pub async fn forward_sse_stream(
+    doc: &RouterDocument,
+    model: &str,
+    req: &ChatRequest,
+    extra_headers: &[(String, String)],
+    pool: &PoolState,
+) -> Result<SseByteStream, RouterError> {
+    let provider = doc
+        .provider(model)
+        .ok_or_else(|| RouterError::FailClosed(format!("unknown provider model {model}")))?;
+    let candidates = backend_candidates(doc, model)?;
+    let mut body =
+        serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
+    let upstream_model = if provider.provider_model_id.is_empty() {
+        model.to_string()
+    } else {
+        provider.provider_model_id.clone()
+    };
+    body["model"] = Value::String(upstream_model);
+    body["stream"] = Value::Bool(true);
+    let n = candidates.len();
+    let mut errors = Vec::new();
+    let mut last = RouterError::Config(format!("model {model} has no backend_refs"));
+    for (i, backend) in candidates.into_iter().enumerate() {
+        match open_sse_once(pool, model, &body, backend, extra_headers).await {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                errors.push(format!("candidate {}: {e}", i + 1));
+                last = e;
+            }
+        }
+    }
+    Err(candidates_exhausted(n, &errors, last))
 }
 
 /// Passthrough upstream SSE bytes; accumulates for cost parsing after the stream ends.
@@ -359,6 +449,192 @@ providers:
             backend = backend
         ))
         .unwrap()
+    }
+
+    fn failover_doc(first: &str, second: &str, enabled: bool, max_attempts: u32) -> RouterDocument {
+        RouterDocument::from_yaml_str(&format!(
+            r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: m
+  models:
+    - name: m
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: {first}
+          weight: 10
+        - name: secondary
+          endpoint: {second}
+          weight: 1
+global:
+  services:
+    backend_failover:
+      enabled: {enabled}
+      max_attempts: {max_attempts}
+"#,
+            first = first,
+            second = second,
+            enabled = enabled,
+            max_attempts = max_attempts
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn failover_without_any_backend_ref_is_a_config_error() {
+        let raw = r#"
+version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: m
+  models:
+    - name: m
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs: []
+entrypoints:
+  - model_names: [ariacompute/auto]
+    router: semantic
+    recipe: r
+recipes:
+  - name: r
+    router: semantic
+    routing:
+      strategy: priority
+      decisions:
+        - name: d
+          priority: 1
+          rules:
+            operator: AND
+            conditions: []
+global:
+  services:
+    backend_failover:
+      enabled: true
+"#;
+        let doc = RouterDocument::from_yaml_str(raw).unwrap();
+        let err = backend_candidates(&doc, "m").unwrap_err();
+        assert!(err.to_string().contains("has no backend_refs"), "{err}");
+    }
+
+    #[test]
+    fn backend_candidates_are_ordered_by_weight_and_capped() {
+        let single = doc_with_backend("127.0.0.1:9");
+        assert_eq!(backend_candidates(&single, "m").unwrap().len(), 1);
+        assert_eq!(backend_candidates(&single, "m").unwrap()[0].name, "high");
+        let chained = failover_doc("127.0.0.1:9", "127.0.0.1:8", true, 2);
+        let names: Vec<&str> = backend_candidates(&chained, "m")
+            .unwrap()
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["primary", "secondary"]);
+        let capped = failover_doc("127.0.0.1:9", "127.0.0.1:8", true, 1);
+        assert_eq!(backend_candidates(&capped, "m").unwrap().len(), 1);
+        assert!(matches!(
+            backend_candidates(&chained, "unknown"),
+            Err(RouterError::FailClosed(_))
+        ));
+        let exhausted = candidates_exhausted(
+            2,
+            &["candidate 1: x".into(), "candidate 2: y".into()],
+            RouterError::Upstream("y".into()),
+        );
+        assert!(exhausted
+            .to_string()
+            .contains("all 2 backend candidates failed"));
+        assert_eq!(
+            candidates_exhausted(1, &[], RouterError::Upstream("x".into())).to_string(),
+            RouterError::Upstream("x".into()).to_string()
+        );
+    }
+
+    async fn mock_server_invalid_json() -> String {
+        let app = axum::Router::new().route(
+            "/v1/chat/completions",
+            axum::routing::post(|| async { "not json" }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("127.0.0.1:{}", addr.port())
+    }
+
+    #[tokio::test]
+    async fn c8_forward_tries_next_candidate_on_failure() {
+        let healthy = mock_server().await;
+        let broken = closing_endpoint().await;
+        let doc = failover_doc(&broken, &healthy, true, 2);
+        let pool = PoolState::default();
+        let body = forward(&doc, "m", &chat_req(), &[], &pool).await.unwrap();
+        assert_eq!(body["choices"][0]["message"]["content"], "ok");
+        assert_eq!(pool.failures_map().get("m").copied(), Some(0));
+
+        // A 200 with an invalid JSON body is also a failed candidate.
+        let invalid = mock_server_invalid_json().await;
+        let doc2 = failover_doc(&invalid, &healthy, true, 2);
+        let body2 = forward(&doc2, "m", &chat_req(), &[], &PoolState::default())
+            .await
+            .unwrap();
+        assert_eq!(body2["model"], "echo");
+
+        // SSE uses the same candidate chain.
+        let doc3 = failover_doc(&closing_endpoint().await, &healthy, true, 2);
+        let text = forward_sse_text(&doc3, "m", &chat_req(), &[], &PoolState::default())
+            .await
+            .unwrap();
+        assert!(text.contains("data:"));
+    }
+
+    #[tokio::test]
+    async fn c8_failover_is_opt_in_and_fails_closed_when_exhausted() {
+        let healthy = mock_server().await;
+        let broken = closing_endpoint().await;
+        // Disabled: the historical single (highest-weight) backend is used.
+        let off = failover_doc(&broken, &healthy, false, 2);
+        let err = forward(&off, "m", &chat_req(), &[], &PoolState::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RouterError::Upstream(_)));
+        // Enabled but capped at one attempt: same outcome, no fallback.
+        let capped = failover_doc(&broken, &healthy, true, 1);
+        assert!(matches!(
+            forward(&capped, "m", &chat_req(), &[], &PoolState::default()).await,
+            Err(RouterError::Upstream(_))
+        ));
+        // All candidates fail: one error naming both failures, no secret leakage.
+        let both_broken = failover_doc(
+            &closing_endpoint().await,
+            &mock_server_status(500).await,
+            true,
+            2,
+        );
+        let err = forward(&both_broken, "m", &chat_req(), &[], &PoolState::default())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("all 2 backend candidates failed"));
+        assert!(err.to_string().contains("500"));
+        let sse_err = forward_sse_text(&both_broken, "m", &chat_req(), &[], &PoolState::default())
+            .await
+            .unwrap_err();
+        assert!(sse_err
+            .to_string()
+            .contains("all 2 backend candidates failed"));
     }
 
     #[test]

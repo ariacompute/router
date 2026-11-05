@@ -41,6 +41,37 @@ pub struct CostEvent {
     pub priced: bool,
 }
 
+impl Default for CostEvent {
+    fn default() -> Self {
+        Self {
+            ts: String::new(),
+            user: String::new(),
+            key_id: None,
+            key_name: None,
+            identity: String::new(),
+            serve_user_id: None,
+            serve_email: None,
+            serve_site: None,
+            session: String::new(),
+            entrypoint: String::new(),
+            layer: String::new(),
+            decision: String::new(),
+            model: String::new(),
+            bypass: false,
+            competence_tier: None,
+            turns_in_request: 0,
+            upstream_requests: 0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            input_per_mtok: 0.0,
+            output_per_mtok: 0.0,
+            cost_usd: 0.0,
+            tokens_source: String::new(),
+            priced: false,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct Bucket {
     requests: u64,
@@ -67,6 +98,13 @@ pub struct CostLedger {
 }
 
 impl CostLedger {
+    /// Read-only view of the (capped 4096) event ring. Used by the model
+    /// performance view; spend quota accounting deliberately does *not* rely
+    /// on this ring because older events are evicted.
+    pub fn events(&self) -> &[CostEvent] {
+        &self.events
+    }
+
     pub fn record(&mut self, ev: CostEvent) {
         *self.session_turns.entry(ev.session.clone()).or_insert(0) += 1;
         self.users.insert(ev.user.clone());

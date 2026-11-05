@@ -27,6 +27,9 @@ pub enum RouterError {
     Unauthorized(String),
     #[error("rate limited: {0}")]
     RateLimited(String),
+    /// Opt-in API-key spend quota exhausted (C7). Distinct from rate limiting.
+    #[error("spend quota exceeded: {0}")]
+    QuotaExceeded(String),
 }
 
 impl From<std::io::Error> for RouterError {
@@ -367,6 +370,127 @@ pub fn turn_of(messages: &[ChatMessage]) -> u64 {
     messages.iter().filter(|m| m.role == "user").count() as u64
 }
 
+/// Explicit cross-request re-decision boundary (C1).
+///
+/// Classification happens once per request, before the decision cache is
+/// consulted. A single request still runs exactly one decisioner: the boundary
+/// only decides whether a *previously frozen* decision may be reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedecisionBoundary {
+    NewUserMessage,
+    ContextCompaction,
+    ToolContinuation,
+    SameTurn,
+    /// History is discontinuous or unrecognisable: fail closed, never reuse.
+    Unknown,
+}
+
+impl RedecisionBoundary {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NewUserMessage => "new-user-message",
+            Self::ContextCompaction => "context-compaction",
+            Self::ToolContinuation => "tool-continuation",
+            Self::SameTurn => "same-turn",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn is_redecision(self) -> bool {
+        matches!(
+            self,
+            Self::NewUserMessage | Self::ContextCompaction | Self::ToolContinuation
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BoundaryState {
+    msg_len: usize,
+    turn: u64,
+    prefix_fp: u64,
+    full_fp: u64,
+}
+
+/// Tracks the previous request per session and classifies the boundary.
+#[derive(Debug, Default)]
+pub struct RedecisionTracker {
+    inner: Mutex<HashMap<String, BoundaryState>>,
+}
+
+impl RedecisionTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn observe(
+        &self,
+        session: &str,
+        messages: &[ChatMessage],
+        tools: Option<&serde_json::Value>,
+    ) -> RedecisionBoundary {
+        if session.is_empty() || messages.is_empty() {
+            return RedecisionBoundary::Unknown;
+        }
+        let msg_len = messages.len();
+        let turn = turn_of(messages);
+        let prefix_fp = context_prefix_fp(messages, tools);
+        let full_fp = context_full_fp(messages, tools);
+        let last_user = messages.iter().rposition(|m| m.role == "user");
+        let tool_tail = messages
+            .iter()
+            .enumerate()
+            .any(|(i, m)| m.role == "tool" && last_user.is_none_or(|u| i > u));
+        let last_is_user = messages.last().is_some_and(|m| m.role == "user");
+        let next = BoundaryState {
+            msg_len,
+            turn,
+            prefix_fp,
+            full_fp,
+        };
+        let mut g = self.inner.lock().unwrap();
+        let boundary = match g.get(session) {
+            None => RedecisionBoundary::NewUserMessage,
+            Some(prev) => {
+                if msg_len < prev.msg_len || prefix_fp != prev.prefix_fp {
+                    RedecisionBoundary::ContextCompaction
+                } else if tool_tail && (msg_len > prev.msg_len || full_fp != prev.full_fp) {
+                    RedecisionBoundary::ToolContinuation
+                } else if turn > prev.turn || (last_is_user && full_fp != prev.full_fp) {
+                    RedecisionBoundary::NewUserMessage
+                } else if full_fp == prev.full_fp {
+                    RedecisionBoundary::SameTurn
+                } else {
+                    RedecisionBoundary::Unknown
+                }
+            }
+        };
+        g.insert(session.to_string(), next);
+        boundary
+    }
+
+    pub fn clear(&self, session: &str) {
+        self.inner.lock().unwrap().remove(session);
+    }
+}
+
+/// Hash of the whole message list + tool definitions; detects a replaced turn
+/// or an unrecognisable context rebuild that `context_prefix_fp` cannot see.
+pub fn context_full_fp(messages: &[ChatMessage], tools: Option<&serde_json::Value>) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    messages.len().hash(&mut h);
+    for m in messages {
+        m.role.hash(&mut h);
+        m.text().hash(&mut h);
+    }
+    if let Some(t) = tools {
+        t.to_string().hash(&mut h);
+    }
+    h.finish()
+}
+
 /// Per-session rolling competence tracker.
 ///
 /// Stage competence scores (0..1) are folded into a rolling estimate per
@@ -425,6 +549,88 @@ pub fn tier_of_model(name: &str) -> &'static str {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn msg(role: &str, text: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.into(),
+            content: json!(text),
+        }
+    }
+
+    #[test]
+    fn redecision_boundaries_are_classified_explicitly() {
+        let t = RedecisionTracker::new();
+        let first = vec![msg("system", "sys"), msg("user", "hello")];
+        assert_eq!(
+            t.observe("s1", &first, None),
+            RedecisionBoundary::NewUserMessage
+        );
+        // Same request again: frozen decision may be reused.
+        assert_eq!(t.observe("s1", &first, None), RedecisionBoundary::SameTurn);
+        // Context compaction: shorter history and/or system/tools rebuild.
+        let compacted = vec![msg("system", "compressed"), msg("user", "hello")];
+        assert_eq!(
+            t.observe("s1", &compacted, None),
+            RedecisionBoundary::ContextCompaction
+        );
+        // Tool continuation inside the same turn.
+        let mut with_tool = compacted.clone();
+        with_tool.push(msg("tool", "result"));
+        assert_eq!(
+            t.observe("s1", &with_tool, None),
+            RedecisionBoundary::ToolContinuation
+        );
+        // New user message.
+        let mut next_turn = with_tool.clone();
+        next_turn.push(msg("user", "again"));
+        assert_eq!(
+            t.observe("s1", &next_turn, None),
+            RedecisionBoundary::NewUserMessage
+        );
+        // Unrecognisable history / missing session fails closed.
+        assert_eq!(t.observe("", &first, None), RedecisionBoundary::Unknown);
+        assert_eq!(t.observe("s1", &[], None), RedecisionBoundary::Unknown);
+        let mut discontinuous = vec![
+            msg("system", "sys"),
+            msg("user", "hi"),
+            msg("assistant", "a"),
+        ];
+        assert_eq!(
+            t.observe("s2", &discontinuous, None),
+            RedecisionBoundary::NewUserMessage
+        );
+        discontinuous[2] = msg("assistant", "rewritten history");
+        assert_eq!(
+            t.observe("s2", &discontinuous, None),
+            RedecisionBoundary::Unknown
+        );
+        assert_eq!(RedecisionBoundary::Unknown.as_str(), "unknown");
+        assert!(RedecisionBoundary::ContextCompaction.is_redecision());
+        assert!(!RedecisionBoundary::SameTurn.is_redecision());
+        t.clear("s1");
+        assert_eq!(
+            t.observe("s1", &first, None),
+            RedecisionBoundary::NewUserMessage
+        );
+    }
+
+    #[test]
+    fn context_full_fp_changes_with_every_message() {
+        let a = vec![msg("user", "one")];
+        let b = vec![msg("user", "two")];
+        assert_ne!(context_full_fp(&a, None), context_full_fp(&b, None));
+        assert_eq!(
+            context_prefix_fp(&a, None),
+            context_prefix_fp(&b, None),
+            "prefix fingerprint only covers system/tools"
+        );
+        let tools = json!([{"name": "search"}]);
+        assert_ne!(
+            context_full_fp(&a, Some(&tools)),
+            context_full_fp(&a, None),
+            "tool definitions must change the full fingerprint"
+        );
+    }
 
     #[test]
     fn chat_request_text_helpers() {
