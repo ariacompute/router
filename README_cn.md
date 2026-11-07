@@ -986,6 +986,10 @@ emits:
 
 **结论**：Router 在保持「硬约束 + fail closed + 三决策器隔离」的前提下，补齐了 HiRoute 的 competence-aware 软降级、结构化执行证据、可插拔决策扩展与长周期委托，并以生产级 OpenAI 兼容网关 + 多租户计费 + C ABI / 八语言 SDK 的组合，覆盖 vLLM SR 之外的服务端全栈需求。
 
+## 许可证
+
+MIT.
+
 ## 工程约定
 
 本仓库遵循 Harness Engineering：

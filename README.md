@@ -991,6 +991,10 @@ Legend: ✅ full support · △ partial / limited · ❌ not supported.
 
 **Takeaway**: Router keeps its hard-constraint + fail-closed + three-router-isolation contract while adopting HiRoute's competence-aware soft downgrade, structured execution evidence, pluggable decision extension, and long-horizon delegation — and wraps them in a production-grade OpenAI-compatible gateway with multi-tenant billing and a C ABI / eight-language SDK, covering the full server-side stack beyond vLLM SR's semantic layer.
 
+## License
+
+MIT.
+
 ## Engineering Conventions
 
 This repository follows the Harness Engineering philosophy:
