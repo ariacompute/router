@@ -1,88 +1,20 @@
-# 🚀 aria-router release notes
+# 🚀 aria-router 发版说明
 
-📦 These notes cover the `T90–T99` feature set (C1–C9 / U1). The runtime contract
-(hard-constraint pruning + fail-closed + the three-router isolation of semantic /
-agent / afm-d) is unchanged — every addition below is opt-in and never bypasses it.
+## ✨ 新增
 
-## ✨ Added
+- 🔁 **重判边界**：跨请求时先判断这次是新消息、上下文压缩后的续跑、工具结果回来的续跑，还是同一轮里的普通请求。历史接不上就不再复用上一次的冻结决策，直接拒绝。每次响应都会带上新加的 x-aria-router-redecision，属于哪种边界一眼能看到。默认关闭。
+- 🧠 **afm-d 三问模板**：原来只问「选哪个模型」，现在可以再问三件事——当前阶段要什么能力、任务有多难、是不是接着上一轮。答案合成一个类型化的路由决策；难度判为 hard 时只在已经通过硬过滤的候选模型里升档，答案同时写进执行证据。不开启时仍是原来的单问方式。
+- 🛡️ **低分保护**：证据够新、够完整，类目和评分方案版本也对得上，并确实显示低分时，才会调整候选模型的顺序。触发、解除、释放各有状态，一次低分不会反复触发；没评分不算零分。调整只在已经通过硬剪枝的候选池里进行，地域、鉴权、模态这三类剪枝盖不过去。
+- 🤝 **信任档位**：档位升降要看证据够不够多、置信度够不够高，评分方案与 rubric 版本也要对得上。配套三个接口：看草稿、给建议、正式发布；证据不足或置信度偏低就干脆不给建议。发布必须明确确认，而且只做离线重算，不会去改线上配置；想先看个大概可以用离线估算。新的 Trust Tiers 页面把这些操作串了起来。
+- 📊 **模型表现**：新接口按模型和档位给出花费占比、请求数和阶段能力评分。没有证据就明说没有，Dashboard 显示「No data」，不拿 0 冒充。数据都摆在新增的 Model Performance 页面。
+- 🧾 **生产路径执行证据**：线上路由现在把任务类目、阶段能力、是否接受输出、工具结果、评分方案版本、延续性、入口决策器和重判边界串成一条证据链写下来。JSONL 格式保持向后兼容；不开 replay 时不会额外计算证据。
+- 💳 **API key 软额度**：可以按单个 key，也可以按一组共享的 group 累计花费。每次请求先预留，再按实际流量结算，SSE 中途断开也能算清。key 自己没写花费上限，就只记账、不拦请求；用超了返回 429，和限流分开。待结算的预留和结算失败都能查到，失败只记录，不会悄悄吞掉。默认关闭。
+- 🔀 **Backend 故障转移**：按模型配置的多个后端和权重排成候选链，前一个失败就换下一个，SSE 和非 SSE 两条路径都走这套。全都失败时把错误汇总返回，密钥不会跟着漏出去。默认关闭。
+- 🧪 **离线策略一致性 bench**：拿保存下来的决策记录，离线重算最省钱、最强模型、按期望标签、按配置期望这四种策略，对照线上实际选得对不对。不用起 router，只出报告、不拦 CI；同一份摘要也会附在 live 报告里。
+- 🎨 **Dashboard 重做与审计**：新增 Model Performance 和 Trust Tiers 两页。界面改成单色、扁平、直角，对比度到 AA、字号不小于 12px，动效只做位移和淡入淡出，字体全部走本地字体栈，不再依赖外部字体服务；设计约定写在 [PRODUCT.md](PRODUCT.md)。审计脚本提供源码、DOM、线上页面、浏览器和列出规则五种跑法，跑不起来就如实标 skipped，不冒充通过。复跑步骤见 [README_cn.md](README_cn.md) 的「本地渲染检查」一节。
 
-- 🔁 **Re-decision boundaries (C1)** — `core::RedecisionTracker` classifies the
-  cross-request boundary (`new-user-message` / `context-compaction` /
-  `tool-continuation` / `same-turn` / `unknown`). A discontinuous history
-  (`unknown`) fails closed instead of reusing a frozen decision. The chosen
-  boundary is observable on every response via the new `x-aria-router-redecision`
-  header. Configurable under `global.services.redecision` (off by default).
-- 🧠 **afm-d three-question template (C2)** — `afm-d.question_template:
-  single|three`. With `three`, stage-competence / difficulty / continuation are
-  asked alongside `route` and normalised into one typed `RouteDecision`; a `hard`
-  difficulty promotes within the hard-filtered eligible pool, and the answers also
-  fold into execution evidence.
-- 🛡️ **Low-score protection (C3)** — `routing.competence.protection` reorders the
-  already hard-pruned eligible pool when fresh, complete, same-category,
-  same plan+rubric evidence shows a low score. State machine: trigger → resolve →
-  release; old low scores do not re-trigger; `unscored != 0`; protection can never
-  override location / auth / modality pruning.
-- 🤝 **Trust tiers (C4)** — `global.services.trust` gates suggestions behind a
-  minimum evidence count, confidence, and promote/demote thresholds (with plan /
-  rubric version). New endpoints: `GET /v1/router/trust` (list drafts),
-  `POST /v1/router/trust/suggest` (next suggested change; insufficient /
-  low-confidence evidence → no suggestion), `POST /v1/router/trust/publish`
-  (applies a draft **only** when `confirm: true`; an offline recompute that does
-  **not** call `PUT /v1/router/config`). A `?estimate=true` query returns a
-  heuristic offline estimate. Driven by the new ✨ **Trust Tiers** dashboard page.
-- 📊 **Model performance (C5)** — `GET /v1/router/cost/model-performance` returns
-  per-model / per-tier cost share, request counts, and stage competence. With no
-  evidence it reports `has_evidence: false` (the dashboard shows "No data" rather
-  than 0). Surfaced on the new 📊 **Model Performance** dashboard page.
-- 🧾 **Execution evidence on production paths (C6)** — the production routing paths
-  now emit the task_category / stage_competence / accepted_output / tool_outcomes
-  / plan+rubric versions / continuation / entrypoint / redecision_boundary chain.
-  JSONL is backward-compatible; when replay is off there is zero extra evidence
-  computation.
-- 💳 **API-key soft quota (C7)** — `global.services.quota` (default off) keeps a
-  persistent cumulative spend per key and shared `group`; each request reserves,
-  then settles to actual traffic (including on SSE interruption). No limit is
-  enforced unless a key declares `spend_limit_usd`; the accounting never blocks.
-  Exhaustion returns `QuotaExceeded` (429), distinct from rate limiting.
-  `GET /v1/router/quota` exposes pending reservations and any settlement errors
-  (settlement failures are recorded, never swallowed).
-- 🔀 **Backend failover (C8)** — `global.services.backend_failover` (default off)
-  builds a weight-ordered candidate chain from each model's `backend_refs` and
-  switches to the next candidate on failure (both SSE and non-SSE paths); all
-  candidates failing aggregates the error without leaking keys.
-- 🧪 **Offline policy-consistency bench (C9)** — `python -m bench
-  policy-consistency` recomputes four deterministic policies (cheapest /
-  strongest / expected-label / by-config-expected) from saved decision records —
-  no live router required. The same summary is embedded in live reports.
-  Report-only, `ci_fail: false`.
-- 🎨 **Dashboard redesign & audit (U1)** — new 📊 **Model Performance** and 🤝
-  **Trust Tiers** pages. The dashboard is now monochrome / flat / square / AA /
-  ≥12px with transform-or-opacity-only motion and a local font stack (no web-font
-  CDN); design contract in [`PRODUCT.md`](PRODUCT.md). `scripts/audit-ui.sh` runs
-  the impeccable-style audit in five modes (`--static` / `--dom` / `--url` /
-  `--browser` / `--list-rules`); a mode that cannot run is reported as `skipped`,
-  never as a pass. See the "Local rendering check (re-run)" section in
-  [README.md](README.md).
+## 🔧 变更
 
-## 🔧 Changed
-
-- 💰 `GET /v1/router/cost` already reported six-factor spend; it now pairs with the
-  new Model Performance endpoint and the Cost by Competence page.
-- 📨 Response headers now also include `x-aria-router-redecision`.
-- ⚙️ CI adds mandatory `dashboard` (build + UI guards + `--static` + `--dom`) and
-  `bench` jobs. A 100% line-coverage gate (`scripts/coverage.sh`) is enforced.
-
-## 📝 Notes
-
-Local rendering check / re-run:
-
-```bash
-npm --prefix dashboard ci
-npm --prefix dashboard run build
-npm --prefix dashboard run test
-./scripts/audit-ui.sh --list-rules
-./scripts/audit-ui.sh --static
-./scripts/audit-ui.sh --dom
-# On a machine with Chrome and the impeccable binary:
-IMPECCABLE_BROWSER=/usr/bin/google-chrome ./scripts/audit-ui.sh --url
-```
+- 💰 成本接口原本就按六个因子报花费，现在和新的模型表现接口、Cost by Competence 页面配套，成本这块能一次看全。
+- 📨 响应头多了一个 x-aria-router-redecision。
+- ⚙️ CI 加了 dashboard 和 bench 两个必过任务，前者包含构建、UI 护栏以及源码和 DOM 两档审计；100% 行覆盖门禁也正式卡上。
