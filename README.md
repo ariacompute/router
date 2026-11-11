@@ -84,15 +84,15 @@ aria-router answers one question for an OpenAI-compatible gateway: *which model 
 #   three provider_model_id tiers; agent also endpoint/model/fallback; afm-d also
 #   System One endpoint/fallback) → admin → upgrade_url.
 # CI: --template + --admin-user + --admin-password skips model prompts (gateway defaults).
-aria-router setup
-aria-router setup --status
+cargo run -p aria-router -- setup
+cargo run -p aria-router -- setup --status
 
 # Upgrade CLI + libaria-router_ffi from GitHub/Gitee Releases (needs setup upgrade_url)
-aria-router upgrade
-aria-router upgrade 0.1.0
+cargo run -p aria-router -- upgrade
+cargo run -p aria-router -- upgrade 0.1.0
 
 # Validate (default path after setup, or pass --config)
-aria-router validate
+cargo run -p aria-router -- validate
 
 # Serve — data plane from YAML listeners (examples use 127.0.0.1:8899);
 # management defaults to 127.0.0.1:8080. Omit --config after setup.

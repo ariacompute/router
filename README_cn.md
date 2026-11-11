@@ -84,15 +84,15 @@ aria-router 为 OpenAI 兼容网关回答一个问题：*这条请求该由哪�
 #   三档 provider_model_id；agent 另有 endpoint/model/fallback；
 #   afm-d 另有 System One endpoint/fallback）→ admin → upgrade_url。
 # CI：--template + --admin-user + --admin-password 跳过 models 提示（用 gateway 默认）。
-aria-router setup
-aria-router setup --status
+cargo run -p aria-router -- setup
+cargo run -p aria-router -- setup --status
 
 # 从 GitHub/Gitee Releases 更新 CLI + libaria-router_ffi（需先 setup 写 upgrade_url）
-aria-router upgrade
-aria-router upgrade 0.1.0
+cargo run -p aria-router -- upgrade
+cargo run -p aria-router -- upgrade 0.1.0
 
 # 校验（setup 后默认路径，或传 --config）
-aria-router validate
+cargo run -p aria-router -- validate
 
 # 服务 — 数据面来自 YAML listeners（示例均为 127.0.0.1:8899）；
 # 管理面默认 127.0.0.1:8080。setup 后可省略 --config。
