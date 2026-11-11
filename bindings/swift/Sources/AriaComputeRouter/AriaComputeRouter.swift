@@ -27,6 +27,10 @@ private typealias AriaRouterSetupFn = @convention(c) (
 private typealias AriaRouterCompleteFn = @convention(c) (
     OpaquePointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafeMutablePointer<CChar>?, Int
 ) -> Int32
+private typealias AriaRouterCompleteStreamFn = @convention(c) (
+    OpaquePointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafeMutablePointer<CChar>?, Int,
+    UnsafeMutableRawPointer?, UnsafeMutableRawPointer?
+) -> Int32
 private typealias AriaRouterBufOutFn = @convention(c) (
     OpaquePointer?, UnsafeMutablePointer<CChar>?, Int
 ) -> Int32
@@ -43,6 +47,7 @@ public final class Router {
     private var fnDestroy: AriaRouterDestroyFn!
     private var fnSetup: AriaRouterSetupFn!
     private var fnComplete: AriaRouterCompleteFn!
+    private var fnCompleteStream: AriaRouterCompleteStreamFn!
     private var fnModels: AriaRouterBufOutFn!
     private var fnLastRoute: AriaRouterBufOutFn!
     private var fnLastError: AriaRouterLastErrorFn!
@@ -94,10 +99,15 @@ public final class Router {
            FileManager.default.fileExists(atPath: env) {
             return env
         }
-        let libDir = (ariaHome() as NSString).appendingPathComponent("lib")
-        for name in ffiLibNames() {
-            let p = (libDir as NSString).appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: p) { return p }
+        let dirs = [
+            FileManager.default.currentDirectoryPath + "/lib",
+            (ariaHome() as NSString).appendingPathComponent("lib"),
+        ]
+        for dir in dirs {
+            for name in ffiLibNames() {
+                let p = (dir as NSString).appendingPathComponent(name)
+                if FileManager.default.fileExists(atPath: p) { return p }
+            }
         }
         throw NSError(
             domain: "AriaComputeRouter",
@@ -137,6 +147,7 @@ public final class Router {
         fnDestroy = try bind("aria_router_destroy")
         fnSetup = try bind("aria_router_setup")
         fnComplete = try bind("aria_router_complete")
+        fnCompleteStream = try bind("aria_router_complete_stream")
         fnModels = try bind("aria_router_models")
         fnLastRoute = try bind("aria_router_last_route")
         fnLastError = try bind("aria_router_last_error")
@@ -255,6 +266,47 @@ public final class Router {
         return obj as? [String: Any] ?? [:]
     }
 
+    public func completeStream(
+        messages: Any,
+        options: Any = [String: Any](),
+        onChunk: ((String) -> Void)? = nil
+    ) throws -> [String: Any] {
+        guard let h = handle else {
+            throw NSError(
+                domain: "AriaComputeRouter",
+                code: 6,
+                userInfo: [NSLocalizedDescriptionKey: "router not initialized"]
+            )
+        }
+        let msgData = try JSONSerialization.data(withJSONObject: messages)
+        let optData = try JSONSerialization.data(withJSONObject: options)
+        let msg = String(data: msgData, encoding: .utf8) ?? "[]"
+        let opt = String(data: optData, encoding: .utf8) ?? "{}"
+        let msgC = strdup(msg)
+        let optC = strdup(opt)
+        defer {
+            free(msgC)
+            free(optC)
+        }
+        let cap = 256 * 1024
+        let buf = UnsafeMutablePointer<CChar>.allocate(capacity: cap)
+        defer { buf.deallocate() }
+        buf.initialize(repeating: 0, count: cap)
+        let rc = fnCompleteStream(h, msgC, optC, buf, cap, nil, nil)
+        if rc != 0 {
+            throw NSError(
+                domain: "AriaComputeRouter",
+                code: 9,
+                userInfo: [NSLocalizedDescriptionKey: lastError("complete_stream failed")]
+            )
+        }
+        let text = String(cString: buf)
+        onChunk?(text)
+        let data = Data(text.utf8)
+        let obj = try JSONSerialization.jsonObject(with: data)
+        return obj as? [String: Any] ?? [:]
+    }
+
     public func models() throws -> [String: Any] {
         guard let h = handle else {
             throw NSError(
@@ -281,19 +333,30 @@ public final class Router {
         return obj as? [String: Any] ?? [:]
     }
 
-    public func lastRoute() -> [String: Any] {
-        guard let h = handle else { return [:] }
+    public func lastRoute() throws -> [String: Any] {
+        guard let h = handle else {
+            throw NSError(
+                domain: "AriaComputeRouter",
+                code: 6,
+                userInfo: [NSLocalizedDescriptionKey: "router not initialized"]
+            )
+        }
         let cap = 64 * 1024
         let buf = UnsafeMutablePointer<CChar>.allocate(capacity: cap)
         defer { buf.deallocate() }
         buf.initialize(repeating: 0, count: cap)
         let rc = fnLastRoute(h, buf, cap)
-        if rc != 0 { return [:] }
-        let text = String(cString: buf)
-        guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return [:]
+        if rc != 0 {
+            throw NSError(
+                domain: "AriaComputeRouter",
+                code: 10,
+                userInfo: [NSLocalizedDescriptionKey: lastError("last_route failed")]
+            )
         }
-        return obj
+        let text = String(cString: buf)
+        if text.isEmpty { return [:] }
+        guard let data = text.data(using: .utf8) else { return [:] }
+        let obj = try JSONSerialization.jsonObject(with: data)
+        return obj as? [String: Any] ?? [:]
     }
 }

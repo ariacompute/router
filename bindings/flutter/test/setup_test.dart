@@ -33,10 +33,25 @@ void main() {
         {'model': 'ariacompute/semantic-auto'},
       );
       expect(out.toString().contains('hello-from-router'), isTrue);
+      final chunks = <String>[];
+      final streamed = r.completeStream(
+        [
+          {'role': 'user', 'content': 'hi'}
+        ],
+        options: {'model': 'ariacompute/semantic-auto'},
+        onChunk: chunks.add,
+      );
+      expect(chunks.length, 1);
+      expect(streamed.toString().contains('hello-from-router'), isTrue);
       final lr = r.lastRoute();
       expect(lr['layer'], 'semantic');
+      expect(lr['headers']['x-aria-router-layer'], isNotNull);
+      r.setup(token: 't');
+      expect(r.setupStatus().token, 't');
+      r.setupClear();
+      expect(r.setupStatus().token, '');
     } finally {
-      r.close();
+      r.destroy();
     }
   }, skip: hasFfi ? false : 'ARIA_ROUTER_FFI_LIB / ARIA_ROUTER_CONFIG unset');
 

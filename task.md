@@ -57,7 +57,7 @@
 ## 阶段 E
 
 ### T7 — C ABI
-- [x] `aria_router.h`：init / connect / complete / stream / models / last_route / destroy / last_error
+- [x] `aria_router.h`：init / connect / setup / complete / stream / models / last_route / destroy / last_error（9 个导出；契约对齐不改头文件）
 - [x] `bindings/testdata/cases.json`
 - [x] `cargo test -p ariacompute-router-ffi`
 
@@ -65,6 +65,11 @@
 - [x] rust / python / go / typescript / react-native / flutter / swift / kotlin
 - [x] `./scripts/run-binding-tests.sh`
 - [x] 包名与 `libaria_ffi` 不冲突
+- [x] 契约对齐（不改 C ABI）：八语言统一 `setup` / `setup_status` / `setup_clear` / `complete` / `complete_stream` / `models` / `last_route` / `close` + `destroy`；Go 补 `SetupStatus` / `CompleteStream` / `Destroy`，Python/Go 补 `destroy` 别名，Rust 补 `close` / `destroy` / `complete_stream`
+- [x] `last_route` 追加白名单 `x-aria-router-*` 的 `headers` 扩展（含 `x-aria-router-redecision`）；失败一律抛错，不再静默 `{}`
+- [x] `connect` 模式 `models` 代理 `GET /v1/models` 且失败显式报错；`complete` 非 2xx 报错并保留响应头；`complete_stream` 明确为整块单次回调
+- [x] 动态库查找补齐包内捆绑（Flutter / Swift / Kotlin）与下划线产物名回退（Python）；Go cgo / Rust native 例外写入文档
+- [x] `cases.json` 增 8 个契约用例；FFI 21 项、Rust SDK 11 项单测全绿；Python / Go / TS / RN 宿主测全绿
 
 ## engine 协同（engine 仓）
 
@@ -80,7 +85,7 @@
 ### T11 — `setup` + 默认 `router.yml`
 - [x] CLI `aria-router setup [--status|--clear]` 写入 `~/.ariacompute/router.yml`
 - [x] `validate` / `serve` 的 `--config` 可选，缺省该路径
-- [x] 八语言 SDK `Router.setup` / `setup_status` / `setup_clear`；不写 yml
+- [x] 八语言 SDK `Router.setup` / `setup_status` / `setup_clear`（Go `Setup` / `SetupStatus` / `SetupClear`；TS/RN/Flutter/Swift/Kotlin 为 camelCase）；不写 yml
 
 ## 阶段 F — 运维 Dashboard
 

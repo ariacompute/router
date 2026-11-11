@@ -71,3 +71,38 @@ test("last_route_after_complete", { skip: !hasFfi }, () => {
     r.close();
   }
 });
+
+test("complete_stream_ok", { skip: !hasFfi }, () => {
+  const r = new Router().init(cfg);
+  try {
+    const chunks = [];
+    const out = r.completeStream(
+      [{ role: "user", content: "hi" }],
+      { model: "ariacompute/semantic-auto" },
+      (chunk) => chunks.push(chunk),
+    );
+    assert.equal(chunks.length, 1);
+    assert.ok(JSON.stringify(out).includes("hello-from-router"));
+    assert.ok(chunks[0].includes("hello-from-router"));
+  } finally {
+    r.close();
+  }
+});
+
+test("last_route_headers", { skip: !hasFfi }, () => {
+  const r = new Router().init(cfg);
+  try {
+    r.complete([{ role: "user", content: "hi" }], { model: "ariacompute/semantic-auto" });
+    const lr = r.lastRoute();
+    assert.ok(lr.headers?.["x-aria-router-layer"]);
+    assert.equal(lr.headers?.authorization, undefined);
+  } finally {
+    r.close();
+  }
+});
+
+test("destroy_alias", { skip: !hasFfi }, () => {
+  const r = new Router().init(cfg);
+  r.destroy();
+  assert.throws(() => r.lastRoute(), /router not initialized/);
+});

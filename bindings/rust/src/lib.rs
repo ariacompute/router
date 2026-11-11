@@ -4,9 +4,9 @@ use aria_router_config::RouterDocument;
 use aria_router_core::RouterError;
 use aria_router_http::{data_router, last_route_json, sdk_chat_complete, AppState};
 use axum::body::{to_bytes, Body};
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 pub struct Router {
@@ -14,6 +14,36 @@ pub struct Router {
     base_url: Option<String>,
     rt: tokio::runtime::Runtime,
     setup: SetupConfig,
+    last_headers: Mutex<Value>,
+}
+
+/// Only `x-aria-router-*` decision headers are exposed; auth and upstream
+/// headers must never leak into `last_route`.
+const ROUTE_HEADERS: &[&str] = &[
+    "x-aria-router-layer",
+    "x-aria-router-decision",
+    "x-aria-router-model",
+    "x-aria-router-algorithm",
+    "x-aria-router-reason",
+    "x-aria-router-confidence",
+    "x-aria-router-bypass",
+    "x-aria-router-latency-ms",
+    "x-aria-router-redecision",
+    "x-aria-router-retention-drop",
+    "x-aria-router-retention-ttl-turns",
+    "x-aria-router-retention-keep-current-model",
+    "x-aria-router-retention-prefer-prefix",
+    "x-aria-router-semantic-cache",
+];
+
+fn route_headers(headers: &HeaderMap) -> Value {
+    let mut out = serde_json::Map::new();
+    for name in ROUTE_HEADERS {
+        if let Some(value) = headers.get(*name).and_then(|v| v.to_str().ok()) {
+            out.insert((*name).to_string(), serde_json::json!(value));
+        }
+    }
+    Value::Object(out)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -38,7 +68,16 @@ impl Router {
                 .build()
                 .expect("rt"),
             setup: SetupConfig::default(),
+            last_headers: Mutex::new(serde_json::json!({})),
         }
+    }
+
+    fn clear_last_headers(&self) {
+        *self.last_headers.lock().unwrap() = serde_json::json!({});
+    }
+
+    fn set_last_headers(&self, headers: Value) {
+        *self.last_headers.lock().unwrap() = headers;
     }
 
     pub fn setup(&mut self, u: &SetupUpdates) -> Result<&mut Self, RouterError> {
@@ -85,6 +124,7 @@ impl Router {
     }
 
     pub fn complete(&self, messages: Value, options: Value) -> Result<Value, RouterError> {
+        self.clear_last_headers();
         let model = options
             .get("model")
             .and_then(|m| m.as_str())
@@ -114,6 +154,7 @@ impl Router {
                     .block_on(sdk_chat_complete(st.clone(), req))
                     .map_err(|e| RouterError::Upstream(e.to_string()))?
             };
+            let headers = route_headers(resp.headers());
             let status = resp.status();
             let bytes = self
                 .rt
@@ -124,6 +165,7 @@ impl Router {
                     String::from_utf8_lossy(&bytes).into_owned(),
                 ));
             }
+            self.set_last_headers(headers);
             serde_json::from_slice(&bytes).map_err(|e| RouterError::Upstream(e.to_string()))
         } else {
             let url = self
@@ -135,7 +177,7 @@ impl Router {
                     Some(self.setup.base_url.as_str())
                 })
                 .ok_or_else(|| RouterError::InvalidParam("not initialized".into()))?;
-            let text = self
+            let (text, headers) = self
                 .rt
                 .block_on(async {
                     let client = reqwest::Client::new();
@@ -146,31 +188,97 @@ impl Router {
                         builder =
                             builder.header("authorization", format!("Bearer {}", self.setup.token));
                     }
-                    builder.send().await?.text().await
+                    let resp = builder.send().await.map_err(|e| e.to_string())?;
+                    let headers = route_headers(resp.headers());
+                    let status = resp.status();
+                    let text = resp.text().await.map_err(|e| e.to_string())?;
+                    if !status.is_success() {
+                        return Err(format!("remote status {status}: {text}"));
+                    }
+                    Ok::<(String, Value), String>((text, headers))
                 })
-                .map_err(|e| RouterError::Upstream(e.to_string()))?;
+                .map_err(RouterError::Upstream)?;
+            self.set_last_headers(headers);
             serde_json::from_str(&text).map_err(|e| RouterError::Upstream(e.to_string()))
         }
     }
 
     pub fn models(&self) -> Result<Value, RouterError> {
-        let Some(st) = &self.state else {
-            return Ok(serde_json::json!({"data": []}));
-        };
-        let doc = st.doc.lock().unwrap();
-        let data: Vec<_> = doc
-            .entrypoints
-            .iter()
-            .flat_map(|e| e.model_names.iter().cloned())
-            .collect();
-        Ok(serde_json::json!({"data": data}))
+        if let Some(st) = &self.state {
+            let doc = st.doc.lock().unwrap();
+            let data: Vec<_> = doc
+                .entrypoints
+                .iter()
+                .flat_map(|e| e.model_names.iter().cloned())
+                .collect();
+            return Ok(serde_json::json!({"data": data}));
+        }
+        let url = self
+            .base_url
+            .as_deref()
+            .or(if self.setup.base_url.is_empty() {
+                None
+            } else {
+                Some(self.setup.base_url.as_str())
+            })
+            .ok_or_else(|| RouterError::InvalidParam("not initialized".into()))?;
+        let text = self
+            .rt
+            .block_on(async {
+                let client = reqwest::Client::new();
+                let mut builder = client.get(format!("{}/v1/models", url.trim_end_matches('/')));
+                if !self.setup.token.is_empty() {
+                    builder =
+                        builder.header("authorization", format!("Bearer {}", self.setup.token));
+                }
+                let resp = builder.send().await.map_err(|e| e.to_string())?;
+                let status = resp.status();
+                let text = resp.text().await.map_err(|e| e.to_string())?;
+                if !status.is_success() {
+                    return Err(format!("remote status {status}: {text}"));
+                }
+                Ok::<String, String>(text)
+            })
+            .map_err(RouterError::Upstream)?;
+        serde_json::from_str(&text).map_err(|e| RouterError::Upstream(e.to_string()))
+    }
+
+    /// The native SDK mirrors the C ABI's single full-body chunk callback.
+    pub fn complete_stream(
+        &self,
+        messages: Value,
+        options: Value,
+        on_chunk: Option<&dyn Fn(&str)>,
+    ) -> Result<Value, RouterError> {
+        let out = self.complete(messages, options)?;
+        if let Some(cb) = on_chunk {
+            cb(&out.to_string());
+        }
+        Ok(out)
     }
 
     pub fn last_route(&self) -> Value {
-        self.state
+        let mut v = self
+            .state
             .as_ref()
             .map(|s| last_route_json(s))
-            .unwrap_or(serde_json::json!({}))
+            .unwrap_or(serde_json::json!({}));
+        let headers = self.last_headers.lock().unwrap().clone();
+        if headers.as_object().is_some_and(|o| !o.is_empty()) {
+            v["headers"] = headers;
+        }
+        v
+    }
+
+    /// Reset the handle; the native SDK owns no FFI handle to free.
+    pub fn close(&mut self) {
+        self.state = None;
+        self.base_url = None;
+        self.clear_last_headers();
+    }
+
+    pub fn destroy(&mut self) {
+        self.close();
     }
 }
 
@@ -296,7 +404,10 @@ mod tests {
     #[test]
     fn default_router_is_uninitialized() {
         let r = Router::default();
-        assert_eq!(r.models().unwrap(), serde_json::json!({"data": []}));
+        assert!(matches!(
+            r.models().unwrap_err(),
+            RouterError::InvalidParam(_)
+        ));
         assert_eq!(r.last_route(), serde_json::json!({}));
         let err = r
             .complete(serde_json::json!([]), serde_json::json!({}))
@@ -362,7 +473,8 @@ mod tests {
 
         let mut r = Router::new();
         r.connect(&endpoint);
-        assert_eq!(r.models().unwrap(), serde_json::json!({"data": []}));
+        let err = r.models().unwrap_err();
+        assert!(matches!(err, RouterError::Upstream(_)), "{err}");
         assert_eq!(r.last_route(), serde_json::json!({}));
         // Connection refused → Upstream, not a silent empty result.
         let err = r
@@ -427,21 +539,59 @@ mod tests {
 
     impl Stub {
         fn start() -> Self {
-            let app = axum::Router::new().route(
-                "/v1/chat/completions",
-                axum::routing::post(
-                    |headers: axum::http::HeaderMap,
-                     axum::Json(body): axum::Json<Value>| async move {
+            let app = axum::Router::new()
+                .route(
+                    "/v1/chat/completions",
+                    axum::routing::post(
+                        |headers: axum::http::HeaderMap,
+                         axum::Json(body): axum::Json<Value>| async move {
+                            let mut resp_headers = HeaderMap::new();
+                            resp_headers.insert(
+                                "x-aria-router-layer",
+                                axum::http::HeaderValue::from_static("semantic"),
+                            );
+                            resp_headers.insert(
+                                "x-aria-router-redecision",
+                                axum::http::HeaderValue::from_static("new-user-message"),
+                            );
+                            resp_headers.insert(
+                                "authorization",
+                                axum::http::HeaderValue::from_static("must-not-leak"),
+                            );
+                            (
+                                resp_headers,
+                                axum::Json(serde_json::json!({
+                                    "auth": headers
+                                        .get("authorization")
+                                        .and_then(|h| h.to_str().ok())
+                                        .unwrap_or(""),
+                                    "model": body.get("model").cloned().unwrap_or(Value::Null),
+                                })),
+                            )
+                        },
+                    ),
+                )
+                .route(
+                    "/v1/models",
+                    axum::routing::get(|| async {
                         axum::Json(serde_json::json!({
-                            "auth": headers
-                                .get("authorization")
-                                .and_then(|h| h.to_str().ok())
-                                .unwrap_or(""),
-                            "model": body.get("model").cloned().unwrap_or(Value::Null),
+                            "object": "list",
+                            "data": [{"id": "stub/model", "object": "model", "owned_by": "stub"}]
                         }))
-                    },
-                ),
-            );
+                    }),
+                )
+                .route(
+                    "/fail/v1/models",
+                    axum::routing::get(|| async {
+                        (StatusCode::INTERNAL_SERVER_ERROR, "models boom")
+                    }),
+                )
+                .route(
+                    "/fail/v1/chat/completions",
+                    axum::routing::post(|| async {
+                        (StatusCode::INTERNAL_SERVER_ERROR, "chat boom")
+                    }),
+                );
             let rt = tokio::runtime::Runtime::new().unwrap();
             let (addr, stop, handle) = rt.block_on(async {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -471,6 +621,95 @@ mod tests {
             let _ = tx.send(());
             let _ = self.rt.block_on(handle);
         }
+    }
+
+    #[test]
+    fn route_headers_whitelist_only() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-aria-router-layer",
+            axum::http::HeaderValue::from_static("semantic"),
+        );
+        headers.insert(
+            "authorization",
+            axum::http::HeaderValue::from_static("secret"),
+        );
+        headers.insert(
+            "x-aria-router-reason",
+            axum::http::HeaderValue::from_bytes(&[0xff]).unwrap(),
+        );
+        let v = route_headers(&headers);
+        assert_eq!(v["x-aria-router-layer"], "semantic");
+        assert!(v.get("authorization").is_none());
+        assert!(v.get("x-aria-router-reason").is_none());
+        assert_eq!(route_headers(&HeaderMap::new()), serde_json::json!({}));
+    }
+
+    #[test]
+    fn remote_models_headers_and_failures() {
+        let stub = Stub::start();
+        let mut r = Router::new();
+        r.connect(&stub.endpoint);
+        r.setup(&SetupUpdates {
+            base_url: None,
+            token: Some("sk-remote".into()),
+        })
+        .unwrap();
+        let models = r.models().unwrap();
+        assert_eq!(models["data"][0]["id"], "stub/model");
+        let out = r
+            .complete(
+                serde_json::json!([{"role":"user","content":"hi"}]),
+                serde_json::json!({}),
+            )
+            .unwrap();
+        assert_eq!(out["auth"], "Bearer sk-remote");
+        let lr = r.last_route();
+        assert_eq!(lr["headers"]["x-aria-router-layer"], "semantic");
+        assert_eq!(
+            lr["headers"]["x-aria-router-redecision"],
+            "new-user-message"
+        );
+        assert!(lr["headers"].get("authorization").is_none());
+
+        let mut failing = Router::new();
+        failing.connect(&format!("{}/fail", stub.endpoint));
+        let err = failing.models().unwrap_err();
+        assert!(err.to_string().contains("remote status 500"), "{err}");
+        let err = failing
+            .complete(serde_json::json!([]), serde_json::json!({}))
+            .unwrap_err();
+        assert!(err.to_string().contains("remote status 500"), "{err}");
+        assert_eq!(failing.last_route(), serde_json::json!({}));
+        stub.shutdown();
+    }
+
+    #[test]
+    fn complete_stream_and_close() {
+        let dir = temp_dir("stream");
+        let cfg = write_fixture(&dir, "fast.yaml", false);
+        let mut r = Router::new();
+        r.init(cfg.to_str().unwrap()).unwrap();
+        let chunks = Mutex::new(Vec::<String>::new());
+        let cb: &dyn Fn(&str) = &|chunk: &str| chunks.lock().unwrap().push(chunk.to_string());
+        let out = r
+            .complete_stream(
+                serde_json::json!([{"role":"user","content":"hi"}]),
+                serde_json::json!({}),
+                Some(cb),
+            )
+            .unwrap();
+        assert_eq!(chunks.lock().unwrap().len(), 1);
+        assert_eq!(chunks.lock().unwrap()[0], out.to_string());
+        assert!(out.to_string().contains("hello-from-router"));
+        assert!(r.last_route()["headers"]["x-aria-router-layer"].is_string());
+        r.complete_stream(serde_json::json!([]), serde_json::json!({}), None)
+            .unwrap();
+        r.close();
+        assert!(r.models().is_err());
+        assert_eq!(r.last_route(), serde_json::json!({}));
+        r.destroy();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -508,6 +747,9 @@ mod tests {
             .unwrap();
         assert_eq!(out["auth"], "");
         assert_eq!(out["model"], "ariacompute/semantic-auto");
+        // Without connect(), setup.base_url also drives models() over HTTP.
+        let models = r.models().unwrap();
+        assert_eq!(models["data"][0]["id"], "stub/model");
 
         // Empty setup.base_url + no connect → "not initialized".
         let mut r = Router::new();

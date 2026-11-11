@@ -37,6 +37,33 @@ class BindingTests(unittest.TestCase):
         r.setup_clear()
         self.assertEqual(r.setup_status()["token"], "")
 
+    def test_complete_stream_ok(self):
+        chunks = []
+        out = self.r.complete_stream(
+            [{"role": "user", "content": "hi"}],
+            {"model": "ariacompute/semantic-auto"},
+            chunks.append,
+        )
+        self.assertIn("hello-from-router", json.dumps(out))
+        self.assertEqual(len(chunks), 1)
+        self.assertIn("hello-from-router", chunks[0])
+
+    def test_last_route_headers(self):
+        self.r.complete([{"role": "user", "content": "hi"}], {"model": "ariacompute/semantic-auto"})
+        lr = self.r.last_route()
+        self.assertIn("x-aria-router-layer", lr["headers"])
+        self.assertNotIn("authorization", lr["headers"])
+
+    def test_last_route_uninitialized_raises(self):
+        with self.assertRaises(RuntimeError):
+            Router().last_route()
+
+    def test_destroy_alias(self):
+        r = Router().init(os.environ["ARIA_ROUTER_CONFIG"])
+        r.destroy()
+        with self.assertRaises(RuntimeError):
+            r.last_route()
+
 
 if __name__ == "__main__":
     unittest.main()

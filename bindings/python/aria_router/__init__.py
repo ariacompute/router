@@ -11,13 +11,23 @@ from typing import Any, Optional
 __version__ = "0.1.0"
 
 _LIB_NAMES = {
-    "win32": "aria-router_ffi.dll",
-    "darwin": "libaria-router_ffi.dylib",
+    "win32": ["aria-router_ffi.dll", "aria_router_ffi.dll"],
+    "darwin": ["libaria-router_ffi.dylib", "libaria_router_ffi.dylib"],
 }
 
 
-def _ffi_lib_name() -> str:
-    return _LIB_NAMES.get(sys.platform, "libaria-router_ffi.so")
+def _ffi_lib_names() -> list[str]:
+    return _LIB_NAMES.get(
+        sys.platform, ["libaria-router_ffi.so", "libaria_router_ffi.so"]
+    )
+
+
+def _first_existing(directory: str, names: list[str]) -> Optional[str]:
+    for name in names:
+        candidate = os.path.join(directory, name)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
 
 
 def _aria_home() -> str:
@@ -28,11 +38,11 @@ def _load_lib(path: Optional[str] = None):
     if not path:
         path = os.environ.get("ARIA_ROUTER_FFI_LIB")
     if not path:
-        bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", _ffi_lib_name())
-        path = bundled if os.path.isfile(bundled) else None
+        bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+        path = _first_existing(bundled, _ffi_lib_names())
     if not path:
-        cached = os.path.join(_aria_home(), "lib", _ffi_lib_name())
-        path = cached if os.path.isfile(cached) else None
+        cached = os.path.join(_aria_home(), "lib")
+        path = _first_existing(cached, _ffi_lib_names())
     if not path:
         raise RuntimeError("libaria-router_ffi not found; set ARIA_ROUTER_FFI_LIB")
     return ctypes.CDLL(path)
@@ -78,6 +88,9 @@ class Router:
         self._lib.aria_router_complete.restype = c_int
         self._lib.aria_router_complete.argtypes = [c_void_p, c_char_p, c_char_p, c_char_p, c_size_t]
         self._lib.aria_router_complete_stream.restype = c_int
+        self._lib.aria_router_complete_stream.argtypes = [
+            c_void_p, c_char_p, c_char_p, c_char_p, c_size_t, c_void_p, c_void_p
+        ]
         self._lib.aria_router_models.restype = c_int
         self._lib.aria_router_models.argtypes = [c_void_p, c_char_p, c_size_t]
         self._lib.aria_router_last_route.restype = c_int
@@ -132,6 +145,9 @@ class Router:
             self._lib.aria_router_destroy(self._handle)
         self._handle = None
 
+    def destroy(self) -> None:
+        self.close()
+
     def complete(self, messages: list, options: Optional[dict[str, Any]] = None) -> dict:
         if not self._handle:
             raise RuntimeError("router not initialized")
@@ -148,6 +164,37 @@ class Router:
             raise RuntimeError(err.decode() if err else "complete failed")
         return json.loads(buf.value.decode())
 
+    def complete_stream(
+        self,
+        messages: list,
+        options: Optional[dict[str, Any]] = None,
+        callback=None,
+    ) -> dict:
+        """Call `aria_router_complete_stream`; the callback receives one full body chunk.
+
+        The C ABI currently emits the whole completion in a single callback, so
+        the wrapper forwards that single chunk to the host callback as well.
+        """
+        if not self._handle:
+            raise RuntimeError("router not initialized")
+        buf = ctypes.create_string_buffer(256 * 1024)
+        rc = self._lib.aria_router_complete_stream(
+            self._handle,
+            json.dumps(messages).encode(),
+            json.dumps(options or {}).encode(),
+            buf,
+            len(buf),
+            None,
+            None,
+        )
+        if rc != 0:
+            err = self._lib.aria_router_last_error()
+            raise RuntimeError(err.decode() if err else "complete_stream failed")
+        body = buf.value.decode()
+        if callback is not None:
+            callback(body)
+        return json.loads(body)
+
     def models(self) -> dict:
         if not self._handle:
             raise RuntimeError("router not initialized")
@@ -160,9 +207,10 @@ class Router:
 
     def last_route(self) -> dict:
         if not self._handle:
-            return {}
+            raise RuntimeError("router not initialized")
         buf = ctypes.create_string_buffer(64 * 1024)
         rc = self._lib.aria_router_last_route(self._handle, buf, len(buf))
         if rc != 0:
-            return {}
+            err = self._lib.aria_router_last_error()
+            raise RuntimeError(err.decode() if err else "last_route failed")
         return json.loads(buf.value.decode() or "{}")

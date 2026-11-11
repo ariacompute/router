@@ -539,7 +539,7 @@ recipes:
     router: semantic
     routing:
       strategy: priority
-      prefix_reuse: true   # default true if omitted
+      prefix_reuse: true  # default true if omitted
       # …
 
   - name: agent-default
@@ -595,13 +595,15 @@ Native C ABI (`ariacompute-router-ffi` / `libaria-router_ffi`) plus thin wrapper
 | Swift | `bindings/swift` | CocoaPods / SPM `AriaComputeRouter` |
 | Kotlin | `bindings/kotlin` | Maven `com.ariacompute:router` |
 
-C header: [`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init` (in-process YAML; `NULL`/empty → `~/.ariacompute/router.yml`), `aria_router_connect` (HTTP to a running `serve`), `aria_router_complete` / `_stream`, `aria_router_models`, `aria_router_last_route`, `aria_router_destroy`, `aria_router_last_error`.
+C header: [`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init` (in-process YAML; `NULL`/empty → `~/.ariacompute/router.yml`), `aria_router_connect` (HTTP to a running `serve`), `aria_router_setup` (in-memory `base_url` / `token`; `NULL` leaves a field unchanged, an empty string clears it), `aria_router_complete` / `_stream`, `aria_router_models`, `aria_router_last_route`, `aria_router_destroy`, `aria_router_last_error`.
 
-Dynamic lib order: `ARIA_ROUTER_FFI_LIB` → package-bundled path → `~/.ariacompute/lib/`. Instance `setup` is in-memory `base_url` / `token` only and **never** writes `router.yml`. `init` with no path uses the default `router.yml` from `aria-router setup` (export `GATEWAY_API_KEY` before `serve` for gateway templates). Offline binding CI uses [`bindings/testdata/fast-response.yaml`](bindings/testdata/fast-response.yaml) (canned completion, no upstream). `init` runs semantic and in-process builtin agent (fixed tools + `max_turns`); there is no subprocess harness.
+`aria_router_complete_stream` invokes its callback **once with the full completion body** (not per-SSE-chunk). `aria_router_last_route` returns the `RouteDecision` JSON plus a `headers` object with whitelisted `x-aria-router-*` decision headers (including `x-aria-router-redecision`); auth/cookie headers are never exposed. On a `connect` handle, `models` proxies `GET /v1/models` and `last_route` exposes the headers captured from the most recent `complete`; failures return an error rather than an empty result.
+
+Dynamic lib order: `ARIA_ROUTER_FFI_LIB` → package-bundled path → `~/.ariacompute/lib/`. Instance `setup` is in-memory `base_url` / `token` only and **never** writes `router.yml`. `init` with no path uses the default `router.yml` from `aria-router setup` (export `GATEWAY_API_KEY` before `serve` for gateway templates). Offline binding CI uses [`bindings/testdata/fast-response.yaml`](bindings/testdata/fast-response.yaml) (canned completion, no upstream). `init` runs semantic and in-process builtin agent (fixed tools + `max_turns`); there is no subprocess harness. Rust binds natively (no dlopen) and Go links via cgo `-L… -laria_router_ffi`, so neither uses this lookup order.
 
 ```bash
 cargo test -p ariacompute-router-ffi -p ariacompute-router
-./scripts/run-binding-tests.sh   # host matrix (Rust / Python / Go / TS / RN setup)
+./scripts/run-binding-tests.sh   # host matrix (Rust / Python / Go / TS / RN / Flutter / Kotlin; Swift: run swift test with a toolchain)
 ```
 
 C ABI changes must update [`bindings/testdata/cases.json`](bindings/testdata/cases.json) and host tests.
@@ -609,6 +611,17 @@ C ABI changes must update [`bindings/testdata/cases.json`](bindings/testdata/cas
 ### Examples
 
 In-process `init` + `complete` does **not** need a Dashboard API key. `connect` to a running `serve` with `require_api_key` still needs `setup(token=…)`. Instance `setup` is in-memory only.
+
+All eight SDKs expose the same surface: `setup` / `setup_status` (`setupStatus`, `SetupStatus`) / `setup_clear`, `complete`, `complete_stream` (`completeStream`, `CompleteStream`), `models`, `last_route` (`lastRoute`, `LastRoute`), `close` + `destroy`. `complete_stream` delivers one full-body chunk, and `last_route()["headers"]` carries the whitelisted decision headers. For example:
+
+```python
+r.setup(token="sk-...")
+print(r.setup_status())
+chunks = []
+out = r.complete_stream([{"role": "user", "content": "hi"}], callback=chunks.append)
+print(out, chunks[0][:80])
+print(r.last_route()["headers"])
+```
 
 **Python** (needs `ARIA_ROUTER_FFI_LIB` or a bundled/cached `libaria-router_ffi`):
 
@@ -811,7 +824,7 @@ do {
         messages: [["role": "user", "content": "hi"]],
         options: ["model": "ariacompute/semantic-auto"]
     ))
-    print(r.lastRoute())
+    print(try r.lastRoute())
     r.close()
 
     // Or attach to a running serve (needs token when require_api_key):

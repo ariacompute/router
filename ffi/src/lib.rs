@@ -5,7 +5,7 @@
 use aria_router_config::RouterDocument;
 use aria_router_http::{data_router, last_route_json, sdk_chat_complete, AppState};
 use axum::body::{to_bytes, Body};
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::{Arc, Mutex};
@@ -37,6 +37,7 @@ pub struct AriaRouterHandle {
     state: Option<Arc<AppState>>,
     base_url: Option<String>,
     token: Option<String>,
+    last_headers: Mutex<serde_json::Value>,
     rt: tokio::runtime::Runtime,
 }
 
@@ -46,6 +47,14 @@ impl AriaRouterHandle {
             .enable_all()
             .build()
             .expect("rt")
+    }
+
+    fn clear_last_headers(&self) {
+        *self.last_headers.lock().unwrap() = serde_json::json!({});
+    }
+
+    fn set_last_headers(&self, headers: serde_json::Value) {
+        *self.last_headers.lock().unwrap() = headers;
     }
 }
 
@@ -82,6 +91,7 @@ pub extern "C" fn aria_router_init(config_path: *const c_char) -> *mut AriaRoute
                 state: Some(Arc::new(AppState::new(doc))),
                 base_url: None,
                 token: None,
+                last_headers: Mutex::new(serde_json::json!({})),
                 rt: AriaRouterHandle::runtime(),
             });
             Box::into_raw(h)
@@ -128,6 +138,7 @@ pub extern "C" fn aria_router_connect(base_url: *const c_char) -> *mut AriaRoute
         state: None,
         base_url: Some(url),
         token: None,
+        last_headers: Mutex::new(serde_json::json!({})),
         rt: AriaRouterHandle::runtime(),
     }))
 }
@@ -178,11 +189,58 @@ fn token_nonempty(h: &AriaRouterHandle) -> Option<&str> {
     h.token.as_deref().filter(|t| !t.is_empty())
 }
 
+/// Only `x-aria-router-*` decision headers are exposed to SDK consumers; auth,
+/// cookies and arbitrary upstream headers must never leak into `last_route`.
+const ROUTE_HEADERS: &[&str] = &[
+    "x-aria-router-layer",
+    "x-aria-router-decision",
+    "x-aria-router-model",
+    "x-aria-router-algorithm",
+    "x-aria-router-reason",
+    "x-aria-router-confidence",
+    "x-aria-router-bypass",
+    "x-aria-router-latency-ms",
+    "x-aria-router-redecision",
+    "x-aria-router-retention-drop",
+    "x-aria-router-retention-ttl-turns",
+    "x-aria-router-retention-keep-current-model",
+    "x-aria-router-retention-prefer-prefix",
+    "x-aria-router-semantic-cache",
+];
+
+fn route_headers(headers: &HeaderMap) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for name in ROUTE_HEADERS {
+        if let Some(value) = headers.get(*name).and_then(|v| v.to_str().ok()) {
+            out.insert((*name).to_string(), serde_json::json!(value));
+        }
+    }
+    serde_json::Value::Object(out)
+}
+
+fn remote_get(h: &AriaRouterHandle, url: &str) -> Result<String, String> {
+    h.rt.block_on(async {
+        let client = reqwest::Client::new();
+        let mut req = client.get(url);
+        if let Some(tok) = token_nonempty(h) {
+            req = req.header("authorization", format!("Bearer {tok}"));
+        }
+        let resp = req.send().await.map_err(|e| e.to_string())?;
+        let status = resp.status();
+        let text = resp.text().await.map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(format!("remote status {status}: {text}"));
+        }
+        Ok(text)
+    })
+}
+
 fn complete_inner(
     h: &AriaRouterHandle,
     messages_json: &str,
     options_json: &str,
 ) -> Result<String, String> {
+    h.clear_last_headers();
     let opts: serde_json::Value = serde_json::from_str(if options_json.is_empty() {
         "{}"
     } else {
@@ -221,6 +279,7 @@ fn complete_inner(
             h.rt.block_on(sdk_chat_complete(st.clone(), req_json))
                 .map_err(|e| e.to_string())?
         };
+        let headers = route_headers(resp.headers());
         let status = resp.status();
         let bytes =
             h.rt.block_on(to_bytes(resp.into_body(), 1 << 22))
@@ -228,6 +287,7 @@ fn complete_inner(
         if status != StatusCode::OK {
             return Err(String::from_utf8_lossy(&bytes).into_owned());
         }
+        h.set_last_headers(headers);
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     } else if let Some(url) = &h.base_url {
         let url = format!("{}/v1/chat/completions", url.trim_end_matches('/'));
@@ -241,7 +301,13 @@ fn complete_inner(
                 req.send().await
             })
             .map_err(|e| e.to_string())?;
+        let headers = route_headers(resp.headers());
+        let status = resp.status();
         let text = h.rt.block_on(resp.text()).map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            return Err(format!("remote status {status}: {text}"));
+        }
+        h.set_last_headers(headers);
         Ok(text)
     } else {
         Err("uninitialized".into())
@@ -301,6 +367,9 @@ pub extern "C" fn aria_router_models(
         set_err("null router");
         return -1;
     }
+    if out.is_null() || out_len == 0 {
+        return write_out(out, out_len, "");
+    }
     let h = unsafe { &*router };
     if let Some(st) = &h.state {
         let doc = st.doc.lock().unwrap();
@@ -312,7 +381,18 @@ pub extern "C" fn aria_router_models(
             .collect();
         return write_out(out, out_len, &serde_json::json!({"data": ids}).to_string());
     }
-    write_out(out, out_len, "{\"data\":[]}")
+    if let Some(url) = &h.base_url {
+        let url = format!("{}/v1/models", url.trim_end_matches('/'));
+        return match remote_get(h, &url) {
+            Ok(text) => write_out(out, out_len, &text),
+            Err(e) => {
+                set_err(&e);
+                -1
+            }
+        };
+    }
+    set_err("uninitialized");
+    -1
 }
 
 #[no_mangle]
@@ -326,16 +406,22 @@ pub extern "C" fn aria_router_last_route(
         return -1;
     }
     let h = unsafe { &*router };
-    if let Some(st) = &h.state {
-        let v = last_route_json(st);
-        return write_out(out, out_len, &v.to_string());
+    let mut v = if let Some(st) = &h.state {
+        last_route_json(st)
+    } else {
+        serde_json::json!({})
+    };
+    let headers = h.last_headers.lock().unwrap().clone();
+    if headers.as_object().is_some_and(|o| !o.is_empty()) {
+        v["headers"] = headers;
     }
-    write_out(out, out_len, "{}")
+    write_out(out, out_len, &v.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
     use std::ffi::{CStr, CString};
 
     /// Read the thread-local last error eagerly (the `assert!` format arguments
@@ -462,12 +548,13 @@ mod tests {
 
     #[test]
     fn write_out_guards_and_connected_handle_views() {
-        let url = CString::new("http://127.0.0.1:1").unwrap();
+        let stub = StubChat::start();
+        let url = CString::new(stub.endpoint.clone()).unwrap();
         let h = aria_router_connect(url.as_ptr());
         assert!(!h.is_null());
-        let mut buf = vec![0u8; 64];
+        let mut buf = vec![0u8; 4096];
 
-        // NULL / zero-length out buffers are rejected.
+        // NULL / zero-length out buffers are rejected before any I/O.
         assert_eq!(aria_router_models(h, std::ptr::null_mut(), 0), -1);
         let msg = unsafe {
             CStr::from_ptr(aria_router_last_error())
@@ -475,7 +562,7 @@ mod tests {
                 .into_owned()
         };
         assert!(msg.contains("null out"), "{msg}");
-        // Too-small buffer is rejected.
+        // Too-small buffer is rejected after a successful HTTP call.
         let mut tiny = vec![0u8; 2];
         assert_eq!(
             aria_router_models(h, tiny.as_mut_ptr() as *mut c_char, tiny.len()),
@@ -488,13 +575,13 @@ mod tests {
         };
         assert!(msg.contains("out buffer too small"), "{msg}");
 
-        // Connected (stateless) handles still answer models/last_route.
+        // Connected handles proxy /v1/models; last_route is empty before a chat.
         assert_eq!(
             aria_router_models(h, buf.as_mut_ptr() as *mut c_char, buf.len()),
             0
         );
         let s = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }.to_string_lossy();
-        assert!(s.contains("\"data\":[]"), "{s}");
+        assert!(s.contains("stub/model"), "{s}");
         assert_eq!(
             aria_router_last_route(h, buf.as_mut_ptr() as *mut c_char, buf.len()),
             0
@@ -502,7 +589,7 @@ mod tests {
         let s = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }.to_string_lossy();
         assert_eq!(s.as_ref(), "{}");
 
-        // Clearing base_url leaves the handle uninitialized → complete errors.
+        // Clearing base_url leaves the handle uninitialized → complete/models fail.
         let clear = CString::new("").unwrap();
         aria_router_setup(h, clear.as_ptr(), std::ptr::null());
         let msgs = CString::new("[]").unwrap();
@@ -516,12 +603,12 @@ mod tests {
             ),
             -1
         );
-        let msg = unsafe {
-            CStr::from_ptr(aria_router_last_error())
-                .to_string_lossy()
-                .into_owned()
-        };
-        assert!(msg.contains("uninitialized"), "{msg}");
+        assert!(last_error().contains("uninitialized"), "{}", last_error());
+        assert_eq!(
+            aria_router_models(h, buf.as_mut_ptr() as *mut c_char, buf.len()),
+            -1
+        );
+        assert!(last_error().contains("uninitialized"), "{}", last_error());
 
         // Invalid UTF-8 in setup is ignored (field unchanged).
         aria_router_setup(h, url.as_ptr(), std::ptr::null());
@@ -529,10 +616,11 @@ mod tests {
         aria_router_setup(h, bad.as_ptr(), bad.as_ptr());
         assert_eq!(
             unsafe { &*h }.base_url.as_deref(),
-            Some("http://127.0.0.1:1")
+            Some(stub.endpoint.as_str())
         );
         assert!(unsafe { &*h }.token.is_none());
         aria_router_destroy(h);
+        stub.shutdown();
     }
 
     struct StubChat {
@@ -544,24 +632,71 @@ mod tests {
 
     impl StubChat {
         fn start() -> Self {
-            let app = axum::Router::new().route(
-                "/v1/chat/completions",
-                axum::routing::post(
-                    |headers: axum::http::HeaderMap,
-                     axum::Json(body): axum::Json<serde_json::Value>| async move {
-                        let auth = headers
-                            .get("authorization")
-                            .and_then(|h| h.to_str().ok())
-                            .unwrap_or("")
-                            .to_string();
+            let app = axum::Router::new()
+                .route(
+                    "/v1/chat/completions",
+                    axum::routing::post(
+                        |headers: axum::http::HeaderMap,
+                         axum::Json(body): axum::Json<serde_json::Value>| async move {
+                            let auth = headers
+                                .get("authorization")
+                                .and_then(|h| h.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            let mut resp_headers = HeaderMap::new();
+                            resp_headers.insert(
+                                "x-aria-router-layer",
+                                HeaderValue::from_static("semantic"),
+                            );
+                            resp_headers.insert(
+                                "x-aria-router-model",
+                                HeaderValue::from_static("stub/model"),
+                            );
+                            resp_headers.insert(
+                                "x-aria-router-redecision",
+                                HeaderValue::from_static("new-user-message"),
+                            );
+                            // Neither non-whitelisted nor non-UTF-8 values may leak.
+                            resp_headers.insert(
+                                "authorization",
+                                HeaderValue::from_static("must-not-leak"),
+                            );
+                            resp_headers.insert(
+                                "x-aria-router-reason",
+                                HeaderValue::from_bytes(&[0xff]).unwrap(),
+                            );
+                            (
+                                resp_headers,
+                                axum::Json(serde_json::json!({
+                                    "model": body.get("model").cloned().unwrap_or(serde_json::json!("")),
+                                    "auth": auth,
+                                    "max_tokens": body.get("max_tokens").cloned().unwrap_or(serde_json::Value::Null),
+                                })),
+                            )
+                        },
+                    ),
+                )
+                .route(
+                    "/v1/models",
+                    axum::routing::get(|| async {
                         axum::Json(serde_json::json!({
-                            "model": body.get("model").cloned().unwrap_or(serde_json::json!("")),
-                            "auth": auth,
-                            "max_tokens": body.get("max_tokens").cloned().unwrap_or(serde_json::Value::Null),
+                            "object": "list",
+                            "data": [{"id": "stub/model", "object": "model", "owned_by": "stub"}]
                         }))
-                    },
-                ),
-            );
+                    }),
+                )
+                .route(
+                    "/fail/v1/models",
+                    axum::routing::get(|| async {
+                        (StatusCode::INTERNAL_SERVER_ERROR, "models boom")
+                    }),
+                )
+                .route(
+                    "/fail/v1/chat/completions",
+                    axum::routing::post(|| async {
+                        (StatusCode::INTERNAL_SERVER_ERROR, "chat boom")
+                    }),
+                );
             let rt = tokio::runtime::Runtime::new().unwrap();
             let (addr, stop, handle) = rt.block_on(async {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -591,6 +726,129 @@ mod tests {
             let _ = tx.send(());
             let _ = self.rt.block_on(handle);
         }
+    }
+
+    #[test]
+    fn route_headers_whitelist_only() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-aria-router-layer", HeaderValue::from_static("semantic"));
+        headers.insert(
+            "x-aria-router-redecision",
+            HeaderValue::from_static("unknown"),
+        );
+        headers.insert("authorization", HeaderValue::from_static("secret"));
+        headers.insert(
+            "x-aria-router-reason",
+            HeaderValue::from_bytes(&[0xff]).unwrap(),
+        );
+        let v = route_headers(&headers);
+        assert_eq!(v["x-aria-router-layer"], "semantic");
+        assert_eq!(v["x-aria-router-redecision"], "unknown");
+        assert!(v.get("authorization").is_none());
+        assert!(v.get("x-aria-router-reason").is_none());
+        assert_eq!(route_headers(&HeaderMap::new()), serde_json::json!({}));
+    }
+
+    #[test]
+    fn connected_models_and_route_headers() {
+        let stub = StubChat::start();
+        let url = CString::new(stub.endpoint.clone()).unwrap();
+        let token = CString::new("sk-models").unwrap();
+        let h = aria_router_connect(url.as_ptr());
+        assert!(!h.is_null());
+        aria_router_setup(h, std::ptr::null(), token.as_ptr());
+        let mut buf = vec![0u8; 4096];
+        let rc = aria_router_models(h, buf.as_mut_ptr() as *mut c_char, buf.len());
+        let err = last_error();
+        assert_eq!(rc, 0, "{err}");
+        let s = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(s.contains("stub/model"), "{s}");
+
+        let msgs = CString::new(r#"[{"role":"user","content":"hi"}]"#).unwrap();
+        let mut out = vec![0u8; 4096];
+        let rc = aria_router_complete(
+            h,
+            msgs.as_ptr(),
+            std::ptr::null(),
+            out.as_mut_ptr() as *mut c_char,
+            out.len(),
+        );
+        let err = last_error();
+        assert_eq!(rc, 0, "{err}");
+        assert_eq!(
+            aria_router_last_route(h, buf.as_mut_ptr() as *mut c_char, buf.len()),
+            0
+        );
+        let s = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+            .to_string_lossy()
+            .into_owned();
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["headers"]["x-aria-router-layer"], "semantic");
+        assert_eq!(v["headers"]["x-aria-router-redecision"], "new-user-message");
+        assert_eq!(v["headers"]["x-aria-router-model"], "stub/model");
+        assert!(v["headers"].get("authorization").is_none());
+        assert!(v["headers"].get("x-aria-router-reason").is_none());
+        aria_router_destroy(h);
+        stub.shutdown();
+    }
+
+    fn closed_socket_endpoint() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            drop(stream);
+        });
+        format!("http://{addr}")
+    }
+
+    #[test]
+    fn remote_failures_are_explicit() {
+        let stub = StubChat::start();
+        let url = CString::new(format!("{}/fail", stub.endpoint)).unwrap();
+        let h = aria_router_connect(url.as_ptr());
+        assert!(!h.is_null());
+        let mut buf = vec![0u8; 4096];
+        assert_eq!(
+            aria_router_models(h, buf.as_mut_ptr() as *mut c_char, buf.len()),
+            -1
+        );
+        let err = last_error();
+        assert!(err.contains("remote status 500"), "{err}");
+        let msgs = CString::new(r#"[{"role":"user","content":"hi"}]"#).unwrap();
+        assert_eq!(
+            aria_router_complete(
+                h,
+                msgs.as_ptr(),
+                std::ptr::null(),
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len(),
+            ),
+            -1
+        );
+        let err = last_error();
+        assert!(err.contains("remote status 500"), "{err}");
+        // A failed request must not leave stale decision headers behind.
+        assert_eq!(
+            aria_router_last_route(h, buf.as_mut_ptr() as *mut c_char, buf.len()),
+            0
+        );
+        let s = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }.to_string_lossy();
+        assert_eq!(s.as_ref(), "{}");
+        aria_router_destroy(h);
+
+        // accept-then-close is deterministic on every platform (no ECONNREFUSED).
+        let url = CString::new(closed_socket_endpoint()).unwrap();
+        let h = aria_router_connect(url.as_ptr());
+        assert_eq!(
+            aria_router_models(h, buf.as_mut_ptr() as *mut c_char, buf.len()),
+            -1
+        );
+        assert!(!last_error().is_empty());
+        aria_router_destroy(h);
+        stub.shutdown();
     }
 
     #[test]
@@ -745,6 +1003,15 @@ mod tests {
             aria_router_last_route(h, route.as_mut_ptr() as *mut c_char, route.len()),
             0
         );
+        let route_json = unsafe { CStr::from_ptr(route.as_ptr() as *const c_char) }
+            .to_string_lossy()
+            .into_owned();
+        let v: serde_json::Value = serde_json::from_str(&route_json).unwrap();
+        assert!(
+            v["headers"]["x-aria-router-layer"].is_string(),
+            "{route_json}"
+        );
+        assert!(v["headers"].get("authorization").is_none());
         aria_router_destroy(h);
         aria_router_destroy(std::ptr::null_mut());
     }
@@ -971,6 +1238,42 @@ mod tests {
         );
         assert_eq!(rc, 0);
         assert!(hits >= 1);
+        aria_router_destroy(h);
+    }
+
+    extern "C" fn collect_cb(chunk: *const c_char, user: *mut libc::c_void) {
+        let out = unsafe { &mut *(user as *mut Vec<String>) };
+        out.push(
+            unsafe { CStr::from_ptr(chunk) }
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+
+    #[test]
+    fn complete_stream_callback_receives_full_body() {
+        let h = init_fixture(
+            "fast-response.yaml",
+            include_str!("../../bindings/testdata/fast-response.yaml"),
+        );
+        let msgs = CString::new(r#"[{"role":"user","content":"hi"}]"#).unwrap();
+        let mut buf = vec![0u8; 8192];
+        let mut chunks: Vec<String> = Vec::new();
+        let rc = aria_router_complete_stream(
+            h,
+            msgs.as_ptr(),
+            std::ptr::null(),
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len(),
+            Some(collect_cb),
+            &mut chunks as *mut Vec<String> as *mut libc::c_void,
+        );
+        assert_eq!(rc, 0, "{}", last_error());
+        let body = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(chunks, vec![body.clone()]);
+        assert!(body.contains("hello-from-router"), "{body}");
         aria_router_destroy(h);
     }
 

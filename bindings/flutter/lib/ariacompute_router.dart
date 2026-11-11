@@ -50,6 +50,8 @@ String _resolveLibPath([String? explicit]) {
   if (explicit != null && File(explicit).existsSync()) return explicit;
   final env = Platform.environment['ARIA_ROUTER_FFI_LIB'];
   if (env != null && env.isNotEmpty && File(env).existsSync()) return env;
+  final bundled = _firstExisting('lib');
+  if (bundled != null) return bundled;
   final cached = _firstExisting('${_ariaHome()}/lib');
   if (cached != null) return cached;
   throw StateError('libaria-router_ffi not found; set ARIA_ROUTER_FFI_LIB');
@@ -82,6 +84,10 @@ typedef _CompleteC = Int32 Function(
     Pointer, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, IntPtr);
 typedef _CompleteDart = int Function(
     Pointer, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int);
+typedef _CompleteStreamC = Int32 Function(Pointer, Pointer<Utf8>, Pointer<Utf8>,
+    Pointer<Utf8>, IntPtr, Pointer, Pointer);
+typedef _CompleteStreamDart = int Function(Pointer, Pointer<Utf8>, Pointer<Utf8>,
+    Pointer<Utf8>, int, Pointer, Pointer);
 typedef _BufOutC = Int32 Function(Pointer, Pointer<Utf8>, IntPtr);
 typedef _BufOutDart = int Function(Pointer, Pointer<Utf8>, int);
 typedef _LastErrorC = Pointer<Utf8> Function();
@@ -98,6 +104,7 @@ class AriaRouter {
   late final _DestroyDart _destroy;
   late final _SetupDart _setup;
   late final _CompleteDart _complete;
+  late final _CompleteStreamDart _completeStream;
   late final _BufOutDart _models;
   late final _BufOutDart _lastRoute;
   late final _LastErrorDart _lastError;
@@ -139,6 +146,8 @@ class AriaRouter {
     _setup = _lib!.lookupFunction<_SetupC, _SetupDart>('aria_router_setup');
     _complete =
         _lib!.lookupFunction<_CompleteC, _CompleteDart>('aria_router_complete');
+    _completeStream = _lib!.lookupFunction<_CompleteStreamC,
+        _CompleteStreamDart>('aria_router_complete_stream');
     _models = _lib!.lookupFunction<_BufOutC, _BufOutDart>('aria_router_models');
     _lastRoute =
         _lib!.lookupFunction<_BufOutC, _BufOutDart>('aria_router_last_route');
@@ -241,6 +250,32 @@ class AriaRouter {
     }
   }
 
+  Map<String, dynamic> completeStream(
+    List<dynamic> messages, {
+    Map<String, dynamic>? options,
+    void Function(String chunk)? onChunk,
+  }) {
+    final handle = _handle;
+    if (handle == null || handle.address == 0) {
+      throw StateError('router not initialized');
+    }
+    final out = malloc<Uint8>(256 * 1024).cast<Utf8>();
+    final m = jsonEncode(messages).toNativeUtf8();
+    final o = jsonEncode(options ?? <String, dynamic>{}).toNativeUtf8();
+    try {
+      final rc = _completeStream(
+          handle, m, o, out, 256 * 1024, nullptr, nullptr);
+      if (rc != 0) throw StateError(_err('complete_stream failed'));
+      final body = out.toDartString();
+      onChunk?.call(body);
+      return jsonDecode(body) as Map<String, dynamic>;
+    } finally {
+      malloc.free(m);
+      malloc.free(o);
+      malloc.free(out);
+    }
+  }
+
   Map<String, dynamic> models() {
     final handle = _handle;
     if (handle == null || handle.address == 0) {
@@ -258,16 +293,16 @@ class AriaRouter {
 
   Map<String, dynamic> lastRoute() {
     final handle = _handle;
-    if (handle == null || handle.address == 0) return {};
+    if (handle == null || handle.address == 0) {
+      throw StateError('router not initialized');
+    }
     final out = malloc<Uint8>(64 * 1024).cast<Utf8>();
     try {
       final rc = _lastRoute(handle, out, 64 * 1024);
-      if (rc != 0) return {};
+      if (rc != 0) throw StateError(_err('last_route failed'));
       final s = out.toDartString();
       if (s.isEmpty) return {};
       return jsonDecode(s) as Map<String, dynamic>;
-    } catch (_) {
-      return {};
     } finally {
       malloc.free(out);
     }

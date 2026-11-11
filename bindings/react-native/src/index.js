@@ -84,6 +84,9 @@ function createKoffiBackend() {
     destroy: lib.func('aria_router_destroy', 'void', ['void*']),
     setup: lib.func('aria_router_setup', 'void', ['void*', 'str', 'str']),
     complete: lib.func('aria_router_complete', 'int', ['void*', 'str', 'str', 'void*', 'size_t']),
+    completeStream: lib.func('aria_router_complete_stream', 'int', [
+      'void*', 'str', 'str', 'void*', 'size_t', 'void*', 'void*',
+    ]),
     models: lib.func('aria_router_models', 'int', ['void*', 'void*', 'size_t']),
     lastRoute: lib.func('aria_router_last_route', 'int', ['void*', 'void*', 'size_t']),
     lastError: lib.func('aria_router_last_error', 'str', []),
@@ -124,11 +127,8 @@ class Router {
 
   _ensureHost() {
     if (this._native) return 'native';
-    if (typeof process !== 'undefined' && process.env && process.env.ARIA_ROUTER_FFI_LIB) {
-      if (!this._fn) this._fn = createKoffiBackend();
-      return 'koffi';
-    }
-    throw new Error('native AriaRouter module not linked');
+    if (!this._fn) this._fn = createKoffiBackend();
+    return 'koffi';
   }
 
   _err(fallback) {
@@ -215,6 +215,39 @@ class Router {
     return parseJsonBuf(buf);
   }
 
+  completeStream(messages, options = {}, callback = null) {
+    const mode = this._ensureHost();
+    if (mode === 'native') {
+      const raw = this._native.completeStream
+        ? this._native.completeStream(
+            JSON.stringify(messages),
+            JSON.stringify(options || {}),
+          )
+        : this._native.complete(
+            JSON.stringify(messages),
+            JSON.stringify(options || {}),
+          );
+      const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+      if (callback) callback(text);
+      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    }
+    if (!this._handle) throw new Error('router not initialized');
+    const buf = Buffer.alloc(256 * 1024);
+    const rc = this._fn.completeStream(
+      this._handle,
+      JSON.stringify(messages),
+      JSON.stringify(options || {}),
+      buf,
+      buf.length,
+      null,
+      null,
+    );
+    if (rc !== 0) throw new Error(this._err('complete_stream failed'));
+    const text = buf.toString('utf8').replace(/\0+$/, '');
+    if (callback) callback(text);
+    return parseJsonBuf(buf);
+  }
+
   models() {
     const mode = this._ensureHost();
     if (mode === 'native') {
@@ -231,23 +264,15 @@ class Router {
   lastRoute() {
     const mode = this._ensureHost();
     if (mode === 'native') {
-      try {
-        const raw = this._native.lastRoute();
-        if (!raw) return {};
-        return typeof raw === 'string' ? JSON.parse(raw) : raw;
-      } catch {
-        return {};
-      }
+      const raw = this._native.lastRoute();
+      if (!raw) return {};
+      return typeof raw === 'string' ? JSON.parse(raw) : raw;
     }
-    if (!this._handle) return {};
+    if (!this._handle) throw new Error('router not initialized');
     const buf = Buffer.alloc(64 * 1024);
     const rc = this._fn.lastRoute(this._handle, buf, buf.length);
-    if (rc !== 0) return {};
-    try {
-      return parseJsonBuf(buf);
-    } catch {
-      return {};
-    }
+    if (rc !== 0) throw new Error(this._err('last_route failed'));
+    return parseJsonBuf(buf);
   }
 }
 

@@ -293,18 +293,21 @@ C API（`include/aria_router.h`）：
 | C API | 语义 |
 |------|------|
 | `aria_router_init(config_path)` | 进程内加载 YAML → opaque handle；`config_path` 可选（`NULL`/空串 → 默认 `~/.ariacompute/router.yml`） |
-| `aria_router_connect(base_url)` | HTTP 连已运行网关 |
-| `aria_router_complete` / `_stream` | chat；JSON 出参 / chunk 回调 |
-| `aria_router_models` / `aria_router_last_route` | 模型列表；最近决策 JSON |
+| `aria_router_connect(base_url)` | HTTP 连已运行网关；`models` 代理 `GET /v1/models`、`complete` 代理 `POST /v1/chat/completions`，失败显式报错 |
+| `aria_router_setup(router, base_url, token)` | 仅内存 client auth：非 NULL 更新、空串清除、NULL 保持不变；绝不写 `router.yml` |
+| `aria_router_complete` / `_stream` | chat；JSON 出参。`_stream` 当前为**整块单次回调**（一次携带完整响应体），非逐 SSE chunk |
+| `aria_router_models` / `aria_router_last_route` | 模型列表；最近决策 JSON + `headers` 扩展对象（白名单 `x-aria-router-*`，含 `x-aria-router-redecision`；不含 `authorization` / cookie） |
 | `aria_router_destroy` / `aria_router_last_error` | 生命周期 / 错误 |
 
 语言包：Python、Go、Rust（`ariacompute-router`）、Swift、Kotlin、Flutter、React Native（`@ariacompute/router-rn`）、TypeScript（`@ariacompute/router-ts`）。布局：`ffi/` + `bindings/<lang>/` + `bindings/testdata/`。
 
-动态库：`ARIA_ROUTER_FFI_LIB` → 包内捆绑 → `~/.ariacompute/lib/`。Rust 原生不 dlopen。
+八语言 SDK 统一暴露 `setup` / `setup_status`（或 `setupStatus` / `SetupStatus`）/ `setup_clear` / `complete` / `complete_stream` / `models` / `last_route` / `close` + `destroy` 别名；`last_route()` 失败一律抛错而非静默返回 `{}`。Swift 用 `load` 代替 `init`（`init` 为关键字），`setupStatus()` 返回各语言本地类型（`SetupConfig` / `AriaRouterAuth` / dict / Map）。`complete_stream` 的宿主回调收到一次完整响应体。
+
+动态库：`ARIA_ROUTER_FFI_LIB` → 包内捆绑 → `~/.ariacompute/lib/`。Rust 原生不 dlopen；Go 走 cgo `-L… -laria_router_ffi`，不走该查找顺序。
 
 实例 `setup`：仅内存 `base_url` / `token`；禁止写 `router.yml` / `engine.yml`。无 `auth` 别名。
 
-测试：共享 `cases.json`（lifecycle / chat / stream / models / last_route / connect / fail-closed）；`cargo test -p ariacompute-router-ffi`；`./scripts/run-binding-tests.sh`。
+测试：共享 `cases.json`（lifecycle / chat / stream / models / last_route / connect / setup / headers / fail-closed，正常 + 异常）；`cargo test -p ariacompute-router-ffi`；`./scripts/run-binding-tests.sh`（Swift 需工具链可用时手工 `swift test`）。
 
 发布：fail-pass 多 registry，不阻断 CLI。Release 资产：`aria-router_{ver}_{os}.tar.gz` / `.zip`（CLI）与 `libaria-router_ffi_{ver}_{os}.tar.gz`（FFI）。
 

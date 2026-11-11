@@ -98,6 +98,15 @@ export class Router {
       "void*",
       "size_t",
     ]);
+    this._fn.completeStream = this._lib.func("aria_router_complete_stream", "int", [
+      "void*",
+      "str",
+      "str",
+      "void*",
+      "size_t",
+      "void*",
+      "void*",
+    ]);
     this._fn.models = this._lib.func("aria_router_models", "int", ["void*", "void*", "size_t"]);
     this._fn.lastRoute = this._lib.func("aria_router_last_route", "int", [
       "void*",
@@ -172,6 +181,24 @@ export class Router {
     return parseJsonBuf(buf);
   }
 
+  completeStream(messages, options = {}, callback = null) {
+    if (!this._handle) throw new Error("router not initialized");
+    const buf = Buffer.alloc(256 * 1024);
+    const rc = this._fn.completeStream(
+      this._handle,
+      JSON.stringify(messages),
+      JSON.stringify(options || {}),
+      buf,
+      buf.length,
+      null,
+      null,
+    );
+    if (rc !== 0) throw new Error(this._err("complete_stream failed"));
+    const text = buf.toString("utf8").replace(/\0+$/, "");
+    if (callback) callback(text);
+    return parseJsonBuf(buf);
+  }
+
   models() {
     if (!this._handle) throw new Error("router not initialized");
     const buf = Buffer.alloc(64 * 1024);
@@ -181,14 +208,10 @@ export class Router {
   }
 
   lastRoute() {
-    if (!this._handle) return {};
+    if (!this._handle) throw new Error("router not initialized");
     const buf = Buffer.alloc(64 * 1024);
     const rc = this._fn.lastRoute(this._handle, buf, buf.length);
-    if (rc !== 0) return {};
-    try {
-      return parseJsonBuf(buf);
-    } catch {
-      return {};
-    }
+    if (rc !== 0) throw new Error(this._err("last_route failed"));
+    return parseJsonBuf(buf);
   }
 }

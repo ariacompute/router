@@ -24,7 +24,17 @@ class BindingTest {
                 mapOf("model" to "ariacompute/semantic-auto"),
             )
             assertTrue(out.toString().contains("hello-from-router"), out.toString())
-            assertEquals("semantic", r.lastRoute()["layer"])
+            val chunks = mutableListOf<String>()
+            val streamed = r.completeStream(
+                listOf(mapOf("role" to "user", "content" to "hi")),
+                mapOf("model" to "ariacompute/semantic-auto"),
+            ) { chunk -> chunks.add(chunk) }
+            assertEquals(1, chunks.size)
+            assertTrue(streamed.toString().contains("hello-from-router"), streamed.toString())
+            val route = r.lastRoute()
+            assertEquals("semantic", route["layer"])
+            val headers = route["headers"] as? Map<String, Any?>
+            assertTrue(headers?.containsKey("x-aria-router-layer") == true)
         }
     }
 

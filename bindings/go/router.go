@@ -24,7 +24,17 @@ type Router struct {
 	authToken   string
 }
 
+// SetupConfig mirrors the in-memory setup state exposed by the other SDKs.
+type SetupConfig struct {
+	BaseURL string
+	Token   string
+}
+
 func NewRouter() *Router { return &Router{} }
+
+func (r *Router) SetupStatus() SetupConfig {
+	return SetupConfig{BaseURL: r.authBaseURL, Token: r.authToken}
+}
 
 func (r *Router) Setup(baseURL, token string) {
 	if baseURL != "" {
@@ -115,6 +125,8 @@ func (r *Router) Close() {
 	}
 }
 
+func (r *Router) Destroy() { r.Close() }
+
 func (r *Router) native() *C.AriaRouter { return (*C.AriaRouter)(r.h) }
 
 func (r *Router) Complete(messages any, options any) (map[string]any, error) {
@@ -134,6 +146,32 @@ func (r *Router) Complete(messages any, options any) (map[string]any, error) {
 		n++
 	}
 	if err := json.Unmarshal(buf[:n], &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CompleteStream calls the C streaming wrapper. The ABI currently emits one
+// full-body callback, so the Go callback receives that single chunk.
+func (r *Router) CompleteStream(messages any, options any, cb func(string)) (map[string]any, error) {
+	mb, _ := json.Marshal(messages)
+	ob, _ := json.Marshal(options)
+	ms, os_ := C.CString(string(mb)), C.CString(string(ob))
+	defer C.free(unsafe.Pointer(ms))
+	defer C.free(unsafe.Pointer(os_))
+	buf := make([]byte, 256*1024)
+	rc := C.aria_router_complete_stream(
+		r.native(), ms, os_, (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)), nil, nil,
+	)
+	if rc != 0 {
+		return nil, errors.New(C.GoString(C.aria_router_last_error()))
+	}
+	text := C.GoString((*C.char)(unsafe.Pointer(&buf[0])))
+	if cb != nil {
+		cb(text)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		return nil, err
 	}
 	return out, nil

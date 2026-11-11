@@ -39,6 +39,16 @@ class Router : AutoCloseable {
             outLen: Int,
         ): Int
 
+        fun aria_router_complete_stream(
+            h: Pointer,
+            messages: String,
+            options: String,
+            out: Pointer,
+            outLen: Int,
+            callback: Pointer?,
+            userData: Pointer?,
+        ): Int
+
         fun aria_router_models(h: Pointer, out: Pointer, outLen: Int): Int
         fun aria_router_last_route(h: Pointer, out: Pointer, outLen: Int): Int
         fun aria_router_last_error(): String?
@@ -130,6 +140,29 @@ class Router : AutoCloseable {
         return parseObject(buf.getString(0))
     }
 
+    fun completeStream(
+        messages: Any,
+        options: Any? = null,
+        onChunk: ((String) -> Unit)? = null,
+    ): Map<String, Any?> {
+        val h = handle ?: throw IllegalStateException("router not initialized")
+        val buf = Memory(256L * 1024L)
+        buf.clear()
+        val rc = lib!!.aria_router_complete_stream(
+            h,
+            toJson(messages),
+            toJson(options ?: emptyMap<String, Any>()),
+            buf,
+            buf.size().toInt(),
+            null,
+            null,
+        )
+        if (rc != 0) throw IllegalStateException(err("complete_stream failed"))
+        val raw = buf.getString(0)
+        onChunk?.invoke(raw)
+        return parseObject(raw)
+    }
+
     fun models(): Map<String, Any?> {
         val h = handle ?: throw IllegalStateException("router not initialized")
         val buf = Memory(64L * 1024L)
@@ -140,16 +173,12 @@ class Router : AutoCloseable {
     }
 
     fun lastRoute(): Map<String, Any?> {
-        val h = handle ?: return emptyMap()
+        val h = handle ?: throw IllegalStateException("router not initialized")
         val buf = Memory(64L * 1024L)
         buf.clear()
         val rc = lib!!.aria_router_last_route(h, buf, buf.size().toInt())
-        if (rc != 0) return emptyMap()
-        return try {
-            parseObject(buf.getString(0).ifEmpty { "{}" })
-        } catch (_: Exception) {
-            emptyMap()
-        }
+        if (rc != 0) throw IllegalStateException(err("last_route failed"))
+        return parseObject(buf.getString(0).ifEmpty { "{}" })
     }
 
     companion object {
@@ -184,6 +213,10 @@ class Router : AutoCloseable {
                 if (f.isFile) {
                     return Native.load(f.absolutePath, Lib::class.java)
                 }
+            }
+            val bundled = firstExisting(File("lib"))
+            if (bundled != null) {
+                return Native.load(bundled.absolutePath, Lib::class.java)
             }
             val cached = firstExisting(File(ariaHome(), "lib"))
             if (cached != null) {

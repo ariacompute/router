@@ -533,7 +533,7 @@ recipes:
     router: semantic
     routing:
       strategy: priority
-      prefix_reuse: true   # 省略时默认 true
+      prefix_reuse: true  # 省略时默认 true
       # …
 
   - name: agent-default
@@ -589,13 +589,15 @@ C ABI（`ariacompute-router-ffi` / `libaria-router_ffi`）加 `bindings/` 薄封
 | Swift | `bindings/swift` | CocoaPods / SPM `AriaComputeRouter` |
 | Kotlin | `bindings/kotlin` | Maven `com.ariacompute:router` |
 
-C 头文件：[`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init`（进程内加载 YAML；`NULL`/空串 → `~/.ariacompute/router.yml`）、`aria_router_connect`（HTTP 连已运行的 `serve`）、`aria_router_complete` / `_stream`、`aria_router_models`、`aria_router_last_route`、`aria_router_destroy`、`aria_router_last_error`。
+C 头文件：[`ffi/include/aria_router.h`](ffi/include/aria_router.h) — `aria_router_init`（进程内加载 YAML；`NULL`/空串 → `~/.ariacompute/router.yml`）、`aria_router_connect`（HTTP 连已运行的 `serve`）、`aria_router_setup`（仅内存 `base_url` / `token`；`NULL` 保持不变、空串清除）、`aria_router_complete` / `_stream`、`aria_router_models`、`aria_router_last_route`、`aria_router_destroy`、`aria_router_last_error`。
 
-动态库顺序：`ARIA_ROUTER_FFI_LIB` → 包内捆绑路径 → `~/.ariacompute/lib/`。实例 `setup` 仅内存 `base_url` / `token`，**禁止**写 `router.yml`。无路径的 `init` 使用 `aria-router setup` 写入的默认 `router.yml`（gateway 模板 serve 前需 `export GATEWAY_API_KEY`）。离线 binding CI 使用 [`bindings/testdata/fast-response.yaml`](bindings/testdata/fast-response.yaml)（固定回复，无需 upstream）。`init` 进程内跑 semantic 与轻量 builtin agent（固定工具 + `max_turns`）；无 subprocess harness。
+`aria_router_complete_stream` 当前是**整块单次回调**（一次携带完整响应体），不是逐 SSE chunk。`aria_router_last_route` 返回 `RouteDecision` JSON 及 `headers` 扩展对象（白名单 `x-aria-router-*`，含 `x-aria-router-redecision`；不暴露 `authorization` / cookie）。`connect` 句柄的 `models` 代理 `GET /v1/models`，`last_route` 暴露最近一次 `complete` 捕获的响应头；失败显式报错，不返回空结果。
+
+动态库顺序：`ARIA_ROUTER_FFI_LIB` → 包内捆绑路径 → `~/.ariacompute/lib/`。实例 `setup` 仅内存 `base_url` / `token`，**禁止**写 `router.yml`。无路径的 `init` 使用 `aria-router setup` 写入的默认 `router.yml`（gateway 模板 serve 前需 `export GATEWAY_API_KEY`）。离线 binding CI 使用 [`bindings/testdata/fast-response.yaml`](bindings/testdata/fast-response.yaml)（固定回复，无需 upstream）。`init` 进程内跑 semantic 与轻量 builtin agent（固定工具 + `max_turns`）；无 subprocess harness。Rust 原生绑定不 dlopen，Go 走 cgo `-L… -laria_router_ffi`，二者均不使用该查找顺序。
 
 ```bash
 cargo test -p ariacompute-router-ffi -p ariacompute-router
-./scripts/run-binding-tests.sh   # 宿主矩阵（Rust / Python / Go / TS / RN setup）
+./scripts/run-binding-tests.sh   # 宿主矩阵（Rust / Python / Go / TS / RN / Flutter / Kotlin；Swift 需工具链可用时手工 swift test）
 ```
 
 C ABI 变更必须同步 [`bindings/testdata/cases.json`](bindings/testdata/cases.json) 与宿主测。
@@ -603,6 +605,17 @@ C ABI 变更必须同步 [`bindings/testdata/cases.json`](bindings/testdata/case
 ### 示例
 
 进程内 `init` + `complete` **不需要** Dashboard API key。`connect` 到开启 `require_api_key` 的已运行 `serve` 仍需 `setup(token=…)`。实例 `setup` 仅写内存。
+
+八语言 SDK 统一暴露 `setup` / `setup_status`（或 `setupStatus` / `SetupStatus`）/ `setup_clear`、`complete`、`complete_stream`（或 `completeStream` / `CompleteStream`）、`models`、`last_route`（或 `lastRoute` / `LastRoute`）、`close` + `destroy`。`complete_stream` 交付一次完整响应体，`last_route()["headers"]` 携带白名单决策响应头。例如：
+
+```python
+r.setup(token="sk-...")
+print(r.setup_status())
+chunks = []
+out = r.complete_stream([{"role": "user", "content": "hi"}], callback=chunks.append)
+print(out, chunks[0][:80])
+print(r.last_route()["headers"])
+```
 
 **Python**（需 `ARIA_ROUTER_FFI_LIB` 或捆绑/缓存的 `libaria-router_ffi`）：
 
@@ -805,7 +818,7 @@ do {
         messages: [["role": "user", "content": "hi"]],
         options: ["model": "ariacompute/semantic-auto"]
     ))
-    print(r.lastRoute())
+    print(try r.lastRoute())
     r.close()
 
     // 或连接已运行的 serve（开启 require_api_key 时需 token）：
@@ -839,7 +852,7 @@ fun main() {
     }
 
     // 或连接已运行的 serve（开启 require_api_key 时需 token）：
-    Router().connect("http://127.0.0.1:8090").use { c ->
+    Router().connect("http://127.0.0.1:8899").use { c ->
         c.setup(baseUrl = "http://127.0.0.1:8899", token = "")
     }
 }

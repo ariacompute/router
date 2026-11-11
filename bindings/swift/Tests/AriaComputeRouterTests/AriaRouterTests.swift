@@ -32,6 +32,18 @@ final class AriaRouterTests: XCTestCase {
             options: ["model": "ariacompute/semantic-auto"]
         )
         XCTAssertTrue(String(describing: out).contains("hello-from-router"))
-        XCTAssertEqual(r.lastRoute()["layer"] as? String, "semantic")
+        var chunks: [String] = []
+        let streamed = try r.completeStream(
+            messages: [["role": "user", "content": "hi"]],
+            options: ["model": "ariacompute/semantic-auto"],
+            onChunk: { chunk in chunks.append(chunk) }
+        )
+        XCTAssertEqual(chunks.count, 1)
+        XCTAssertTrue(String(describing: streamed).contains("hello-from-router"))
+        let route = try r.lastRoute()
+        XCTAssertEqual(route["layer"] as? String, "semantic")
+        let headers = route["headers"] as? [String: Any]
+        XCTAssertNotNil(headers?["x-aria-router-layer"])
+        XCTAssertNil(headers?["authorization"])
     }
 }
