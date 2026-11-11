@@ -223,11 +223,26 @@ cargo run -p aria-router -- serve \
 ./scripts/run-user-e2e.sh --task-focus T90,T91,T92 --with-fixtures
 ```
 
-用例组：`cli`、`auth`、`keys`、`data`、`decisioners`、`mgmt-read`、`mgmt-write`、`dashboard`、`task-static`、`task-http`、`local-optional`、`bench-optional`、`task-fixtures`（需 `--with-fixtures`）、`task-offline`（需 `--with-local`）。`task-static` 为 `task.md` 中每个真实 T 编号做一次只读静态契约探测（见 `scripts/user-e2e-task-map.tsv`；T30 / T60–T80 缺口与重复的 T18 不虚构）。`task-http` 在运行实例上覆盖 T90/T93/T94/T95/T96 端点；fixture 组主动触发 T91 三问模板、T92 低分保护、T95 执行证据与 T97 backend failover；`task-offline` 复算 T98 策略一致性并执行 T99 UI 审计规则/静态检查。
+要获得最广覆盖，用单个实例同时启用三种决策器，并打开所有可选模式。保留默认云端上游（`https://tokenhub.tencentmaas.com`）时必须设置 `GATEWAY_API_KEY`（YAML 中的 `api_key_env` 指向它）；使用无需鉴权的本地 stub 时可省略。`GATEWAY_BASE_URL` 可覆盖三个云端上游，`LOCAL_BASE_URL` / `LOCAL_MODEL_ID` 配置 `local/general` bypass 模型（默认 `127.0.0.1:8011`）：
 
-`--list` 输出 `GROUP / CASE / TASK / DESCRIPTION`。每条结果为 `PASS` / `FAIL` / `SKIP`，并带 `feature`（T 编号）与 `kind`（`http` / `static` / `fixture` / `offline`）。`out/user-e2e-report.json` 保留原有字段，并新增 `modes`、`coverage`（按编号的 PASS/FAIL/SKIP/UNCOVERED 矩阵；`kind` 为声明类型，`kinds` 为本次实际执行的验证类型；文本报告中 T90–T99 优先展示）与带标签的 `cases`。`--task-focus` 只接受映射表中存在的编号，`T30` 等缺口编号会以退出码 2 拒绝。退出码：`0` 已执行用例全部通过、`1` 存在失败（或 `--strict-skip` 下有跳过）、`2` 用法/环境错误（如服务不可达）。
+```bash
+# 终端 1 —— 自行启动实例（套件本身不会编译/启动/停止它）
+# 默认云端上游必需；使用无需鉴权的本地 stub 时可省略。
+export GATEWAY_API_KEY=…
+# 可选：把云端 provider 与 bypass 模型都指向本地 OpenAI 兼容 stub。
+# export GATEWAY_BASE_URL=http://127.0.0.1:8011
+# export LOCAL_BASE_URL=http://127.0.0.1:8011
+cargo run -p aria-router -- serve \
+  --config config/examples/triad-gateway.yaml \
+  --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090
 
-默认实例上的写用例使用单次运行的随机前缀，并在退出时撤销测试密钥；`--read-only` 会跳过它们。`PUT /v1/router/config` 会原样重写 `router.yml`，真实 `upgrade` 会替换 CLI，因此默认实例上两者**永不执行**，只校验其拒绝/帮助契约。Provider upsert、trust publish、serve account sync 等不可逆写需显式 `--allow-mutating`。fixture 实例彼此隔离，因此其场景可自由启用 `global.services.*`、`afm-d.question_template` 与 `routing.competence.protection`。上游故障（502/504）记为 `SKIP` 而非 router 缺陷；token 与密钥明文不会写入 stdout 或报告。
+# 终端 2 —— 全量覆盖运行
+./scripts/run-user-e2e.sh \
+  --data-url http://127.0.0.1:8899 --mgmt-url http://127.0.0.1:8090 \
+  --admin-user admin --admin-password '…' \
+  --with-local --with-fixtures --allow-mutating \
+  --out-dir out/full
+```
 
 <div align="right">
 

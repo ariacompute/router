@@ -223,11 +223,26 @@ The `aria-router` binary has four subcommands:
 ./scripts/run-user-e2e.sh --task-focus T90,T91,T92 --with-fixtures
 ```
 
-Case groups: `cli`, `auth`, `keys`, `data`, `decisioners`, `mgmt-read`, `mgmt-write`, `dashboard`, `task-static`, `task-http`, `local-optional`, `bench-optional`, `task-fixtures` (needs `--with-fixtures`), `task-offline` (needs `--with-local`). `task-static` performs a read-only static contract probe for every real T-number in `task.md` (see `scripts/user-e2e-task-map.tsv`; the T30 / T60–T80 gaps and the duplicate T18 are not invented). `task-http` covers T90/T93/T94/T95/T96 endpoints on the running instance; the fixture group actively triggers the T91 three-question template, T92 low-score protection, T95 execution evidence and T97 backend failover; `task-offline` recomputes T98 policy consistency and runs the T99 UI-audit rule/static checks.
+For the widest coverage, start one instance with all three decisioners and enable every opt-in mode. Keeping the default cloud upstream (`https://tokenhub.tencentmaas.com`) requires `GATEWAY_API_KEY`, referenced by `api_key_env` in the YAML; a keyless local stub does not. `GATEWAY_BASE_URL` overrides the three cloud providers, and `LOCAL_BASE_URL` / `LOCAL_MODEL_ID` configure the `local/general` bypass model (defaults to `127.0.0.1:8011`):
 
-`--list` prints `GROUP / CASE / TASK / DESCRIPTION`. Each result is `PASS`, `FAIL` or `SKIP` and carries a `feature` (T-number) plus a `kind` (`http` / `static` / `fixture` / `offline`). `out/user-e2e-report.json` keeps the original fields and adds `modes`, `coverage` (a per-number PASS/FAIL/SKIP/UNCOVERED matrix with `kind` = declared type and `kinds` = verification types actually executed; T90–T99 listed first in the text report) and the tagged `cases`. `--task-focus` only accepts numbers present in the map; unmapped gaps such as `T30` are rejected with exit 2. Exit codes: `0` all executed cases passed, `1` at least one failure (or skipped cases with `--strict-skip`), `2` usage/environment error such as an unreachable service.
+```bash
+# Terminal 1 — start the instance yourself (the suite never builds/starts/stops it)
+# Required for the default cloud upstream; omit with a keyless local stub.
+export GATEWAY_API_KEY=…
+# Optional: point cloud providers + bypass model at a local OpenAI-compatible stub.
+# export GATEWAY_BASE_URL=http://127.0.0.1:8011
+# export LOCAL_BASE_URL=http://127.0.0.1:8011
+cargo run -p aria-router -- serve \
+  --config config/examples/triad-gateway.yaml \
+  --bind 127.0.0.1:8899 --mgmt-bind 127.0.0.1:8090
 
-Mutating cases on the default instance use a per-run random prefix and revoke test keys on exit; `--read-only` skips them. `PUT /v1/router/config` writes `router.yml` verbatim and a real `upgrade` replaces the CLI, so both are never executed on the default instance — only their rejecting/help contracts are checked. Provider upsert, trust publish, serve account sync and other irreversible writes need explicit `--allow-mutating`. Fixture instances are isolated, so their scenarios can freely enable `global.services.*`, `afm-d.question_template` and `routing.competence.protection`. Upstream failures (502/504) are `SKIP`, not router defects; tokens/key secrets are redacted from stdout and reports.
+# Terminal 2 — full coverage run
+./scripts/run-user-e2e.sh \
+  --data-url http://127.0.0.1:8899 --mgmt-url http://127.0.0.1:8090 \
+  --admin-user admin --admin-password '…' \
+  --with-local --with-fixtures --allow-mutating \
+  --out-dir out/full
+```
 
 <div align="right">
 

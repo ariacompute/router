@@ -147,6 +147,8 @@ recipes:
 
 global:
   require_api_key: false
+  keys_path: ${WORK_DIR}/fixture-keys.json
+  users_path: ${WORK_DIR}/fixture-users.json
   services:
     redecision:
       enabled: true
@@ -159,7 +161,8 @@ global:
       enabled: true
       max_attempts: 3
     quota:
-      enabled: false
+      enabled: true
+      default_reserve_usd: 0.0001
 EOF
   printf '%s' "$out"
 }
@@ -190,12 +193,16 @@ fixture_cleanup_all() {
 
 fixture_skip_all() {
   local reason="$1" id
+  set_task T90 fixture
+  skip_case task-fixtures redecision_fail_closed_fixture "$reason"
   set_task T91 fixture
   skip_case task-fixtures three_question_afmd "$reason"
   set_task T92 fixture
   skip_case task-fixtures protection_state "$reason"
   set_task T95 fixture
   skip_case task-fixtures evidence_scene "$reason"
+  set_task T96 fixture
+  skip_case task-fixtures quota_exhaust_fixture "$reason"
   set_task T97 fixture
   skip_case task-fixtures failover_candidates "$reason"
   clear_task
@@ -236,7 +243,7 @@ fixture_start() {
 }
 
 run_group_task_fixtures() {
-  local body m1 m2 s1 s2 data mgmt
+  local body m1 m2 s1 s2 data mgmt kid secret rd1 rd2 blocked blocked_type released after
   clear_task
   if ! command -v python3 >/dev/null 2>&1; then
     fixture_skip_all "python3 unavailable (stub backend needs the standard library)"
@@ -315,6 +322,77 @@ run_group_task_fixtures() {
   else
     check task-fixtures failover_candidates 200 -
   fi
+
+  set_task T90 fixture
+  body="$(jq -nc --arg m "$ENTRY_SEMANTIC" \
+    '{model:$m,messages:[{role:"system",content:"be brief"},{role:"user",content:"ping"},{role:"assistant",content:"first answer"}]}')"
+  http_req POST "$data/v1/chat/completions" "$body" \
+    -H "x-aria-session: $TEST_PREFIX-redecision"
+  s1="$LAST_STATUS"
+  rd1="$(header_value x-aria-router-redecision "$LAST_HEADERS")"
+  body="$(jq -nc --arg m "$ENTRY_SEMANTIC" \
+    '{model:$m,messages:[{role:"system",content:"be brief"},{role:"user",content:"ping"},{role:"assistant",content:"rewritten history"}]}')"
+  http_req POST "$data/v1/chat/completions" "$body" \
+    -H "x-aria-session: $TEST_PREFIX-redecision"
+  s2="$LAST_STATUS"
+  rd2="$(header_value x-aria-router-redecision "$LAST_HEADERS")"
+  if [[ "$s1" != 200 || "$s2" != 200 ]]; then
+    skip_case task-fixtures redecision_fail_closed_fixture \
+      "semantic chat unavailable on the fixture (HTTP $s1/$s2)"
+  elif [[ "$rd1" != "new-user-message" ]]; then
+    skip_case task-fixtures redecision_fail_closed_fixture \
+      "first turn boundary was '$rd1', expected new-user-message"
+  elif [[ "$rd2" == "unknown" ]]; then
+    record task-fixtures redecision_fail_closed_fixture PASS \
+      "discontinuous history clears frozen decisions" "$rd1 -> $rd2" \
+      "rewritten assistant history is classified as unknown"
+  else
+    record task-fixtures redecision_fail_closed_fixture FAIL "unknown boundary" \
+      "$rd2" "rewritten history was not classified as unknown"
+  fi
+
+  set_task T96 fixture
+  body="$(jq -nc --arg n "e2e-quota-$TEST_PREFIX" '{name:$n}')"
+  http_req POST "$mgmt/v1/router/keys" "$body"
+  kid="$(jq -r '.id // empty' "$LAST_BODY" 2>/dev/null)"
+  secret="$(jq -r '.secret // empty' "$LAST_BODY" 2>/dev/null)"
+  if [[ "$LAST_STATUS" != 200 || -z "$kid" || -z "$secret" ]]; then
+    skip_case task-fixtures quota_exhaust_fixture \
+      "fixture key creation returned HTTP $LAST_STATUS without id/secret"
+  else
+    body="$(jq -nc '{limit_usd:0.000001,period:"once"}')"
+    http_req PUT "$mgmt/v1/router/keys/$kid/spend" "$body"
+    if [[ "$LAST_STATUS" != 200 ]]; then
+      skip_case task-fixtures quota_exhaust_fixture \
+        "fixture spend policy update returned HTTP $LAST_STATUS"
+    else
+      body="$(chat_body "$ENTRY_SEMANTIC" "ping")"
+      http_req POST "$data/v1/chat/completions" "$body" \
+        -H "Authorization: Bearer $secret"
+      blocked="$LAST_STATUS"
+      blocked_type="$(jq -r '.error.type // empty' "$LAST_BODY" 2>/dev/null)"
+      body="$(jq -nc '{limit_usd:10.0,period:"once"}')"
+      http_req PUT "$mgmt/v1/router/keys/$kid/spend" "$body"
+      released="$LAST_STATUS"
+      body="$(chat_body "$ENTRY_SEMANTIC" "ping")"
+      http_req POST "$data/v1/chat/completions" "$body" \
+        -H "Authorization: Bearer $secret"
+      after="$LAST_STATUS"
+      if [[ "$blocked" == "429" && "$blocked_type" == *QuotaExceeded* \
+            && "$released" == "200" && "$after" == "200" ]]; then
+        record task-fixtures quota_exhaust_fixture PASS \
+          "429 QuotaExceeded then 200 after raising the limit" "429 -> 200" \
+          "soft quota blocks and recovers distinctly from rate limiting"
+      else
+        record task-fixtures quota_exhaust_fixture FAIL \
+          "429 QuotaExceeded then 200 after raising the limit" \
+          "$blocked/$released/$after" \
+          "soft quota did not block or recover as documented"
+      fi
+    fi
+    http_req DELETE "$mgmt/v1/router/keys/$kid" -
+  fi
+
   clear_task
   return 0
 }

@@ -70,13 +70,13 @@ T86	Eng-T86	Windows x86_64 test compat	static	task-static	*	-	-
 T87	Eng-T87	Kotlin JDK17 in CI	static	task-static	*	-	-
 T88	Eng-T88	accept-then-close sockets	static	task-static	*	-	-
 T89	Eng-T89	dashboard and keys paths	static	task-static	*	-	-
-T90	T-C1	explicit redecision boundaries	http	task-http,task-static	redecision*	config/src/lib.rs	redecision
+T90	T-C1	explicit redecision boundaries	http	task-http,task-fixtures,task-static	redecision*	config/src/lib.rs	redecision
 T91	T-C2	afm-d three question template	fixture	task-fixtures,task-static	three_question*	config/src/lib.rs	question_template
 T92	T-C3	low score protection state machine	fixture	task-fixtures,task-static	protection*	config/src/lib.rs	protection
 T93	T-C4	trust evidence gate and publish	http	mgmt-read,mgmt-write,task-http,task-static	trust*	config/src/lib.rs	trust
 T94	T-C5	model performance empty state	http	mgmt-read,task-http,task-static	model_perf*	dashboard/src/App.tsx	/model-performance
 T95	T-C6	production execution evidence	http	task-http,task-fixtures,task-static	evidence*	http/src/replay.rs	task_category
-T96	T-C7	API key soft quota	http	keys,task-http,task-static	quota*	config/src/lib.rs	quota
+T96	T-C7	API key soft quota	http	keys,task-http,task-fixtures,task-static	quota*	config/src/lib.rs	quota
 T97	T-C8	backend candidate failover	fixture	task-fixtures,task-static	failover*	config/src/lib.rs	backend_failover
 T98	T-C9	offline policy consistency	offline	task-offline,task-static	policy_consistency*	bench/cli.py	policy-consistency
 T99	T-U1	impeccable render audit	offline	task-offline,task-static	audit_ui*	scripts/audit-ui.sh	--list-rules

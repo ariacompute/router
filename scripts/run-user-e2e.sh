@@ -80,6 +80,7 @@ ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 ROUTER_API_KEY="${ROUTER_API_KEY:-}"
 SESSION_TOKEN="${ROUTER_SESSION_TOKEN:-}"
 TIMEOUT="${TIMEOUT:-15}"
+AGENT_TIMEOUT="${AGENT_TIMEOUT:-60}"
 SSE_TIMEOUT="${SSE_TIMEOUT:-10}"
 OUT_DIR="${OUT_DIR:-$ROOT/out}"
 ARIA_ROUTER_BIN="${ARIA_ROUTER_BIN:-}"
@@ -507,9 +508,16 @@ record() {
     | sed -E 's/sk-(aria|bf)_[A-Za-z0-9_-]+/[REDACTED]/g; s/Bearer [A-Za-z0-9._-]+/Bearer [REDACTED]/g; s/"(token|secret|password)"[[:space:]]*:[[:space:]]*"[^"]*"/"\1":"[REDACTED]"/g' \
     | tr '\n' ' ')"
   feature="$E2E_TASK_ID"
-  [[ -z "$feature" ]] && feature="$(task_for_case "$group" "$id")"
+  if [[ -z "$feature" ]]; then
+    case "$id" in
+      disabled|group_missing|group_crashed) feature="-" ;;
+      *) feature="$(task_for_case "$group" "$id")" ;;
+    esac
+  fi
   kind="$E2E_TASK_KIND"
-  [[ -z "$kind" ]] && kind="$(task_kind_for "$feature")"
+  if [[ -z "$kind" ]]; then
+    if [[ "$feature" == "-" ]]; then kind="-"; else kind="$(task_kind_for "$feature")"; fi
+  fi
   jq -nc \
     --arg group "$group" --arg id "$id" --arg status "$status" \
     --arg expect "$expect" --arg actual "$actual" --arg detail "$safe" \
@@ -810,6 +818,9 @@ run_self_test() {
   record selftest tagged PASS "-" "-" "tagged case"
   grep -q '"feature":"T90"' "$RESULTS_FILE"; st_expect "record feature tag" $?
   clear_task
+  record task-fixtures disabled SKIP "-" "-" "pass --with-fixtures to enable this group" >/dev/null
+  jq -se 'any(.[]; .id=="disabled" and .feature=="-" and .kind=="-")' "$RESULTS_FILE" >/dev/null 2>&1
+  st_expect "framework skip is untagged" $?
   WORK_DIR="$tmp"
   build_coverage >/dev/null; st_expect "coverage matrix build" $?
   jq -se 'any(.[]; .task=="T90" and .pass >= 1)' "$tmp/coverage.jsonl" >/dev/null 2>&1
@@ -907,6 +918,7 @@ run_groups() {
   local group fn
   for group in "${ALL_GROUPS[@]}"; do
     group_enabled "$group" || continue
+    clear_task
     if [[ "$group" == "local-optional" || "$group" == "bench-optional" || "$group" == "task-offline" ]] \
        && (( WITH_LOCAL == 0 )); then
       skip_case "$group" disabled "pass --with-local to enable this group"

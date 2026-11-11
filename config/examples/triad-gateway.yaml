@@ -4,7 +4,11 @@
 #   ariacompute/semantic-auto  → recipe mom
 #   ariacompute/agent-auto     → recipe agent-default
 #   ariacompute/afm-d-auto     → recipe afm-d-default
-# Requires: export GATEWAY_API_KEY=…
+# Cloud backends need the key named by `api_key_env: GATEWAY_API_KEY`:
+#   export GATEWAY_API_KEY=…
+# GATEWAY_BASE_URL overrides all three cloud backends (e.g. a keyless local
+# stub, in which case the key is not needed). LOCAL_BASE_URL / LOCAL_MODEL_ID
+# configure the `local/general` bypass model (no api_key_env by default).
 # AFM-D also needs aria-engine System One at DECISION_MODEL_URL (default :8010).
 #   aria-engine serve --track encoder --bind 127.0.0.1:8010
 
@@ -30,7 +34,7 @@ providers:
         output_per_mtok: 0.20
       backend_refs:
         - name: cloud/gateway
-          base_url: https://tokenhub.tencentmaas.com
+          base_url: ${GATEWAY_BASE_URL:-https://tokenhub.tencentmaas.com}
           protocol: http
           weight: 100
           api_key_env: GATEWAY_API_KEY
@@ -45,7 +49,7 @@ providers:
         output_per_mtok: 0.80
       backend_refs:
         - name: cloud/gateway
-          base_url: https://tokenhub.tencentmaas.com
+          base_url: ${GATEWAY_BASE_URL:-https://tokenhub.tencentmaas.com}
           protocol: http
           weight: 100
           api_key_env: GATEWAY_API_KEY
@@ -60,10 +64,27 @@ providers:
         output_per_mtok: 2.40
       backend_refs:
         - name: cloud/gateway
-          base_url: https://tokenhub.tencentmaas.com
+          base_url: ${GATEWAY_BASE_URL:-https://tokenhub.tencentmaas.com}
           protocol: http
           weight: 100
           api_key_env: GATEWAY_API_KEY
+    # Local bypass model (`BYPASS_MODEL`), served by any OpenAI-compatible
+    # endpoint on loopback. Override LOCAL_BASE_URL / LOCAL_MODEL_ID to match it.
+    # If that upstream is authenticated too, add `api_key_env: GATEWAY_API_KEY`
+    # to its backend_refs below.
+    - name: local/general
+      provider_model_id: ${LOCAL_MODEL_ID:-local/general}
+      locality: local
+      modality: text
+      capabilities: [chat]
+      pricing:
+        input_per_mtok: 0.0
+        output_per_mtok: 0.0
+      backend_refs:
+        - name: local/echo
+          base_url: ${LOCAL_BASE_URL:-http://127.0.0.1:8011}
+          protocol: http
+          weight: 100
 
 entrypoints:
   - model_names: [ariacompute/semantic-auto]

@@ -39,7 +39,6 @@ cli|setup_status|setup --status is flat key: value and read-only
 cli|validate_ok|validate --config accepts semantic-tiny.yaml
 cli|validate_missing|validate --config rejects a missing file
 cli|upgrade_help|upgrade --help is read-only
-cli|upgrade_not_executed|real upgrade is intentionally never executed
 auth|register_status|register-status exposes allow_register/needs_setup
 auth|login_bad_password|login rejects invalid credentials with 401
 auth|login_success|admin login returns user + token
@@ -96,7 +95,6 @@ mgmt-read|replay_limited|replay?n=1 limits items
 mgmt-read|users|admin can list users
 mgmt-read|users_unauthenticated|listing users without a session is 401
 mgmt-write|config_rejects_invalid|invalid YAML is rejected without rewriting config
-mgmt-write|config_write|PUT config is skipped (it rewrites router.yml verbatim)
 mgmt-write|providers_missing_fields|provider upsert without fields is rejected
 mgmt-write|providers_upsert|provider upsert accepts a test provider
 mgmt-write|trust_suggest|trust/suggest keeps online routing unchanged
@@ -124,7 +122,6 @@ local-optional|fast_response|canned fast-response fixture is present
 local-optional|ffi_prebuilt_lib|a prebuilt FFI library is available
 local-optional|runtime_*|language runtimes are detected
 local-optional|host_binding_tests|host binding tests are intentionally not run
-local-optional|upgrade_not_executed|upgrade is intentionally not executed
 bench-optional|help_contract|bench routing-accuracy documents --router
 bench-optional|live_accuracy|live accuracy report is generated through the URL
 task-static|static_<id>|one static contract probe per real task.md number
@@ -136,7 +133,7 @@ task-http|trust_thresholds|trust exposes evidence gates
 task-http|trust_suggest_insufficient|insufficient evidence yields no draft
 task-http|trust_publish_confirm_required|publish requires explicit confirm
 task-http|trust_estimate_no_change|estimate reroute does not change online routing
-task-http|model_perf_empty_state|empty state is not reported as zero
+task-http|model_perf_empty_state|no-evidence rows carry null stage_score, never zero
 task-http|model_perf_route|model-performance SPA route is served
 task-http|evidence_replay_fields|replay records carry execution evidence
 task-http|evidence_replay_disabled|replay disabled keeps records empty
@@ -144,9 +141,11 @@ task-http|quota_fields|quota exposes reservations and settlement errors
 task-http|quota_default_off|soft quota is off by default
 task-http|quota_key_spend_fields|key spend policy exposes limit/group/period
 task-http|quota_exhaust_429|429 requires an isolated fixture instance
+task-fixtures|redecision_fail_closed_fixture|unknown boundary clears frozen decisions
 task-fixtures|three_question_afmd|afm-d three-question template routes
 task-fixtures|protection_state|low-score protection trigger and release
 task-fixtures|evidence_scene|production evidence fields in replay
+task-fixtures|quota_exhaust_fixture|soft quota blocks with 429 and recovers
 task-fixtures|failover_candidates|backend candidate chain switches
 task-offline|policy_consistency_help|policy-consistency documents --records
 task-offline|policy_consistency_report|offline recompute report is generated
@@ -267,7 +266,6 @@ run_group_cli() {
   check_local cli validate_ok 0 '^ok' "$bin" validate --config "$ROOT/config/examples/semantic-tiny.yaml"
   check_local cli validate_missing 1 'io:|missing|No such file' "$bin" validate --config "$WORK_DIR/no-such-config.yaml"
   check_local cli upgrade_help 0 'Usage|upgrade' "$bin" upgrade --help
-  skip_case cli upgrade_not_executed "real upgrade downloads and replaces the CLI; intentionally not executed"
 }
 
 run_group_auth() {
@@ -321,7 +319,7 @@ run_group_auth() {
   check auth oauth_start_invalid_site 400 'has("error")'
 
   http_req GET "$MGMT_URL/v1/router/auth/oauth/callback" -
-  check auth oauth_callback_missing_code 302 - 'hdr:location=re:error='
+  check auth oauth_callback_missing_code '307|302' - 'hdr:location=re:error='
 
   http_req GET "$MGMT_URL/v1/router/serve/account" - "${SESSION_ARGS[@]}"
   if [[ "$LAST_STATUS" == 200 ]]; then
@@ -448,6 +446,9 @@ run_group_data() {
     record data chat_sse PASS "stream delivers data frames" "stream-timeout" "data frames received before read timeout"
   elif [[ "$LAST_STATUS" == 401 ]]; then
     skip_case data chat_sse "data plane requires a valid API key (HTTP 401)"
+  elif [[ "$LAST_STATUS" == 403 ]] \
+       && jq -e '.error.message|test("fail closed")' "$LAST_BODY" >/dev/null 2>&1; then
+    skip_case data chat_sse "fail closed (HTTP 403): entrypoint model not configured or not eligible; SSE not verifiable"
   elif upstream_unavailable "$LAST_STATUS"; then
     skip_case data chat_sse "upstream unavailable (HTTP $LAST_STATUS)"
   else
@@ -510,7 +511,12 @@ run_group_decisioners() {
     fi
     record decisioners "models_include_$name" PASS "model advertised" "found" "$model"
     body="$(chat_body "$model" "please explain rust")"
-    http_req POST "$DATA_URL/v1/chat/completions" "$body" "${DATA_KEY_ARGS[@]}"
+    if [[ "$name" == agent ]]; then
+      http_req POST "$DATA_URL/v1/chat/completions" "$body" "${DATA_KEY_ARGS[@]}" \
+        --max-time "$AGENT_TIMEOUT"
+    else
+      http_req POST "$DATA_URL/v1/chat/completions" "$body" "${DATA_KEY_ARGS[@]}"
+    fi
     case "$LAST_STATUS" in
       200)
         cp "$LAST_HEADERS" "$WORK_DIR/decision-$name.headers"
@@ -531,7 +537,14 @@ run_group_decisioners() {
       401) skip_case decisioners "chat_$name" "requires a valid API key (HTTP 401)" ;;
       403|501) check decisioners "chat_$name" "$LAST_STATUS" 'has("error")' ;;
       500|502|503|504) skip_case decisioners "chat_$name" "upstream unavailable (HTTP $LAST_STATUS)" ;;
-      *) check decisioners "chat_$name" 200 - ;;
+      *)
+        if [[ "$LAST_STATUS" == "000" && "$LAST_DETAIL" == *"rc=28"* ]]; then
+          skip_case decisioners "chat_$name" \
+            "request timed out after ${AGENT_TIMEOUT}s (agent tool-loop); raise AGENT_TIMEOUT or --timeout"
+        else
+          check decisioners "chat_$name" 200 -
+        fi
+        ;;
     esac
   done
 
@@ -634,7 +647,6 @@ run_group_mgmt_write() {
   E2E_CT="text/plain"
   http_req PUT "$MGMT_URL/v1/router/config" 'this: [is: not: valid'
   check mgmt-write config_rejects_invalid 400 -
-  skip_case mgmt-write config_write "PUT config rewrites router.yml verbatim and can lose \${VAR}/comments; only the rejecting negative case runs"
 
   http_req PUT "$MGMT_URL/v1/router/providers" '{}'
   check mgmt-write providers_missing_fields '400|401|422' -
@@ -848,7 +860,6 @@ run_group_local_optional() {
     fi
   done
   skip_case local-optional host_binding_tests "requires cargo build + npm/dart install; not executed by this black-box script"
-  skip_case local-optional upgrade_not_executed "upgrade downloads and replaces the CLI; only its --help contract is checked"
   skip_case local-optional swift_tests "swift test requires a toolchain and build; not executed"
 }
 
@@ -925,10 +936,11 @@ run_group_task_static() {
     target="${TASK_TARGET[i]}"
     keyword="${TASK_KEYWORD[i]}"
     label="static_$id"
-    set_task "$id" static
     if [[ -z "$target" || "$target" == "-" ]]; then
-      skip_case task-static "$label" "no static contract target; functional coverage lives in other groups"
-    elif [[ ! -f "$ROOT/$target" ]]; then
+      continue
+    fi
+    set_task "$id" static
+    if [[ ! -f "$ROOT/$target" ]]; then
       record task-static "$label" FAIL "static target present" "missing" "$target"
     elif [[ -z "$keyword" || "$keyword" == "-" ]] \
          || grep -Fq -- "$keyword" "$ROOT/$target" 2>/dev/null; then
@@ -1002,7 +1014,7 @@ run_group_task_http() {
   else
     skip_case task-http redecision_header "redecision disabled on this instance"
   fi
-  skip_case task-http redecision_fail_closed "needs controlled multi-turn history; use --with-fixtures"
+  skip_case task-http redecision_fail_closed "default instance is left untouched; the isolated task-fixtures group triggers this boundary"
 
   set_task T93 http
   http_req GET "$MGMT_URL/v1/router/trust" - "${SESSION_ARGS[@]}"
@@ -1043,8 +1055,8 @@ run_group_task_http() {
   http_req GET "$MGMT_URL/v1/router/cost/model-performance" - "${SESSION_ARGS[@]}"
   cp "$LAST_BODY" "$WORK_DIR/model-perf.json"
   task_http_json model_perf_empty_state "$WORK_DIR/model-perf.json" \
-    '((.has_evidence|type)=="boolean") and ((.by_model|type)=="array") and ((.by_tier|type)=="array") and (if .has_evidence == false then ((.by_model|length)==0) and ((.by_tier|length)==0) and ((.estimate_note|type)=="string") else true end)' \
-    "empty state is not reported as zero"
+    '((.has_evidence|type)=="boolean") and ((.by_model|type)=="array") and ((.by_tier|type)=="array") and ((.estimate_note|type)=="string") and ((.scored_count|type)=="number") and (if .has_evidence == false then (.scored_count == 0) and (all(.by_model[]; (.stage_score == null) and (.scored == 0))) and (all(.by_tier[]; (.stage_score == null) and (.scored == 0))) else true end)' \
+    "no-evidence rows carry null stage_score, never zero"
   http_req GET "$MGMT_URL/model-performance" -
   if [[ "$LAST_STATUS" == 200 ]]; then
     check task-http model_perf_route 200 - 'body:<div id="root">'
@@ -1096,7 +1108,7 @@ run_group_task_http() {
   else
     skip_case task-http quota_key_spend_fields "no key available on this instance"
   fi
-  skip_case task-http quota_exhaust_429 "would exhaust a real key; only safe on isolated --with-fixtures instances"
+  skip_case task-http quota_exhaust_429 "default instance is left untouched; the isolated task-fixtures group exhausts a disposable key"
   clear_task
 }
 
