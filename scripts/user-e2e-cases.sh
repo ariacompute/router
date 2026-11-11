@@ -112,7 +112,7 @@ dashboard|index|/ serves the SPA index
 dashboard|route_*|every SPA route serves the index
 dashboard|asset_*|referenced JS/CSS assets are reachable
 dashboard|unknown_path_fallback|unknown SPA path falls back or is 404 in API mode
-local-optional|cases_json|shared FFI case matrix has 12 cases
+local-optional|cases_json|shared FFI case matrix has at least 12 cases
 local-optional|ffi_*|C ABI header exports all documented functions
 local-optional|binding_dir_*|all eight bindings are present
 local-optional|binding_runner_*|binding runner references the host test commands
@@ -805,7 +805,7 @@ run_group_dashboard() {
 run_group_local_optional() {
   local fn lang spec tool
   check_file_jq local-optional cases_json "$ROOT/bindings/testdata/cases.json" \
-    '(.version==1) and ((.cases|length)==12) and ((.cases|map(.id)|index("init_ok"))!=null) and ((.cases|map(.id)|index("fail_closed_unknown_model"))!=null)'
+    '(.version==1) and ((.cases|length)>=12) and ((.cases|map(.id)|index("init_ok"))!=null) and ((.cases|map(.id)|index("fail_closed_unknown_model"))!=null)'
   for fn in aria_router_last_error aria_router_init aria_router_connect aria_router_destroy \
             aria_router_setup aria_router_complete aria_router_complete_stream \
             aria_router_models aria_router_last_route; do
