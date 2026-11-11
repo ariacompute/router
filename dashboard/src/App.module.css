@@ -25,20 +25,6 @@
   margin-bottom: 0.75rem;
 }
 
-.brandMark {
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-field);
-  background: var(--text-main);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-on-solid);
-  font-weight: 700;
-  font-size: 0.95rem;
-  flex-shrink: 0;
-}
-
 .brandText {
   font-weight: 700;
   font-size: 0.95rem;

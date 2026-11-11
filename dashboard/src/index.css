@@ -68,6 +68,12 @@
   --mono: ui-monospace, 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
   --content-width: 1100px;
 
+  /* Brand glyph mirrors the Aria Compute favicon badge (shared with agenthub).
+     In light app theme the badge reads ink-on-off-white (favicon.svg); in dark
+     it inverts to off-white-on-ink (favicon-dark.svg). Greyscale only. */
+  --brand-badge-bg: #0d0d0d;
+  --brand-badge-fg: #f5f5f5;
+
   /* Backward-compatible aliases used by legacy module styles */
   --bg: var(--page-bg);
   --fg: var(--text-main);
@@ -114,6 +120,10 @@ html[data-theme="dark"],
   --chip-amber-fg: #e0c06a;
   --chip-warn-bg: rgba(161, 161, 170, 0.14);
   --chip-warn-fg: #a1a1aa;
+
+  /* Brand glyph inverts for the dark app theme: off-white-on-ink (favicon-dark.svg). */
+  --brand-badge-bg: #f5f5f5;
+  --brand-badge-fg: #0d0d0d;
 }
 
 * {

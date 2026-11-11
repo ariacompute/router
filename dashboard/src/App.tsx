@@ -26,6 +26,7 @@ import Users from './pages/Users';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import VersionBadge from './components/VersionBadge';
+import BrandMark from './components/BrandMark';
 
 type NavItem = { to: string; label: string; end?: boolean; admin?: boolean };
 type NavGroup = { title: string; items: NavItem[] };
@@ -89,7 +90,7 @@ function Sidebar({ user }: { user: LocalUser }) {
   return (
     <nav className={styles.nav}>
       <div className={styles.brand}>
-        <span className={styles.brandMark}>A</span>
+        <BrandMark size={30} />
         <span className={styles.brandText}>Aria Router</span>
       </div>
       {groups.map((g) => (
@@ -196,7 +197,7 @@ export default function App() {
       <div className={styles.shell}>
         <nav className={styles.nav}>
           <div className={styles.brand}>
-            <span className={styles.brandMark}>A</span>
+            <BrandMark size={30} />
             <span className={styles.brandText}>Aria Router</span>
           </div>
         </nav>
@@ -229,7 +230,7 @@ export default function App() {
     return (
       <div className={styles.authShell}>
         <div className={styles.brandCenter}>
-          <span className={styles.brandMark}>A</span>
+          <BrandMark size={40} />
           <span className={styles.brandText}>Aria Router</span>
         </div>
         {routes}

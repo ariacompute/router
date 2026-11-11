@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="1 1 62 62" role="img" aria-label="Aria Compute">
+  <!-- Off-white badge with ink mark: shows on dark tab chrome, matching the
+       dark app theme. Greyscale only to honour the monochrome guard. -->
+  <rect x="1" y="1" width="62" height="62" rx="18" fill="#f5f5f5" />
+  <g fill="none" stroke="#0d0d0d" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 53 23 11" stroke-width="8" />
+    <circle cx="41" cy="37" r="11" stroke-width="6" />
+    <path d="M51 54V27" stroke-width="6" />
+  </g>
+</svg>

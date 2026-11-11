@@ -1,0 +1,12 @@
+.glyph {
+  display: block;
+  flex: none;
+}
+
+.bg {
+  fill: var(--brand-badge-bg);
+}
+
+.fg {
+  stroke: var(--brand-badge-fg);
+}
