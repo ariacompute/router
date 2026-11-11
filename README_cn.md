@@ -1,56 +1,80 @@
+<div align="center">
+<a name="readme-top"></a>
+
 # router
 
-[English](README.md) | [中文](README_cn.md)
+**Aria Compute 推理网关**
 
-Aria Compute 推理网关：OpenAI 兼容 HTTP，三种并列决策器（**semantic** YAML v0.3、**轻量 builtin agent**：进程内固定工具 + 限 turns、**afm-d**：经 aria-engine System One Choice）。共享 providers、硬约束与转发。
+一个 OpenAI 兼容的 HTTP 网关，内置**三种并列决策器**——<br/>
+**semantic**（YAML v0.3 信号 → 决策）、轻量 **builtin agent**<br/>
+（进程内固定工具 + 限 turns）、以及 **afm-d**（经 aria-engine 的 System One Choice）<br/>
+——共享 providers、硬约束与转发。
 
-## 构建 / 测试
+[English](./README.md) · **简体中文** · [文档](./AGENTS.md) · [发布说明](./releasenotes_cn.md)
 
-```bash
-cargo test
-cargo clippy --workspace --all-targets -- -D warnings
-./scripts/coverage.sh           # 100% 行覆盖门禁（llvm-cov）
-./scripts/run-binding-tests.sh
-cargo build --release -p aria-router -p ariacompute-router-ffi
-```
+[![][release-shield]][release-link] [![][rust-shield]][rust-link] [![][license-shield]][license-link] [![][lastcommit-shield]][lastcommit-link]
+<br/>
+[![][routers-shield]][routers-link] [![][sdk-shield]][sdk-link] [![][coverage-shield]][coverage-link] [![][dashboard-shield]][dashboard-link]
+</div>
 
-运维 Dashboard 另有护栏测试与 impeccable 风格审计（在仓库根目录执行）：
+<details>
+<summary><kbd>Table of contents</kbd></summary>
 
-```bash
-npm --prefix dashboard ci
-npm --prefix dashboard run build
-npm --prefix dashboard run test   # 样式 token + 15 路由 × 深浅双主题 jsdom 快照
-./scripts/audit-ui.sh --static    # CSS / index.html 静态规则
-./scripts/audit-ui.sh --dom       # 全部路由 × 双主题（jsdom）
-./scripts/audit-ui.sh --url       # Chrome 页面加载（无浏览器时 skip）
-```
+#### TOC
 
-## 配置 / 运行
+**上手**
 
-路由策略为 YAML v0.3（`--config`）。密钥用 `${VAR}` / `${VAR:-default}` 展开。`entrypoint.router` 必须等于 `recipe.router`。Semantic recipe 禁止 `agent:` / `afm-d:`；agent recipe 禁止 `signals` / `decisions` / `afm-d:`；afm-d recipe 禁止 `routing` / `agent:`。未知顶层键 → `validate` 失败。未实现的 YAML 能力返回 `Unsupported`（禁止静默空实现）。**无**顶层 `extensions`，不做 pi / deepseek-harness 子进程。
+- [✨ 功能](#-功能)
+- [🚀 快速开始](#-快速开始)
+- [🧰 命令行](#-命令行)
+- [🔧 配置](#-配置)
 
-| 块 | 含义 |
-|----|------|
-| `listeners` | 数据面绑定（`address` + `port`；`--bind` 默认值） |
-| `providers` | `defaults.default_model` + 具名模型 / `backend_refs` |
-| `entrypoints` | 虚拟模型名 → `router: semantic\|agent\|afm-d` + `recipe` |
-| `recipes` | Semantic 的 `routing.*`、agent 的 `agent.*`、或 afm-d 的 `afm-d.*`（System One endpoint / 可选 `track` / timeout / fallback） |
-| `global` | 鉴权 / keys / users 路径（可选） |
+**部署与服务**
 
-示例（YAML 内注释为英文）：
+- [🛳 Release 资产](#-release-资产)
+- [🔌 OpenAI API](#-openai-api)
+- [🔐 API 密钥与成本](#-api-密钥与成本)
+- [🌐 Dashboard](#-dashboard)
 
-| 文件 | 用途 |
-|------|------|
-| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | 日常 semantic 黄金路径 — `ariacompute/semantic-auto`；keyword 启发式 → `local/general`；可选 retention；无 ML 权重即可 `validate` + `serve` |
-| [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — 黄金 `ariacompute/semantic-auto` + `ariacompute/semantic-catalog`（learned signal + 未实现 algorithm → chat `Unsupported`，除非 `--features ml`）；演示优先 tiny |
-| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — 三档 `ariamodel-{small,mid,large}`（`tier` + 可换 `provider_model_id`）；**setup `--template semantic` 默认**；需 `GATEWAY_API_KEY` |
-| [`semantic-stateful.yaml`](config/examples/semantic-stateful.yaml) | Retention sticky + `stores.memory` / `semantic_cache` / replay |
-| [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | 日常 agent 黄金路径 — `ariacompute/agent-auto`；进程内 builtin tool-loop（无 `endpoint` → first-eligible）；演示 / CI |
-| [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — 对称 `semantic.yaml`：黄金 `ariacompute/agent-auto` + `ariacompute/agent-catalog`（故意 `Unsupported`）；演示优先 tiny / gateway |
-| [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — 同上三档（`tier` + 可换上游）；**setup `--template agent` 默认**；需 `GATEWAY_API_KEY` |
-| [`afm-d-tiny.yaml`](config/examples/afm-d-tiny.yaml) | 日常 AFM-D 黄金路径 — `ariacompute/afm-d-auto`；无 `endpoint` → first-eligible；演示 / CI |
-| [`afm-d.yaml`](config/examples/afm-d.yaml) | AFM-D catalog — 对称 `agent.yaml`：黄金 `ariacompute/afm-d-auto` + `ariacompute/afm-d-catalog`；演示优先 tiny / gateway |
-| [`afm-d-gateway.yaml`](config/examples/afm-d-gateway.yaml) | AFM-D + Aria Gateway — System One Choice 三档；**setup `--template afm-d`**；需 `GATEWAY_API_KEY` + `DECISION_MODEL_URL` 上的 aria-engine |
+**内部机制**
+
+- [🧭 三种决策器](#-三种决策器)
+- [🔗 ContextHold](#-contexthold)
+- [🧩 SDK 绑定](#-sdk-绑定)
+- [📊 Bench](#-bench)
+- [⚖️ 特性对比](#-特性对比)
+
+**信任与治理**
+
+- [🔏 信任库安全](#-信任库安全)
+- [🔨 开发](#-开发)
+- [📚 文档](#-文档)
+- [📝 许可证](#-许可证)
+- [🤝 工程约定](#-工程约定)
+
+</details>
+
+## ✨ 功能
+
+aria-router 为 OpenAI 兼容网关回答一个问题：*这条请求该由哪个模型回答，又受哪些约束？* 答案绝不是写死的单一目标。入口名映射到三条决策路径之一；硬约束在排名之前剪枝；任何落选路径都回落到失败关闭的决策。
+
+- 🔀 **三种并列决策器** —— `semantic`（信号→决策）、`agent`（进程内 builtin 工具循环）、`afm-d`（System One Choice）。一次请求不会串跑其中多种。
+- 🔒 **排名前先硬约束剪枝** —— location / auth / modality / tools 先剪枝；Compute 只进排名；无合格路径 → fail closed。
+- 🧠 **AFM-D System One Choice** —— 模糊请求打到 `POST {endpoint}/v1/systemone`（aria-engine）；低分保护与失败关闭回落保证决策安全。
+- 🪶 **轻量 builtin agent** —— 进程内固定工具 + 有限 `max_turns`，`submit_route` → 类型化 `RouteDecision`；无 subprocess harness。
+- 🔌 **OpenAI 兼容 HTTP** —— 数据面（`/v1/chat/completions`、`/v1/models`）+ 管理面（health、validate、replay、providers、topology、playground、dashboard）。
+- 🔑 **多租户鉴权与计费** —— API key、OAuth、Users，以及六因子成本视图；实名 provider 模型 bypass recipe，直打后端。
+- 🧩 **原生 C ABI + 八语言 SDK** —— `ariacompute-router-ffi` / `libaria-router_ffi`，含 Rust、Python、Go、TypeScript、React Native、Flutter、Swift、Kotlin 封装。
+- 📊 **可观测与证据** —— 能力感知降级、ContextHold 前缀复用、显式重判边界、离线策略一致性报告。
+- 🖥 **生产级 Dashboard** —— 单色、扁平、可访问的 Vite React SPA（无 Grafana、无 ML wizard）。
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🚀 快速开始
 
 ```bash
 # 写入 ~/.ariacompute/router.yml（semantic-gateway / agent-gateway / afm-d-gateway）
@@ -58,16 +82,9 @@ npm --prefix dashboard run test   # 样式 token + 15 路由 × 深浅双主题 
 # 交互：template → models（base_url、api_key_env 变量名、gateway API key、
 #   三档 provider_model_id；agent 另有 endpoint/model/fallback；
 #   afm-d 另有 System One endpoint/fallback）→ admin → upgrade_url。
-# API key 写入 router.yml 的 backend_refs.api_key；serve 默认加载该文件
-# （无明文 key 时回退 $GATEWAY_API_KEY / --api-key-env）。
-# 逻辑名 ariacompute/ariamodel-{small,mid,large} 固定；只换上游 provider_model_id。
 # CI：--template + --admin-user + --admin-password 跳过 models 提示（用 gateway 默认）。
 aria-router setup
 aria-router setup --status
-# Flags: --template --admin-user --admin-password
-#        --base-url --api-key-env --api-key --model-small --model-mid --model-large
-#        --agent-endpoint --agent-model --agent-fallback
-#        --afm-d-endpoint --afm-d-fallback --upgrade-url
 
 # 从 GitHub/Gitee Releases 更新 CLI + libaria-router_ffi（需先 setup 写 upgrade_url）
 aria-router upgrade
@@ -75,21 +92,23 @@ aria-router upgrade 0.1.0
 
 # 校验（setup 后默认路径，或传 --config）
 aria-router validate
-cargo run -p aria-router -- validate --config config/examples/semantic-tiny.yaml
-cargo run -p aria-router -- validate --config config/examples/semantic.yaml
-cargo run -p aria-router -- validate --config config/examples/semantic-gateway.yaml
-cargo run -p aria-router -- validate --config config/examples/semantic-stateful.yaml
-cargo run -p aria-router -- validate --config config/examples/agent-tiny.yaml
-cargo run -p aria-router -- validate --config config/examples/agent.yaml
-cargo run -p aria-router -- validate --config config/examples/agent-gateway.yaml
-cargo run -p aria-router -- validate --config config/examples/afm-d-tiny.yaml
-cargo run -p aria-router -- validate --config config/examples/afm-d.yaml
-cargo run -p aria-router -- validate --config config/examples/afm-d-gateway.yaml
 
 # 服务 — 数据面来自 YAML listeners（示例均为 127.0.0.1:8899）；
 # 管理面默认 127.0.0.1:8080。setup 后可省略 --config。
-
 # 离线 CI / 演示（无需 GATEWAY_API_KEY）：显式 --config *-tiny.yaml
+cargo run -p aria-router -- serve \
+  --config config/examples/semantic-tiny.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+```
+
+`--bind` 是 **数据面**（`POST /v1/chat/completions`、`GET /v1/models`）。`--mgmt-bind` 是 **管理面**（`/health`、validate、replay、providers、config、topology、playground chat，以及运维 Dashboard）。一次请求不会串跑 semantic、agent、afm-d 中的多种。实名 provider **bypass** recipe，直打该后端。
+
+### 服务示例
+
+```bash
+# 若要让 --mgmt-bind 避开 engine 的 8080，请勿与 aria-engine 同端口。
+
 # 日常 semantic 黄金路径（ariacompute/semantic-auto → local/general）
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
@@ -154,67 +173,110 @@ cargo run -p aria-router -- serve \
   --mgmt-bind 127.0.0.1:8090
 ```
 
-`--bind` 是 **数据面**（`POST /v1/chat/completions`、`GET /v1/models`）。`--mgmt-bind` 是 **管理面**（`/health`、validate、replay、providers、config、topology、playground chat，以及运维 Dashboard）。一次请求不会串跑 semantic、agent、afm-d 中的多种。实名 provider **bypass** recipe，直打该后端。
+<div align="right">
 
-## Dashboard
+[![][back-to-top]](#readme-top)
 
-管理面在存在 `dashboard/dist` 时托管 Vite React SPA，地址为 `http://{mgmt}/`。完成 `aria-router setup` 后先 **Login**（本地用户名/密码）：
+</div>
 
-| 段落标题（与 CLI 同名） | 页面 |
-|------------------------|------|
-| **Local (router Dashboard)** | Login / Register · API 密钥（`sk-aria_…`）· Users（admin） |
-| **OAuth (Aria Compute)** | Account — 已关联用户、`sk-bf-…` 展示/粘贴/OAuth |
-| **Routing** | Config · Topology · Providers · Replay · **Playground**（多轮聊天、SSE、路由 Header；不做 MCP/Claw）· Cost · Cost by Competence · **Model Performance** · **Trust Tiers** |
+## 🧰 命令行
 
-Cost 分 **Local users** 与 **OAuth users**。构建：
+`aria-router` 二进制有四条子命令：
+
+| 命令 | 主要参数 | 用途 |
+|------|----------|------|
+| `setup` | `--template` · `--admin-user` · `--admin-password` · `--base-url` · `--api-key-env` · `--api-key` · `--model-small` · `--model-mid` · `--model-large` · `--agent-endpoint` · `--agent-model` · `--agent-fallback` · `--afm-d-endpoint` · `--afm-d-fallback` · `--upgrade-url` | 写 `~/.ariacompute/router.yml` + `router-cli.yml` |
+| `validate` | `--config` | 校验 YAML 策略（setup 后默认路径） |
+| `serve` | `--config` · `--bind` · `--mgmt-bind` · `--no-dashboard` | 启动数据面 + 管理面 |
+| `upgrade [version]` | — | 从 GitHub/Gitee Releases 拉取 CLI + `libaria-router_ffi`（需 `upgrade_url`） |
+| `--version` | — | 打印版本 |
+
+`setup` 为交互式：template → models（`base_url`、`api_key_env` 变量名、gateway API key、三档 `provider_model_id`；agent 另有 `endpoint`/`model`/`fallback`；afm-d 另有 System One `endpoint`/`fallback`）→ admin → `upgrade_url`。API key 写入 `router.yml` 的 `backend_refs.api_key`；serve 默认加载该文件（无明文 key 时回退 `$GATEWAY_API_KEY` / `--api-key-env`）。逻辑名 `ariacompute/ariamodel-{small,mid,large}` 固定；只换上游 provider_model_id。CI：`--template` + `--admin-user` + `--admin-password` 跳过 models 提示（用 gateway 默认）。
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🔧 配置
+
+路由策略为 YAML v0.3（`--config`）。密钥用 `${VAR}` / `${VAR:-default}` 展开。`entrypoint.router` 必须等于 `recipe.router`。Semantic recipe 禁止 `agent:` / `afm-d:`；agent recipe 禁止 `signals` / `decisions` / `afm-d:`；afm-d recipe 禁止 `routing` / `agent:`。未知顶层键 → `validate` 失败。未实现的 YAML 能力返回 `Unsupported`（禁止静默空实现）。**无**顶层 `extensions`，不做 pi / deepseek-harness 子进程。
+
+| 块 | 含义 |
+|----|------|
+| `listeners` | 数据面绑定（`address` + `port`；`--bind` 默认值） |
+| `providers` | `defaults.default_model` + 具名模型 / `backend_refs` |
+| `entrypoints` | 虚拟模型名 → `router: semantic\|agent\|afm-d` + `recipe` |
+| `recipes` | Semantic 的 `routing.*`、agent 的 `agent.*`、或 afm-d 的 `afm-d.*`（System One endpoint / 可选 `track` / timeout / fallback） |
+| `global` | 鉴权 / keys / users 路径（可选） |
+
+### 示例策略
+
+| 文件 | 用途 |
+|------|------|
+| [`semantic-tiny.yaml`](config/examples/semantic-tiny.yaml) | 日常 semantic 黄金路径 — `ariacompute/semantic-auto`；keyword 启发式 → `local/general`；可选 retention；无 ML 权重即可 `validate` + `serve` |
+| [`semantic.yaml`](config/examples/semantic.yaml) | Semantic catalog — 黄金 `ariacompute/semantic-auto` + `ariacompute/semantic-catalog`（learned signal + 未实现 algorithm → chat `Unsupported`，除非 `--features ml`）；演示优先 tiny |
+| [`semantic-gateway.yaml`](config/examples/semantic-gateway.yaml) | Semantic + Aria Gateway — 三档 `ariamodel-{small,mid,large}`（`tier` + 可换 `provider_model_id`）；**setup `--template semantic` 默认**；需 `GATEWAY_API_KEY` |
+| [`semantic-stateful.yaml`](config/examples/semantic-stateful.yaml) | Retention sticky + `stores.memory` / `semantic_cache` / replay |
+| [`agent-tiny.yaml`](config/examples/agent-tiny.yaml) | 日常 agent 黄金路径 — `ariacompute/agent-auto`；进程内 builtin tool-loop（无 `endpoint` → first-eligible）；演示 / CI |
+| [`agent.yaml`](config/examples/agent.yaml) | Agent catalog — 对称 `semantic.yaml`：黄金 `ariacompute/agent-auto` + `ariacompute/agent-catalog`（故意 `Unsupported`）；演示优先 tiny / gateway |
+| [`agent-gateway.yaml`](config/examples/agent-gateway.yaml) | Agent + Aria Gateway — 同上三档（`tier` + 可换上游）；**setup `--template agent` 默认**；需 `GATEWAY_API_KEY` |
+| [`afm-d-tiny.yaml`](config/examples/afm-d-tiny.yaml) | 日常 AFM-D 黄金路径 — `ariacompute/afm-d-auto`；无 `endpoint` → first-eligible；演示 / CI |
+| [`afm-d.yaml`](config/examples/afm-d.yaml) | AFM-D catalog — 对称 `agent.yaml`：黄金 `ariacompute/afm-d-auto` + `ariacompute/afm-d-catalog`；演示优先 tiny / gateway |
+| [`afm-d-gateway.yaml`](config/examples/afm-d-gateway.yaml) | AFM-D + Aria Gateway — System One Choice 三档；**setup `--template afm-d`**；需 `GATEWAY_API_KEY` + `DECISION_MODEL_URL` 上的 aria-engine |
+
+校验任一示例：
 
 ```bash
-npm --prefix dashboard ci
-npm --prefix dashboard run build
-cargo run -p aria-router -- serve \
-  --config config/examples/semantic-tiny.yaml \
-  --bind 127.0.0.1:8899 \
-  --mgmt-bind 127.0.0.1:8090
-# 打开 http://127.0.0.1:8090/
+cargo run -p aria-router -- validate --config config/examples/semantic-tiny.yaml
+cargo run -p aria-router -- validate --config config/examples/semantic.yaml
+cargo run -p aria-router -- validate --config config/examples/semantic-gateway.yaml
+cargo run -p aria-router -- validate --config config/examples/semantic-stateful.yaml
+cargo run -p aria-router -- validate --config config/examples/agent-tiny.yaml
+cargo run -p aria-router -- validate --config config/examples/agent.yaml
+cargo run -p aria-router -- validate --config config/examples/agent-gateway.yaml
+cargo run -p aria-router -- validate --config config/examples/afm-d-tiny.yaml
+cargo run -p aria-router -- validate --config config/examples/afm-d.yaml
+cargo run -p aria-router -- validate --config config/examples/afm-d-gateway.yaml
 ```
 
-`--no-dashboard` 只提供 JSON API（仍可用 curl 管理 keys/cost）。无 Grafana、ML wizard；默认绑 `127.0.0.1`。
+<div align="right">
 
-**设计契约与 UI 回归审计**：Dashboard 为单色 / 扁平 / 直角 / AA / ≥12px，动效仅 transform/opacity，使用本地字体栈（无 web-font CDN）。设计契约见 [`PRODUCT.md`](PRODUCT.md)。UI 护栏测试：`npm --prefix dashboard run test`。
+[![][back-to-top]](#readme-top)
 
-### 本地渲染检查（重跑）
+</div>
 
-`scripts/audit-ui.sh` 以五种模式运行 impeccable 风格审计：`--static`（CSS + `index.html` 主规则）、`--dom`（15 路由 × 深浅双主题 jsdom 渲染）、`--url`（实时页面 + Chrome + impeccable 二进制）、`--browser`（同 `--url`，但缺浏览器即硬失败）、`--list-rules`（打印规则 id + 页面矩阵）。无法运行的模式记为 `skipped`，绝不伪造成功。
+## 🛳 Release 资产
+
+每次 GitHub Release，[`.github/workflows/release.yml`](.github/workflows/release.yml) 上传与 `aria-router` CLI 并列的平台包：
+
+| 资产 | 内容 |
+|------|------|
+| `aria-router_<ver>_linux_x86_64.tar.gz` | `aria-router` |
+| `aria-router_<ver>_linux_arm64.tar.gz` | `aria-router` |
+| `aria-router_<ver>_macos.tar.gz` | `aria-router` |
+| `aria-router_<ver>_windows_x86_64.zip` | `aria-router.exe` |
+| `libaria-router_ffi_<ver>_<os>.tar.gz` | `libaria-router_ffi.so` / `.dylib` / `aria-router_ffi.dll` |
 
 ```bash
-npm --prefix dashboard ci
-npm --prefix dashboard run build
-npm --prefix dashboard run test
-./scripts/audit-ui.sh --list-rules
-./scripts/audit-ui.sh --static
-./scripts/audit-ui.sh --dom
-# 在有 Chrome 与 impeccable 二进制的机器上：
-IMPECCABLE_BROWSER=/usr/bin/google-chrome ./scripts/audit-ui.sh --url
+# 示例：Linux x86_64
+tar -xzf aria-router_0.1.0_linux_x86_64.tar.gz
+chmod +x aria-router
+./aria-router --version
+
+# 或：aria-router upgrade（setup 后；替换 CLI 并把 FFI 装到 ~/.ariacompute/lib/）
 ```
 
-### API 密钥与成本
+创建 **GitHub Release** — 语言包发布为 **fail-pass**，不阻塞 CLI / FFI 资产。版本号 = tag 去掉前缀 `v`。
 
-1. Dashboard → **API 密钥** → 生成（`sk-aria_…` 只显示一次），或 `POST /v1/router/keys`。
-2. setup 默认写入 `global.require_api_key: true`（chat 与 `PUT /v1/router/providers` 须 Bearer）。可在 YAML 改为 `false` 开放数据面。
-3. 客户端与 `aria-engine` 使用 Bearer `sk-aria_…` 或 `sk-bf-…`（`router_api_key` / `--router-api-key`）。
-4. **Cost** 页 / `GET /v1/router/cost` 展示六因子、`by_local_user` / `by_serve_user` / `by_key`（YAML `pricing`）。
-5. OAuth：Dashboard → Account 配置 `sk-bf-…`（关联 / 粘贴 / 展示）。
+<div align="right">
 
-```bash
-curl -s http://127.0.0.1:8899/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -H 'Authorization: Bearer sk-aria_…' \
-  -d '{"model":"local/general","messages":[{"role":"user","content":"Hi"}],"max_tokens":16}'
-```
+[![][back-to-top]](#readme-top)
 
-硬约束（location / auth / modality / tools）在排名 **之前** 剪枝。Compute 只进排名。无合格路径 → fail closed。
+</div>
 
-## OpenAI API
+## 🔌 OpenAI API
 
 假设数据面 `http://127.0.0.1:8899`、管理面 `http://127.0.0.1:8090`：
 
@@ -284,7 +346,184 @@ curl -s http://127.0.0.1:8090/v1/router/config | jq .
 
 响应头：`x-aria-router-layer`、`x-aria-router-decision`、`x-aria-router-model`，以及 `x-aria-router-redecision`（显式跨请求边界：`new-user-message` / `context-compaction` / `tool-continuation` / `same-turn` / `unknown`）。若设置了 retention emit，还会有：`x-aria-router-retention-keep-current-model`、`x-aria-router-retention-ttl-turns`、`x-aria-router-retention-drop`、`x-aria-router-retention-prefer-prefix`。
 
-## SDK Bindings
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🔐 API 密钥与成本
+
+1. Dashboard → **API 密钥** → 生成（`sk-aria_…` 只显示一次），或 `POST /v1/router/keys`。
+2. setup 默认写入 `global.require_api_key: true`（chat 与 `PUT /v1/router/providers` 须 Bearer）。可在 YAML 改为 `false` 开放数据面。
+3. 客户端与 `aria-engine` 使用 Bearer `sk-aria_…` 或 `sk-bf-…`（`router_api_key` / `--router-api-key`）。
+4. **Cost** 页 / `GET /v1/router/cost` 展示六因子、`by_local_user` / `by_serve_user` / `by_key`（YAML `pricing`）。
+5. OAuth：Dashboard → Account 配置 `sk-bf-…`（关联 / 粘贴 / 展示）。
+
+```bash
+curl -s http://127.0.0.1:8899/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'Authorization: Bearer sk-aria_…' \
+  -d '{"model":"local/general","messages":[{"role":"user","content":"Hi"}],"max_tokens":16}'
+```
+
+硬约束（location / auth / modality / tools）在排名 **之前** 剪枝。Compute 只进排名。无合格路径 → fail closed。
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🌐 Dashboard
+
+管理面在存在 `dashboard/dist` 时托管 Vite React SPA，地址为 `http://{mgmt}/`。完成 `aria-router setup` 后先 **Login**（本地用户名/密码）：
+
+| 段落标题（与 CLI 同名） | 页面 |
+|------------------------|------|
+| **Local (router Dashboard)** | Login / Register · API 密钥（`sk-aria_…`）· Users（admin） |
+| **OAuth (Aria Compute)** | Account — 已关联用户、`sk-bf-…` 展示/粘贴/OAuth |
+| **Routing** | Config · Topology · Providers · Replay · **Playground**（多轮聊天、SSE、路由 Header；不做 MCP/Claw）· Cost · Cost by Competence · **Model Performance** · **Trust Tiers** |
+
+Cost 分 **Local users** 与 **OAuth users**。构建：
+
+```bash
+npm --prefix dashboard ci
+npm --prefix dashboard run build
+cargo run -p aria-router -- serve \
+  --config config/examples/semantic-tiny.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+# 打开 http://127.0.0.1:8090/
+```
+
+`--no-dashboard` 只提供 JSON API（仍可用 curl 管理 keys/cost）。无 Grafana、ML wizard；默认绑 `127.0.0.1`。
+
+**设计契约与 UI 回归审计**：Dashboard 为单色 / 扁平 / 直角 / AA / ≥12px，动效仅 transform/opacity，使用本地字体栈（无 web-font CDN）。设计契约见 [`PRODUCT.md`](PRODUCT.md)。UI 护栏测试：`npm --prefix dashboard run test`。
+
+### 本地渲染检查（重跑）
+
+`scripts/audit-ui.sh` 以五种模式运行 impeccable 风格审计：`--static`（CSS + `index.html` 主规则）、`--dom`（15 路由 × 深浅双主题 jsdom 渲染）、`--url`（实时页面 + Chrome + impeccable 二进制）、`--browser`（同 `--url`，但缺浏览器即硬失败）、`--list-rules`（打印规则 id + 页面矩阵）。无法运行的模式记为 `skipped`，绝不伪造成功。
+
+```bash
+npm --prefix dashboard ci
+npm --prefix dashboard run build
+npm --prefix dashboard run test
+./scripts/audit-ui.sh --list-rules
+./scripts/audit-ui.sh --static
+./scripts/audit-ui.sh --dom
+# 在有 Chrome 与 impeccable 二进制的机器上：
+IMPECCABLE_BROWSER=/usr/bin/google-chrome ./scripts/audit-ui.sh --url
+```
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🧭 三种决策器
+
+每个入口名精确映射到一种决策器；一次请求不会串跑多种。硬约束（location / auth / modality / tools）在排名 **之前** 剪枝，任何通过排名的合格路径都会产出类型化的 `RouteDecision`。无合格路径时，网关失败关闭。
+
+| 决策器 | Recipe 块 | 行为 |
+|--------|-----------|------|
+| `semantic` | `routing.*` | 信号 → 投影 → 布尔决策 → algorithm / looper。keyword 启发式无需 ML 权重；learned signal + 未实现 algorithm 除非 `--features ml` 否则返回 `Unsupported`。 |
+| `agent` | `agent.*` | 进程内 `BuiltinAgent` 工具循环，固定工具 + 有限 `max_turns`；`submit_route` 产出类型化 `RouteDecision`。无 `endpoint` → first-eligible 后端。 |
+| `afm-d` | `afm-d.*` | 合格候选 → System One Choice → `POST {endpoint}/v1/systemone` → 类型化 `RouteDecision`。实名模型 bypass recipe，直打该后端。低分保护 + 失败关闭回落保证决策安全。 |
+
+数据面暴露 `x-aria-router-layer`（`semantic` | `agent` | `afm-d` | `bypass`）、`x-aria-router-decision`、`x-aria-router-model` 与 `x-aria-router-redecision`，使每个重判边界都可观测。完整决策契约见 [AGENTS.md](./AGENTS.md)。
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🔗 ContextHold
+
+同一用户轮次内的 tool / assistant 往返保持已选模型；只在自然边界（用户新消息或上下文压缩）再重新决策。混用便宜模型与主力模型时，KV Cache / 前缀复用仍然划算。
+
+- semantic / agent / afm-d 配方上，**`prefix_reuse` 缺省为 `true`**（显式 `false` 关闭）。同一**显式 session**、同一**用户消息条数**内，复用冻结的 `RouteDecision`。
+- **用户新消息**（turn 计数上升）→ 全新决策。
+- **压缩**（消息列表变短，或 system 提示词 / `tools` 指纹变化）→ 清除该 session 的 DecisionCache 与 sticky，再重新路由。
+- **Sticky TTL**（`stores.memory`）**仅在用户消息条数上升时**递减——不会在每一次工具调用的 HTTP 请求上扣减。同一模型再次 pin **不会**刷新 TTL；换模型才重新记满 TTL。
+- **afm-d / agent sticky**：当 `global.stores.memory.enabled` 与 `prefix_reuse` 均开启时，路由成功后 pin 所选模型；后续用户轮上若仍通过硬约束则短路（跳过 System One / builtin agent），reason 为 `sticky:…`。semantic 仍由 decision 的 `emits.retention.keep_current_model` 在 algorithm 选型之后驱动 sticky。
+- **仅显式 session**：ContextHold 只认 `x-aria-session` 或 body `session`。自动生成的 `req_*` id 仅用于成本记账——不冻结决策、不写 sticky。
+
+请发送显式 session，并带上**累积的对话历史**（或至少让用户消息条数递增），以驱动 turn 键与 TTL。只发最后一条消息的客户端会一直保持 `turn_of == 1`，sticky TTL 不会前进。未提供显式 session 时，路由粘性等价于「每次请求都重新决策」。
+
+### 行为一览
+
+```text
+带显式 session 的请求
+        │
+        ▼
+  已压缩？ ──是──► 清除 DecisionCache + sticky ──► 重新路由
+        │ 否
+        ▼
+  若用户轮计数上升则 tick sticky TTL
+        │
+        ▼
+  同 (session, turn) 命中缓存？ ──是──► 复用冻结模型
+        │ 否
+        ▼
+  afm-d/agent sticky 仍 eligible？ ──是──► 短路
+        │ 否
+        ▼
+  跑 semantic / agent / afm-d → pin（若适用）
+```
+
+### 配置示意
+
+```yaml
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      strategy: priority
+      prefix_reuse: true   # 省略时默认 true
+      # …
+
+  - name: agent-default
+    router: agent
+    agent:
+      prefix_reuse: true
+      # …
+
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      prefix_reuse: true
+      # …
+
+global:
+  stores:
+    memory:
+      enabled: true
+      max_sessions: 4096
+      default_ttl_turns: 2
+```
+
+semantic 跨轮 sticky 仍需要 decision emit，例如：
+
+```yaml
+emits:
+  - kind: retention
+    retention:
+      ttl_turns: 2
+      keep_current_model: true
+```
+
+参见 [`semantic-stateful.yaml`](config/examples/semantic-stateful.yaml) 与各 `*-gateway.yaml` 示例（已写 `prefix_reuse: true`）。
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🧩 SDK 绑定
 
 C ABI（`ariacompute-router-ffi` / `libaria-router_ffi`）加 `bindings/` 薄封装。**不要**与 `libaria_ffi` / `ariacompute-engine` 混用。
 
@@ -549,36 +788,19 @@ fun main() {
     }
 
     // 或连接已运行的 serve（开启 require_api_key 时需 token）：
-    Router().connect("http://127.0.0.1:8899").use { c ->
+    Router().connect("http://127.0.0.1:8090").use { c ->
         c.setup(baseUrl = "http://127.0.0.1:8899", token = "")
     }
 }
 ```
 
-## Release 资产
+<div align="right">
 
-每次 GitHub Release，[`.github/workflows/release.yml`](.github/workflows/release.yml) 上传与 `aria-router` CLI 并列的平台包：
+[![][back-to-top]](#readme-top)
 
-| 资产 | 内容 |
-|------|------|
-| `aria-router_<ver>_linux_x86_64.tar.gz` | `aria-router` |
-| `aria-router_<ver>_linux_arm64.tar.gz` | `aria-router` |
-| `aria-router_<ver>_macos.tar.gz` | `aria-router` |
-| `aria-router_<ver>_windows_x86_64.zip` | `aria-router.exe` |
-| `libaria-router_ffi_<ver>_<os>.tar.gz` | `libaria-router_ffi.so` / `.dylib` / `aria-router_ffi.dll` |
+</div>
 
-```bash
-# 示例：Linux x86_64
-tar -xzf aria-router_0.1.0_linux_x86_64.tar.gz
-chmod +x aria-router
-./aria-router --version
-
-# 或：aria-router upgrade（setup 后；替换 CLI 并把 FFI 装到 ~/.ariacompute/lib/）
-```
-
-创建 **GitHub Release** — 语言包发布为 **fail-pass**，不阻塞 CLI / FFI 资产。版本号 = tag 去掉前缀 `v`。
-
-## Bench
+## 📊 Bench
 
 [`bench/`](bench/) 下 Python ≥3.10 **report-only** 评测（标准库；对齐 `engine/bench`）。**不**拉起 `aria-router`、[vLLM Semantic Router](https://github.com/vllm-project/semantic-router) 或 provider——需自行 serve 后把 `--router` / `--pool` 指到 OpenAI 兼容 URL。报告恒含 `ci_fail: false`。
 
@@ -884,84 +1106,13 @@ python -m bench build-routing-eval
 
 详见 [`bench/corpus/README.md`](bench/corpus/README.md) 与 [`bench/vllm-sr/`](bench/vllm-sr/)（外部 `vllm-sr` 配置与 validate/serve）。
 
-## ContextHold
+<div align="right">
 
-同一用户轮次内的 tool / assistant 往返保持已选模型；只在自然边界（用户新消息或上下文压缩）再重新决策。混用便宜模型与主力模型时，KV Cache / 前缀复用仍然划算。
+[![][back-to-top]](#readme-top)
 
-- semantic / agent / afm-d 配方上，**`prefix_reuse` 缺省为 `true`**（显式 `false` 关闭）。同一**显式 session**、同一**用户消息条数**内，复用冻结的 `RouteDecision`。
-- **用户新消息**（turn 计数上升）→ 全新决策。
-- **压缩**（消息列表变短，或 system 提示词 / `tools` 指纹变化）→ 清除该 session 的 DecisionCache 与 sticky，再重新路由。
-- **Sticky TTL**（`stores.memory`）**仅在用户消息条数上升时**递减——不会在每一次工具调用的 HTTP 请求上扣减。同一模型再次 pin **不会**刷新 TTL；换模型才重新记满 TTL。
-- **afm-d / agent sticky**：当 `global.stores.memory.enabled` 与 `prefix_reuse` 均开启时，路由成功后 pin 所选模型；后续用户轮上若仍通过硬约束则短路（跳过 System One / builtin agent），reason 为 `sticky:…`。semantic 仍由 decision 的 `emits.retention.keep_current_model` 在 algorithm 选型之后驱动 sticky。
-- **仅显式 session**：ContextHold 只认 `x-aria-session` 或 body `session`。自动生成的 `req_*` id 仅用于成本记账——不冻结决策、不写 sticky。
+</div>
 
-请发送显式 session，并带上**累积的对话历史**（或至少让用户消息条数递增），以驱动 turn 键与 TTL。只发最后一条消息的客户端会一直保持 `turn_of == 1`，sticky TTL 不会前进。未提供显式 session 时，路由粘性等价于「每次请求都重新决策」。
-
-### 行为一览
-
-```text
-带显式 session 的请求
-        │
-        ▼
-  已压缩？ ──是──► 清除 DecisionCache + sticky ──► 重新路由
-        │ 否
-        ▼
-  若用户轮计数上升则 tick sticky TTL
-        │
-        ▼
-  同 (session, turn) 命中缓存？ ──是──► 复用冻结模型
-        │ 否
-        ▼
-  afm-d/agent sticky 仍 eligible？ ──是──► 短路
-        │ 否
-        ▼
-  跑 semantic / agent / afm-d → pin（若适用）
-```
-
-### 配置示意
-
-```yaml
-recipes:
-  - name: mom
-    router: semantic
-    routing:
-      strategy: priority
-      prefix_reuse: true   # 省略时默认 true
-      # …
-
-  - name: agent-default
-    router: agent
-    agent:
-      prefix_reuse: true
-      # …
-
-  - name: afm-d-default
-    router: afm-d
-    afm-d:
-      prefix_reuse: true
-      # …
-
-global:
-  stores:
-    memory:
-      enabled: true
-      max_sessions: 4096
-      default_ttl_turns: 2
-```
-
-semantic 跨轮 sticky 仍需要 decision emit，例如：
-
-```yaml
-emits:
-  - kind: retention
-    retention:
-      ttl_turns: 2
-      keep_current_model: true
-```
-
-参见 [`semantic-stateful.yaml`](config/examples/semantic-stateful.yaml) 与各 `*-gateway.yaml` 示例（已写 `prefix_reuse: true`）。
-
-## Router vs HiRoute vs vLLM Semantic Router 特性对比
+## ⚖️ 特性对比
 
 | 维度 | Router (aria-router) | HiRoute | vLLM Semantic Router |
 |------|:---:|:---:|:---:|
@@ -986,14 +1137,125 @@ emits:
 
 **结论**：Router 在保持「硬约束 + fail closed + 三决策器隔离」的前提下，补齐了 HiRoute 的 competence-aware 软降级、结构化执行证据、可插拔决策扩展与长周期委托，并以生产级 OpenAI 兼容网关 + 多租户计费 + C ABI / 八语言 SDK 的组合，覆盖 vLLM SR 之外的服务端全栈需求。
 
-## 许可证
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🔏 信任库安全
+
+2026-10 的 eMudhra（emSign）中间 CA 私钥泄露事件在二进制层面兜底：`aria-router` / `ariacompute-router-ffi` 通过 `reqwest` + `rustls-tls` 进行 provider API 调用与 `bin` 的 `upgrade` GitHub/Gitee Release 下载，其信任库是编译进二进制的 **`webpki-roots`**，已在 `http/Cargo.toml` 钉 `>=1.0.10`（`Cargo.lock` 经 `cargo update -p webpki-roots --precise 1.0.10` 由 1.0.9 → 1.0.10）。1.0.10+ 移除受泄露的 emSign 根。二进制**不**走系统 bundle，故锁升级是决定性修复。
+
+Dashboard 是由 Rust 二进制托管的静态 Vite React SPA，**无运行时信任库**，自身不做出向 TLS。构建期 `npm install` 走主机 `ca-certificates`，但那只是构建环境。脚本 `scripts/check-emudhra.sh` 离线扫描系统或镜像 CA bundle 中已知根/中间证书的 SHA-256 指纹（退出码 `0` 干净、`1` 命中、`2` 无法读取）。
+
+```bash
+scripts/check-emudhra.sh /etc/ssl/certs/ca-certificates.crt
+```
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🔨 开发
+
+| 目标 | 作用 |
+|------|------|
+| `cargo test` | 跑工作区测试 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Lint，拒绝警告 |
+| `./scripts/coverage.sh` | 100% 行覆盖门禁（llvm-cov） |
+| `./scripts/run-binding-tests.sh` | 宿主矩阵（Rust / Python / Go / TS / RN setup） |
+| `cargo build --release -p aria-router -p ariacompute-router-ffi` | 构建 CLI + FFI |
+
+运维 Dashboard 另有护栏测试与 impeccable 风格审计（在仓库根目录执行）：
+
+```bash
+npm --prefix dashboard ci
+npm --prefix dashboard run build
+npm --prefix dashboard run test   # 样式 token + 15 路由 × 深浅双主题 jsdom 快照
+./scripts/audit-ui.sh --static    # CSS / index.html 静态规则
+./scripts/audit-ui.sh --dom       # 全部路由 × 双主题（jsdom）
+./scripts/audit-ui.sh --url       # Chrome 页面加载（无浏览器时 skip）
+```
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 📚 文档
+
+详细的工程上下文位于仓库根目录：
+
+| 文档 | 覆盖内容 |
+|------|----------|
+| [AGENTS.md](./AGENTS.md) | Agent 工程上下文入口与目录索引 |
+| [requirements.md](./requirements.md) | 需求规格（功能边界 / 异常 / 验收，人审后编码） |
+| [task.md](./task.md) | 实施清单 |
+| [PRODUCT.md](./PRODUCT.md) | Dashboard 设计契约（单色 / 扁平 / 直角 / AA / ≥12px） |
+| [releasenotes_cn.md](./releasenotes_cn.md) | 发布说明 |
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 📝 许可证
 
 MIT.
 
-## 工程约定
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🤝 工程约定
 
 本仓库遵循 Harness Engineering：
 
-- [`AGENTS.md`](AGENTS.md)：Agent 工程上下文入口与目录索引
-- [`requirements.md`](requirements.md)：需求规格（功能边界 / 异常 / 验收，人审后编码）
-- [`task.md`](task.md)：实施清单
+- [`AGENTS.md`](./AGENTS.md)：Agent 工程上下文入口与目录索引
+- [`requirements.md`](./requirements.md)：需求规格（功能边界 / 异常 / 验收，人审后编码）
+- [`task.md`](./task.md)：实施清单
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+---
+
+<div align="center">
+
+Copyright © 2026 [ariacompute][org]. <br/>
+This project is [MIT](./LICENSE) licensed.
+
+</div>
+
+<!-- 链接定义 -->
+
+[org]: https://github.com/ariacompute
+[release-shield]: https://img.shields.io/github/v/release/ariacompute/router?style=flat-square&labelColor=black&color=555
+[release-link]: https://github.com/ariacompute/router/releases
+[rust-shield]: https://img.shields.io/github/rust/cargo/v/ariacompute-router?style=flat-square&labelColor=black&color=555
+[rust-link]: ./Cargo.toml
+[license-shield]: https://img.shields.io/github/license/ariacompute/router?style=flat-square&labelColor=black&color=555
+[license-link]: ./LICENSE
+[lastcommit-shield]: https://img.shields.io/github/last-commit/ariacompute/router?style=flat-square&labelColor=black&color=555
+[lastcommit-link]: https://github.com/ariacompute/router/commits
+
+[routers-shield]: https://img.shields.io/badge/routers-3_parallel-555?style=flat-square&labelColor=black
+[routers-link]: #-三种决策器
+[sdk-shield]: https://img.shields.io/badge/SDK-8_languages-555?style=flat-square&labelColor=black
+[sdk-link]: #-sdk-绑定
+[coverage-shield]: https://img.shields.io/badge/coverage-100%25-555?style=flat-square&labelColor=black
+[coverage-link]: ./scripts/coverage.sh
+[dashboard-shield]: https://img.shields.io/badge/dashboard-monochrome_SPA-555?style=flat-square&labelColor=black
+[dashboard-link]: #-dashboard
+
+[back-to-top]: https://img.shields.io/badge/-BACK_TO_TOP-151515?style=flat-square
