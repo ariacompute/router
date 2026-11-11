@@ -29,7 +29,7 @@ case_catalog() {
   local g i d
   while IFS='|' read -r g i d; do
     [[ -z "$g" ]] && continue
-    printf '%s\t%s\t%s\n' "$g" "$i" "$d"
+    printf '%s\t%s\t%s\t%s\n' "$g" "$i" "$(task_for_case "$g" "$i")" "$d"
   done <<'EOF'
 cli|version_flag|--version prints the aria-router version
 cli|version_subcommand|version subcommand prints the version
@@ -127,6 +127,31 @@ local-optional|host_binding_tests|host binding tests are intentionally not run
 local-optional|upgrade_not_executed|upgrade is intentionally not executed
 bench-optional|help_contract|bench routing-accuracy documents --router
 bench-optional|live_accuracy|live accuracy report is generated through the URL
+task-static|static_<id>|one static contract probe per real task.md number
+task-http|services_present|config exposes global.services
+task-http|redecision_config|redecision switches are present and typed
+task-http|redecision_header|redecision header uses a documented boundary
+task-http|redecision_fail_closed|unknown same-turn history fails closed
+task-http|trust_thresholds|trust exposes evidence gates
+task-http|trust_suggest_insufficient|insufficient evidence yields no draft
+task-http|trust_publish_confirm_required|publish requires explicit confirm
+task-http|trust_estimate_no_change|estimate reroute does not change online routing
+task-http|model_perf_empty_state|empty state is not reported as zero
+task-http|model_perf_route|model-performance SPA route is served
+task-http|evidence_replay_fields|replay records carry execution evidence
+task-http|evidence_replay_disabled|replay disabled keeps records empty
+task-http|quota_fields|quota exposes reservations and settlement errors
+task-http|quota_default_off|soft quota is off by default
+task-http|quota_key_spend_fields|key spend policy exposes limit/group/period
+task-http|quota_exhaust_429|429 requires an isolated fixture instance
+task-fixtures|three_question_afmd|afm-d three-question template routes
+task-fixtures|protection_state|low-score protection trigger and release
+task-fixtures|evidence_scene|production evidence fields in replay
+task-fixtures|failover_candidates|backend candidate chain switches
+task-offline|policy_consistency_help|policy-consistency documents --records
+task-offline|policy_consistency_report|offline recompute report is generated
+task-offline|audit_ui_list_rules|UI audit rule set is enumerable
+task-offline|audit_ui_static|static UI audit has zero primary findings
 EOF
 }
 
@@ -882,4 +907,268 @@ run_group_bench_optional() {
       record bench-optional live_accuracy PASS "report schema" "scored=$scored" "accuracy $(jq -r '.summary.overall_accuracy' "$report")"
     fi
   fi
+}
+
+task_http_json() {
+  local id="$1" file="$2" filter="$3" note="$4"
+  if jq -e "$filter" "$file" >/dev/null 2>&1; then
+    record task-http "$id" PASS "json contract" "ok" "$note"
+  else
+    record task-http "$id" FAIL "json contract" "mismatch" "$note"
+  fi
+}
+
+run_group_task_static() {
+  local i id target keyword label
+  for i in "${!TASK_IDS[@]}"; do
+    id="${TASK_IDS[i]}"
+    target="${TASK_TARGET[i]}"
+    keyword="${TASK_KEYWORD[i]}"
+    label="static_$id"
+    set_task "$id" static
+    if [[ -z "$target" || "$target" == "-" ]]; then
+      skip_case task-static "$label" "no static contract target; functional coverage lives in other groups"
+    elif [[ ! -f "$ROOT/$target" ]]; then
+      record task-static "$label" FAIL "static target present" "missing" "$target"
+    elif [[ -z "$keyword" || "$keyword" == "-" ]] \
+         || grep -Fq -- "$keyword" "$ROOT/$target" 2>/dev/null; then
+      record task-static "$label" PASS "static target present" "ok" "$target"
+    else
+      record task-static "$label" FAIL "static keyword present" "missing" "$target lacks keyword"
+    fi
+    clear_task
+  done
+}
+
+run_group_task_http() {
+  local srv body rid kid min_ev ev rd out
+  clear_task
+  http_req GET "$MGMT_URL/v1/router/config" - "${SESSION_ARGS[@]}"
+  if [[ "$LAST_STATUS" != 200 ]] || ! jq -e . "$LAST_BODY" >/dev/null 2>&1; then
+    set_task T90 http
+    skip_case task-http services_present "GET /v1/router/config unavailable (HTTP $LAST_STATUS)"
+    skip_case task-http redecision_config "config unavailable"
+    skip_case task-http redecision_header "config unavailable"
+    skip_case task-http redecision_fail_closed "config unavailable"
+    set_task T93 http
+    skip_case task-http trust_thresholds "config unavailable"
+    skip_case task-http trust_suggest_insufficient "config unavailable"
+    skip_case task-http trust_publish_confirm_required "config unavailable"
+    skip_case task-http trust_estimate_no_change "config unavailable"
+    set_task T94 http
+    skip_case task-http model_perf_empty_state "config unavailable"
+    skip_case task-http model_perf_route "config unavailable"
+    set_task T95 http
+    skip_case task-http evidence_replay_fields "config unavailable"
+    skip_case task-http evidence_replay_disabled "config unavailable"
+    set_task T96 http
+    skip_case task-http quota_fields "config unavailable"
+    skip_case task-http quota_default_off "config unavailable"
+    skip_case task-http quota_key_spend_fields "config unavailable"
+    skip_case task-http quota_exhaust_429 "config unavailable"
+    clear_task
+    return 0
+  fi
+  srv="$WORK_DIR/services.json"
+  cp "$LAST_BODY" "$srv"
+
+  set_task T90 http
+  task_http_json services_present "$srv" \
+    '(.document.global.services|type)=="object"' "global.services present"
+  if jq -e '.document.global.services.redecision|type=="object"' "$srv" >/dev/null 2>&1; then
+    task_http_json redecision_config "$srv" \
+      '((.document.global.services.redecision.enabled|type)=="boolean") and ((.document.global.services.redecision.emit_header|type)=="boolean")' \
+      "redecision enabled/emit_header switches"
+  else
+    skip_case task-http redecision_config "redecision config not present on this instance"
+  fi
+  body="$(chat_body "$ENTRY_SEMANTIC" "please explain rust" '{"max_tokens":1}')"
+  if jq -e '.document.global.services.redecision.enabled == true' "$srv" >/dev/null 2>&1; then
+    http_req POST "$DATA_URL/v1/chat/completions" "$body" "${DATA_KEY_ARGS[@]}" \
+      -H "x-aria-session: $TEST_PREFIX"
+    if [[ "$LAST_STATUS" == 200 ]]; then
+      rd="$(header_value x-aria-router-redecision "$LAST_HEADERS")"
+      case "$rd" in
+        new-user-message|context-compaction|tool-continuation|same-turn|unknown|disabled)
+          record task-http redecision_header PASS "documented boundary" "$rd" "redecision header" ;;
+        "") skip_case task-http redecision_header "header not emitted (emit_header off or boundary disabled)" ;;
+        *) record task-http redecision_header FAIL "documented boundary" "$rd" "unknown boundary value" ;;
+      esac
+    elif upstream_unavailable "$LAST_STATUS"; then
+      skip_case task-http redecision_header "upstream unavailable (HTTP $LAST_STATUS)"
+    else
+      skip_case task-http redecision_header "chat returned HTTP $LAST_STATUS"
+    fi
+  else
+    skip_case task-http redecision_header "redecision disabled on this instance"
+  fi
+  skip_case task-http redecision_fail_closed "needs controlled multi-turn history; use --with-fixtures"
+
+  set_task T93 http
+  http_req GET "$MGMT_URL/v1/router/trust" - "${SESSION_ARGS[@]}"
+  cp "$LAST_BODY" "$WORK_DIR/trust-status.json"
+  task_http_json trust_thresholds "$WORK_DIR/trust-status.json" \
+    '((.thresholds|type)=="object") and (.online_config_unchanged==true) and (has("evidence_count"))' \
+    "trust evidence gates"
+  min_ev="$(jq -r '.thresholds.min_evidence // 0' "$WORK_DIR/trust-status.json" 2>/dev/null)"
+  ev="$(jq -r '.evidence_count // 0' "$WORK_DIR/trust-status.json" 2>/dev/null)"
+  [[ "$min_ev" =~ ^[0-9]+$ ]] || min_ev=0
+  [[ "$ev" =~ ^[0-9]+$ ]] || ev=0
+  http_req POST "$MGMT_URL/v1/router/trust/suggest" - "${SESSION_ARGS[@]}"
+  cp "$LAST_BODY" "$WORK_DIR/trust-suggest.json"
+  if [[ "$LAST_STATUS" == 200 ]]; then
+    if (( ev < min_ev )); then
+      task_http_json trust_suggest_insufficient "$WORK_DIR/trust-suggest.json" \
+        '(.draft == null) and (.online_routing_unchanged==true)' "insufficient evidence yields no draft"
+    else
+      skip_case task-http trust_suggest_insufficient "evidence_count=$ev >= min_evidence=$min_ev"
+    fi
+  else
+    skip_case task-http trust_suggest_insufficient "trust/suggest returned HTTP $LAST_STATUS"
+  fi
+  body="$(jq -nc --arg d "e2e-nonexistent-$TEST_PREFIX" '{draft_id:$d,confirm:false}')"
+  http_req POST "$MGMT_URL/v1/router/trust/publish" "$body" "${SESSION_ARGS[@]}"
+  check task-http trust_publish_confirm_required 400 'has("error")'
+  http_req GET "$MGMT_URL/v1/router/replay?n=1" - "${SESSION_ARGS[@]}"
+  rid="$(jq -r '.records[0].id // empty' "$LAST_BODY" 2>/dev/null)"
+  if [[ -n "$rid" ]]; then
+    http_req POST "$MGMT_URL/v1/router/replay/$rid/reroute?estimate=true" -
+    check task-http trust_estimate_no_change 200 \
+      '(.estimate==true) and (.online_routing_unchanged==true)'
+  else
+    skip_case task-http trust_estimate_no_change "no replay records on this instance"
+  fi
+
+  set_task T94 http
+  http_req GET "$MGMT_URL/v1/router/cost/model-performance" - "${SESSION_ARGS[@]}"
+  cp "$LAST_BODY" "$WORK_DIR/model-perf.json"
+  task_http_json model_perf_empty_state "$WORK_DIR/model-perf.json" \
+    '((.has_evidence|type)=="boolean") and ((.by_model|type)=="array") and ((.by_tier|type)=="array") and (if .has_evidence == false then ((.by_model|length)==0) and ((.by_tier|length)==0) and ((.estimate_note|type)=="string") else true end)' \
+    "empty state is not reported as zero"
+  http_req GET "$MGMT_URL/model-performance" -
+  if [[ "$LAST_STATUS" == 200 ]]; then
+    check task-http model_perf_route 200 - 'body:<div id="root">'
+  else
+    skip_case task-http model_perf_route "SPA route returned HTTP $LAST_STATUS (--no-dashboard?)"
+  fi
+
+  set_task T95 http
+  http_req GET "$MGMT_URL/v1/router/replay" - "${SESSION_ARGS[@]}"
+  cp "$LAST_BODY" "$WORK_DIR/replay-evidence.json"
+  if jq -e '.records|any(.[]; has("task_category") and has("stage_competence") and has("accepted_output") and has("tool_outcomes"))' \
+      "$WORK_DIR/replay-evidence.json" >/dev/null 2>&1; then
+    task_http_json evidence_replay_fields "$WORK_DIR/replay-evidence.json" \
+      '(.records|any(.[]; has("task_category") and has("stage_competence") and has("accepted_output") and has("tool_outcomes")))' \
+      "four execution evidence fields"
+  elif jq -e '.records|length > 0' "$WORK_DIR/replay-evidence.json" >/dev/null 2>&1; then
+    skip_case task-http evidence_replay_fields \
+      "no production execution evidence recorded yet; use --with-fixtures to trigger a scored turn"
+  else
+    skip_case task-http evidence_replay_fields "no replay records on this instance yet"
+  fi
+  if jq -e '.document.global.services.router_replay.enabled == false' "$srv" >/dev/null 2>&1; then
+    task_http_json evidence_replay_disabled "$WORK_DIR/replay-evidence.json" \
+      '(.records|length)==0' "replay disabled keeps records empty"
+  else
+    skip_case task-http evidence_replay_disabled "router_replay enabled on this instance"
+  fi
+
+  set_task T96 http
+  http_req GET "$MGMT_URL/v1/router/quota" - "${SESSION_ARGS[@]}"
+  cp "$LAST_BODY" "$WORK_DIR/quota.json"
+  task_http_json quota_fields "$WORK_DIR/quota.json" \
+    '((.enabled|type)=="boolean") and ((.pending_reservations|type)=="number") and ((.settlement_errors|type)=="array")' \
+    "quota reservation and settlement fields"
+  if jq -e '.document.global.services.quota.enabled == false' "$srv" >/dev/null 2>&1; then
+    task_http_json quota_default_off "$WORK_DIR/quota.json" '(.enabled==false)' "soft quota off by default"
+  else
+    skip_case task-http quota_default_off "quota enabled on this instance"
+  fi
+  kid="$E2E_CREATED_KEY_ID"
+  if [[ -z "$kid" ]]; then
+    http_req GET "$MGMT_URL/v1/router/keys" - "${SESSION_ARGS[@]}"
+    kid="$(jq -r '.keys[0].id // empty' "$LAST_BODY" 2>/dev/null)"
+  fi
+  if [[ -n "$kid" ]]; then
+    http_req GET "$MGMT_URL/v1/router/keys/$kid/spend" - "${SESSION_ARGS[@]}"
+    check task-http quota_key_spend_fields 200 \
+      '((.key_id|type)=="string") and (has("limit_usd")) and (has("group")) and (has("period"))'
+  else
+    skip_case task-http quota_key_spend_fields "no key available on this instance"
+  fi
+  skip_case task-http quota_exhaust_429 "would exhaust a real key; only safe on isolated --with-fixtures instances"
+  clear_task
+}
+
+run_group_task_offline() {
+  local out rc records report md
+  clear_task
+  set_task T98 offline
+  if ! command -v python3 >/dev/null 2>&1; then
+    skip_case task-offline policy_consistency_help "python3 not available"
+    skip_case task-offline policy_consistency_report "python3 not available"
+  else
+    rc=0
+    out="$(cd "$ROOT" && python3 -m bench policy-consistency --help 2>&1)" || rc=$?
+    if (( rc == 0 )) && printf '%s' "$out" | grep -q -- '--records'; then
+      record task-offline policy_consistency_help PASS "documents --records" "rc=0" "policy-consistency --help"
+    else
+      record task-offline policy_consistency_help FAIL "documents --records" "rc=$rc" "unexpected help output"
+    fi
+    records="$WORK_DIR/consistency-records.json"
+    http_req GET "$MGMT_URL/v1/router/replay" - "${SESSION_ARGS[@]}"
+    if [[ "$LAST_STATUS" == 200 ]] && jq -e 'has("records")' "$LAST_BODY" >/dev/null 2>&1; then
+      cp "$LAST_BODY" "$records"
+    else
+      jq -n '{records:[{id:"e2e-consistency-1",entrypoint:"ariacompute/semantic-auto",task_category:"general",stage_competence:"small",decision:{model:"glm-5.3-flash"}}]}' > "$records"
+    fi
+    report="$WORK_DIR/consistency.json"
+    md="$WORK_DIR/consistency.md"
+    rc=0
+    out="$(cd "$ROOT" && python3 -m bench policy-consistency --records "$records" \
+      --report "$report" --report-md "$md" 2>&1)" || rc=$?
+    if (( rc != 0 )); then
+      record task-offline policy_consistency_report FAIL "bench exits 0" "rc=$rc" "offline recompute failed"
+    elif [[ ! -f "$report" ]]; then
+      record task-offline policy_consistency_report FAIL "report generated" "missing" "no consistency report"
+    elif ! jq -e 'has("mode") and (has("summary") or has("policies"))' "$report" >/dev/null 2>&1; then
+      record task-offline policy_consistency_report FAIL "report schema" "mismatch" "unexpected consistency report"
+    else
+      record task-offline policy_consistency_report PASS "report schema" "generated" "offline recompute completed"
+    fi
+  fi
+
+  set_task T99 offline
+  AUDIT_TMP_DIR="e2e-audit-$$"
+  if ! command -v python3 >/dev/null 2>&1; then
+    skip_case task-offline audit_ui_list_rules "python3 not available"
+  else
+    rc=0
+    out="$(cd "$ROOT" && AUDIT_OUT_DIR="$AUDIT_TMP_DIR" ./scripts/audit-ui.sh --list-rules 2>&1)" || rc=$?
+    if (( rc == 0 )) && printf '%s' "$out" | grep -Eq 'primary[[:space:]]+color/aa-contrast'; then
+      record task-offline audit_ui_list_rules PASS "rule set enumerable" "rc=0" "primary rules listed"
+    else
+      record task-offline audit_ui_list_rules FAIL "rule set enumerable" "rc=$rc" "unexpected rule listing"
+    fi
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    skip_case task-offline audit_ui_static \
+      "node runtime unavailable; vitest is a node script so --static cannot run (skipped, not a pass)"
+  elif [[ ! -x "$ROOT/dashboard/node_modules/.bin/vitest" ]] && ! command -v vitest >/dev/null 2>&1; then
+    skip_case task-offline audit_ui_static "vitest unavailable; --static would exit 2 (skipped is not a pass)"
+  else
+    rc=0
+    out="$(cd "$ROOT" && AUDIT_OUT_DIR="$AUDIT_TMP_DIR" ./scripts/audit-ui.sh --static 2>&1)" || rc=$?
+    if (( rc == 0 )) && [[ -f "$ROOT/$AUDIT_TMP_DIR/static-status.json" ]] \
+       && jq -e '.status=="passed"' "$ROOT/$AUDIT_TMP_DIR/static-status.json" >/dev/null 2>&1; then
+      record task-offline audit_ui_static PASS "zero primary findings" "passed" "static UI audit"
+    elif printf '%s' "$out" | grep -Eqi \
+         'vitest not installed|module_not_found|command not found|/usr/bin/env.*node|node.*no such file|node.*not found'; then
+      skip_case task-offline audit_ui_static \
+        "static audit toolchain could not start in this environment (skipped, not a pass)"
+    else
+      record task-offline audit_ui_static FAIL "zero primary findings" "rc=$rc" "static audit reported findings"
+    fi
+  fi
+  clear_task
 }

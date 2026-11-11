@@ -202,7 +202,7 @@ cargo run -p aria-router -- serve \
 
 ## 🧪 用户视角 E2E 测试
 
-[`scripts/run-user-e2e.sh`](scripts/run-user-e2e.sh) 是一套黑盒测试，从**用户视角**验证一个**已运行**的 router：CLI 只读契约、注册登录、API 密钥生命周期、OpenAI 兼容对话（JSON + SSE + 路由响应头）、三种决策器、全部管理面端点与 Dashboard。它不会编译、安装、启动、停止或升级 router 进程——请指向已在数据面与管理面同时提供服务的实例。
+[`scripts/run-user-e2e.sh`](scripts/run-user-e2e.sh) 是一套从**用户视角**验证 router 的黑盒测试，并把每条用例映射到 `task.md` 的任务编号。**默认**只探测一个**已运行**的实例（数据面 + 管理面），不会对该实例执行编译、安装、启动、停止或升级。两个可选模式提供隔离的额外覆盖：`--with-fixtures` 用临时 YAML fixture 启动短生命周期的**本地**实例（仅使用现成二进制，独立 `ARIA_COMPUTE_HOME` 与回环端口，退出时停止），`--with-local` 执行静态 / bench / UI 审计等离线命令。两个模式都不会触碰默认实例。
 
 ```bash
 # 默认数据面 :8899 / 管理面 :8090
@@ -216,15 +216,18 @@ cargo run -p aria-router -- serve \
 # 对生产实例安全：跳过所有写请求
 ./scripts/run-user-e2e.sh --read-only
 
-# 离线自检与 CI 常用开关
+# 任务编号覆盖（含隔离 fixture 场景）
 ./scripts/run-user-e2e.sh --list
 ./scripts/run-user-e2e.sh --self-test
-./scripts/run-user-e2e.sh --with-local --strict-skip
+./scripts/run-user-e2e.sh --with-local --with-fixtures
+./scripts/run-user-e2e.sh --task-focus T90,T91,T92 --with-fixtures
 ```
 
-用例组：`cli`、`auth`、`keys`、`data`、`decisioners`、`mgmt-read`、`mgmt-write`、`dashboard`、`local-optional`、`bench-optional`（后两组需 `--with-local`）。用 `--group` / `--skip` 选择，`--help` 列出全部参数与环境变量。每条用例结果为 `PASS` / `FAIL` / `SKIP`；文本汇总与机器可读报告写入 `out/user-e2e-report.txt` 与 `out/user-e2e-report.json`（可用 `--out-dir` 覆盖）。退出码：`0` 已执行用例全部通过、`1` 存在失败（或 `--strict-skip` 下有跳过）、`2` 用法/环境错误（如服务不可达）。
+用例组：`cli`、`auth`、`keys`、`data`、`decisioners`、`mgmt-read`、`mgmt-write`、`dashboard`、`task-static`、`task-http`、`local-optional`、`bench-optional`、`task-fixtures`（需 `--with-fixtures`）、`task-offline`（需 `--with-local`）。`task-static` 为 `task.md` 中每个真实 T 编号做一次只读静态契约探测（见 `scripts/user-e2e-task-map.tsv`；T30 / T60–T80 缺口与重复的 T18 不虚构）。`task-http` 在运行实例上覆盖 T90/T93/T94/T95/T96 端点；fixture 组主动触发 T91 三问模板、T92 低分保护、T95 执行证据与 T97 backend failover；`task-offline` 复算 T98 策略一致性并执行 T99 UI 审计规则/静态检查。
 
-写用例使用单次运行的随机前缀，并在退出时撤销测试密钥；`--read-only` 会跳过它们。`PUT /v1/router/config` 会原样重写 `router.yml`，真实 `upgrade` 会替换 CLI，因此两者**永不执行**，只校验其拒绝/帮助契约。Provider upsert（无删除端点）、trust publish、serve account sync 等不可逆写需显式 `--allow-mutating`。上游故障（502/504）记为 `SKIP` 而非 router 缺陷；token 与密钥明文不会写入 stdout 或报告。
+`--list` 输出 `GROUP / CASE / TASK / DESCRIPTION`。每条结果为 `PASS` / `FAIL` / `SKIP`，并带 `feature`（T 编号）与 `kind`（`http` / `static` / `fixture` / `offline`）。`out/user-e2e-report.json` 保留原有字段，并新增 `modes`、`coverage`（按编号的 PASS/FAIL/SKIP/UNCOVERED 矩阵；`kind` 为声明类型，`kinds` 为本次实际执行的验证类型；文本报告中 T90–T99 优先展示）与带标签的 `cases`。`--task-focus` 只接受映射表中存在的编号，`T30` 等缺口编号会以退出码 2 拒绝。退出码：`0` 已执行用例全部通过、`1` 存在失败（或 `--strict-skip` 下有跳过）、`2` 用法/环境错误（如服务不可达）。
+
+默认实例上的写用例使用单次运行的随机前缀，并在退出时撤销测试密钥；`--read-only` 会跳过它们。`PUT /v1/router/config` 会原样重写 `router.yml`，真实 `upgrade` 会替换 CLI，因此默认实例上两者**永不执行**，只校验其拒绝/帮助契约。Provider upsert、trust publish、serve account sync 等不可逆写需显式 `--allow-mutating`。fixture 实例彼此隔离，因此其场景可自由启用 `global.services.*`、`afm-d.question_template` 与 `routing.competence.protection`。上游故障（502/504）记为 `SKIP` 而非 router 缺陷；token 与密钥明文不会写入 stdout 或报告。
 
 <div align="right">
 

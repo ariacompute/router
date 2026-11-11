@@ -202,7 +202,7 @@ The `aria-router` binary has four subcommands:
 
 ## 🧪 User-facing E2E checks
 
-[`scripts/run-user-e2e.sh`](scripts/run-user-e2e.sh) is a black-box suite that exercises a **running** router from a user's point of view: CLI read-only contracts, auth/login, API key lifecycle, OpenAI-compatible chat (JSON + SSE + route headers), all three decisioners, every management endpoint, and the Dashboard. It never builds, installs, starts, stops or upgrades a router process — point it at an instance that is already serving both planes.
+[`scripts/run-user-e2e.sh`](scripts/run-user-e2e.sh) is a black-box suite that exercises aria-router from a user's point of view and maps every case to a `task.md` task number. **By default** it only probes an already-running instance (data + management planes); it never builds, installs, starts, stops or upgrades that instance. Two opt-in modes add isolated coverage: `--with-fixtures` starts short-lived **local** instances from temporary YAML fixtures (prebuilt binary only, private `ARIA_COMPUTE_HOME` + loopback ports, stopped on exit), and `--with-local` runs offline static / bench / UI-audit commands. Neither mode touches the default instance.
 
 ```bash
 # Default data :8899 / management :8090
@@ -216,15 +216,18 @@ The `aria-router` binary has four subcommands:
 # Safe against a production instance: skip all mutating requests
 ./scripts/run-user-e2e.sh --read-only
 
-# Offline helper verification and CI-friendly switches
+# Task-number coverage, including isolated fixture scenarios
 ./scripts/run-user-e2e.sh --list
 ./scripts/run-user-e2e.sh --self-test
-./scripts/run-user-e2e.sh --with-local --strict-skip
+./scripts/run-user-e2e.sh --with-local --with-fixtures
+./scripts/run-user-e2e.sh --task-focus T90,T91,T92 --with-fixtures
 ```
 
-Case groups: `cli`, `auth`, `keys`, `data`, `decisioners`, `mgmt-read`, `mgmt-write`, `dashboard`, `local-optional`, `bench-optional` (the last two need `--with-local`). Select with `--group` / `--skip`; `--help` lists all flags and environment variables. Each case is `PASS`, `FAIL` or `SKIP`; a text summary and a machine-readable report are written to `out/user-e2e-report.txt` and `out/user-e2e-report.json` (override with `--out-dir`). Exit codes: `0` all executed cases passed, `1` at least one failure (or skipped cases with `--strict-skip`), `2` usage/environment error such as an unreachable service.
+Case groups: `cli`, `auth`, `keys`, `data`, `decisioners`, `mgmt-read`, `mgmt-write`, `dashboard`, `task-static`, `task-http`, `local-optional`, `bench-optional`, `task-fixtures` (needs `--with-fixtures`), `task-offline` (needs `--with-local`). `task-static` performs a read-only static contract probe for every real T-number in `task.md` (see `scripts/user-e2e-task-map.tsv`; the T30 / T60–T80 gaps and the duplicate T18 are not invented). `task-http` covers T90/T93/T94/T95/T96 endpoints on the running instance; the fixture group actively triggers the T91 three-question template, T92 low-score protection, T95 execution evidence and T97 backend failover; `task-offline` recomputes T98 policy consistency and runs the T99 UI-audit rule/static checks.
 
-Mutating cases use a per-run random prefix and revoke test keys on exit; `--read-only` skips them. `PUT /v1/router/config` writes `router.yml` verbatim and a real `upgrade` replaces the CLI, so both are never executed — only their rejecting/help contracts are checked. Provider upsert (no delete endpoint), trust publish, serve account sync and other irreversible writes require explicit `--allow-mutating`. Upstream failures (502/504) are reported as `SKIP` rather than router defects, and tokens/key secrets are redacted from stdout and reports.
+`--list` prints `GROUP / CASE / TASK / DESCRIPTION`. Each result is `PASS`, `FAIL` or `SKIP` and carries a `feature` (T-number) plus a `kind` (`http` / `static` / `fixture` / `offline`). `out/user-e2e-report.json` keeps the original fields and adds `modes`, `coverage` (a per-number PASS/FAIL/SKIP/UNCOVERED matrix with `kind` = declared type and `kinds` = verification types actually executed; T90–T99 listed first in the text report) and the tagged `cases`. `--task-focus` only accepts numbers present in the map; unmapped gaps such as `T30` are rejected with exit 2. Exit codes: `0` all executed cases passed, `1` at least one failure (or skipped cases with `--strict-skip`), `2` usage/environment error such as an unreachable service.
+
+Mutating cases on the default instance use a per-run random prefix and revoke test keys on exit; `--read-only` skips them. `PUT /v1/router/config` writes `router.yml` verbatim and a real `upgrade` replaces the CLI, so both are never executed on the default instance — only their rejecting/help contracts are checked. Provider upsert, trust publish, serve account sync and other irreversible writes need explicit `--allow-mutating`. Fixture instances are isolated, so their scenarios can freely enable `global.services.*`, `afm-d.question_template` and `routing.competence.protection`. Upstream failures (502/504) are `SKIP`, not router defects; tokens/key secrets are redacted from stdout and reports.
 
 <div align="right">
 

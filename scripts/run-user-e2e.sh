@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# User-facing black-box E2E checks for a running aria-router instance.
+# User-facing black-box E2E checks for aria-router, mapped to task.md T-numbers.
 #
-# Prerequisites:
-#   - aria-router already serving on both planes (data + management). This script
-#     NEVER builds, installs, starts, stops or upgrades a router process.
-#   - curl, jq and standard coreutils. python3 is only needed by bench-optional.
+# Prerequisites (default mode):
+#   - aria-router already serving on both planes (data + management). The
+#     default mode NEVER builds, installs, starts, stops or upgrades a process.
+#   - curl, jq and standard coreutils. python3 only for optional offline groups.
+#
+# Modes:
+#   default          probe an already-running instance through its URLs
+#   --with-fixtures  additionally start isolated LOCAL fixture instances from
+#                    tiny YAML examples (needs a prebuilt aria-router binary;
+#                    never compiles, downloads or touches the default instance)
+#   --with-local     additionally run offline contract / bench / UI-audit cmds
 #
 # Usage:
 #   ./scripts/run-user-e2e.sh [options]
@@ -13,7 +20,8 @@
 #   ./scripts/run-user-e2e.sh --list
 #   ./scripts/run-user-e2e.sh --self-test
 #   ./scripts/run-user-e2e.sh --read-only --group cli,data,decisioners
-#   ./scripts/run-user-e2e.sh --with-local --strict-skip
+#   ./scripts/run-user-e2e.sh --with-local --with-fixtures --strict-skip
+#   ./scripts/run-user-e2e.sh --task-focus T90,T91,T92 --with-fixtures
 #
 # Options:
 #   --data-url URL         OpenAI-compatible data plane (default 127.0.0.1:8899)
@@ -34,9 +42,11 @@
 #   --read-only            skip all mutating requests (negative cases still run)
 #   --allow-mutating       also run irreversible writes (config reload,
 #                          provider upsert, trust publish, serve account sync)
-#   --with-local           enable local-optional / bench-optional groups
+#   --with-local           enable local-optional / bench-optional / task-offline
+#   --with-fixtures        enable task-fixtures (isolated local instances)
+#   --task-focus LIST      comma-separated T-numbers; only run mapped groups
 #   --strict-skip          exit 1 when any case is skipped
-#   --list                 list the case catalog and exit
+#   --list                 list the case catalog (group / case / task / notes)
 #   --self-test            verify the assertion helpers offline and exit
 #   -h, --help             show this help
 #
@@ -60,6 +70,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CASES_LIB="$ROOT/scripts/user-e2e-cases.sh"
+FIXTURES_LIB="$ROOT/scripts/user-e2e-fixtures.sh"
+TASK_MAP_FILE="$ROOT/scripts/user-e2e-task-map.tsv"
 
 DATA_URL="${ROUTER_URL:-http://127.0.0.1:8899}"
 MGMT_URL="${MGMT_URL:-http://127.0.0.1:8090}"
@@ -80,13 +92,17 @@ BYPASS_MODEL="${BYPASS_MODEL:-local/general}"
 READ_ONLY=0
 ALLOW_MUTATING=0
 WITH_LOCAL=0
+WITH_FIXTURES=0
 STRICT_SKIP=0
 LIST=0
 SELF_TEST=0
 GROUP_FILTER=""
 SKIP_FILTER=""
+TASK_FOCUS=""
 
-ALL_GROUPS=(cli auth keys data decisioners mgmt-read mgmt-write dashboard local-optional bench-optional)
+ALL_GROUPS=(cli auth keys data decisioners mgmt-read mgmt-write dashboard \
+            task-static task-http local-optional bench-optional \
+            task-fixtures task-offline)
 
 PASS=0
 FAIL=0
@@ -107,6 +123,17 @@ SESSION_ARGS=(-H "X-Aria-E2E: 1")
 DATA_KEY_ARGS=(-H "X-Aria-E2E: 1")
 CLEANUP_KIND=()
 CLEANUP_ARG=()
+E2E_TASK_ID=""
+E2E_TASK_KIND=""
+AUDIT_TMP_DIR=""
+T9X_PATTERN='^T9[0-9]$'
+TASK_IDS=()
+TASK_STAGE=()
+TASK_KIND=()
+TASK_GROUP=()
+TASK_PATTERN=()
+TASK_TARGET=()
+TASK_KEYWORD=()
 
 usage() {
   awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
@@ -120,6 +147,113 @@ die_usage() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die_usage "missing required command: $1"
+}
+
+load_task_map() {
+  [[ -f "$TASK_MAP_FILE" ]] || die_usage "missing task map: $TASK_MAP_FILE"
+  local task stage summary kind groups pattern target keyword
+  while IFS=$'\t' read -r task stage summary kind groups pattern target keyword; do
+    [[ -z "$task" || "$task" == \#* ]] && continue
+    TASK_IDS+=("$task")
+    TASK_STAGE+=("$stage")
+    TASK_KIND+=("$kind")
+    TASK_GROUP+=("$groups")
+    TASK_PATTERN+=("$pattern")
+    TASK_TARGET+=("$target")
+    TASK_KEYWORD+=("$keyword")
+  done < "$TASK_MAP_FILE"
+  (( ${#TASK_IDS[@]} > 0 )) || die_usage "task map is empty: $TASK_MAP_FILE"
+}
+
+validate_task_focus() {
+  [[ -z "$TASK_FOCUS" ]] && return 0
+  local -a ids
+  local item i known
+  IFS=',' read -ra ids <<< "$TASK_FOCUS"
+  for item in "${ids[@]}"; do
+    known=0
+    for i in "${!TASK_IDS[@]}"; do
+      [[ "${TASK_IDS[i]}" == "$item" ]] && { known=1; break; }
+    done
+    (( known )) || die_usage "unknown task number '$item' (see $TASK_MAP_FILE; gaps such as T30/T60-T80 are intentionally unmapped)"
+  done
+}
+
+group_matches_task() {
+  local group="$1" list="$2"
+  [[ "$list" == "*" || ",$list," == *",$group,"* ]]
+}
+
+task_for_case() {
+  local group="$1" id="$2" i glist pat
+  (( ${#TASK_IDS[@]} > 0 )) || { printf '%s' "-"; return 0; }
+  for i in "${!TASK_IDS[@]}"; do
+    pat="${TASK_PATTERN[i]}"
+    [[ "$pat" == "*" ]] && continue
+    glist="${TASK_GROUP[i]}"
+    group_matches_task "$group" "$glist" || continue
+    [[ "$id" == $pat ]] && { printf '%s' "${TASK_IDS[i]}"; return 0; }
+  done
+  for i in "${!TASK_IDS[@]}"; do
+    if group_matches_task "$group" "${TASK_GROUP[i]}"; then
+      printf '%s' "${TASK_IDS[i]}"
+      return 0
+    fi
+  done
+  printf '%s' "-"
+}
+
+task_kind_for() {
+  local task="$1" i
+  for i in "${!TASK_IDS[@]}"; do
+    if [[ "${TASK_IDS[i]}" == "$task" ]]; then printf '%s' "${TASK_KIND[i]}"; return 0; fi
+  done
+  printf '%s' "static"
+}
+
+set_task() {
+  E2E_TASK_ID="$1"
+  E2E_TASK_KIND="$2"
+}
+
+clear_task() {
+  E2E_TASK_ID=""
+  E2E_TASK_KIND=""
+}
+
+task_scope() {
+  local id="$1" kind="$2" prev_id="$E2E_TASK_ID" prev_kind="$E2E_TASK_KIND" rc=0
+  shift 2
+  E2E_TASK_ID="$id"
+  E2E_TASK_KIND="$kind"
+  "$@" || rc=$?
+  E2E_TASK_ID="$prev_id"
+  E2E_TASK_KIND="$prev_kind"
+  return "$rc"
+}
+
+build_coverage() {
+  local out="$WORK_DIR/coverage.jsonl" all i task p f s n status kinds
+  : > "$out"
+  all="$(jq -s '.' "$RESULTS_FILE" 2>/dev/null)" || all='[]'
+  [[ -n "$all" ]] || all='[]'
+  for i in "${!TASK_IDS[@]}"; do
+    task="${TASK_IDS[i]}"
+    p="$(printf '%s' "$all" | jq --arg t "$task" '[.[]|select(.feature==$t and .status=="PASS")]|length')"
+    f="$(printf '%s' "$all" | jq --arg t "$task" '[.[]|select(.feature==$t and .status=="FAIL")]|length')"
+    s="$(printf '%s' "$all" | jq --arg t "$task" '[.[]|select(.feature==$t and .status=="SKIP")]|length')"
+    kinds="$(printf '%s' "$all" | jq -r --arg t "$task" '[.[]|select(.feature==$t)|.kind]|unique|join(",")')"
+    n=$((p + f + s))
+    status="UNCOVERED"
+    (( n > 0 )) && status="SKIP"
+    (( p > 0 )) && status="PASS"
+    (( f > 0 )) && status="FAIL"
+    jq -nc --arg task "$task" --arg stage "${TASK_STAGE[i]}" \
+      --arg kind "${TASK_KIND[i]}" --arg kinds "$kinds" --arg status "$status" \
+      --argjson pass "$p" --argjson fail "$f" --argjson skip "$s" \
+      '{task:$task,stage:$stage,status:$status,kind:$kind,kinds:$kinds,pass:$pass,fail:$fail,skip:$skip,cases:($pass+$fail+$skip)}' >> "$out"
+  done
+  jq -s '.' "$out"
 }
 
 parse_args() {
@@ -143,6 +277,8 @@ parse_args() {
       --read-only)      READ_ONLY=1; shift ;;
       --allow-mutating) ALLOW_MUTATING=1; shift ;;
       --with-local)     WITH_LOCAL=1; shift ;;
+      --with-fixtures)  WITH_FIXTURES=1; shift ;;
+      --task-focus)     (( $# >= 2 )) || die_usage "--task-focus needs a value"; TASK_FOCUS="$2"; shift 2 ;;
       --strict-skip)    STRICT_SKIP=1; shift ;;
       --list)           LIST=1; shift ;;
       --self-test)      SELF_TEST=1; shift ;;
@@ -152,6 +288,8 @@ parse_args() {
   done
   [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || die_usage "--timeout must be an integer"
   [[ "$SSE_TIMEOUT" =~ ^[0-9]+$ ]] || die_usage "--sse-timeout must be an integer"
+  [[ -z "$TASK_FOCUS" || "$TASK_FOCUS" =~ ^T[0-9]+(,T[0-9]+)*$ ]] \
+    || die_usage "--task-focus expects comma-separated T-numbers, e.g. T90,T91"
   validate_group_filter "$GROUP_FILTER"
   validate_group_filter "$SKIP_FILTER"
   if (( READ_ONLY )) && (( ALLOW_MUTATING )); then
@@ -175,7 +313,7 @@ validate_group_filter() {
 }
 
 group_enabled() {
-  local g="$1" item
+  local g="$1" item i
   local -a parts
   if [[ -n "$GROUP_FILTER" ]]; then
     local found=0
@@ -187,6 +325,14 @@ group_enabled() {
     IFS=',' read -ra parts <<< "$SKIP_FILTER"
     for item in "${parts[@]}"; do [[ "$item" == "$g" ]] && return 1; done
   fi
+  if [[ -n "$TASK_FOCUS" ]]; then
+    local focus_hit=0
+    for i in "${!TASK_IDS[@]}"; do
+      [[ ",$TASK_FOCUS," == *",${TASK_IDS[i]},"* ]] || continue
+      if group_matches_task "$g" "${TASK_GROUP[i]}"; then focus_hit=1; break; fi
+    done
+    (( focus_hit )) || return 1
+  fi
   return 0
 }
 
@@ -195,7 +341,7 @@ groups_need_service() {
   for g in "${ALL_GROUPS[@]}"; do
     group_enabled "$g" || continue
     case "$g" in
-      cli|local-optional) : ;;
+      cli|local-optional|task-static|task-fixtures|task-offline) : ;;
       *) return 0 ;;
     esac
   done
@@ -356,14 +502,19 @@ assert_sse() {
 
 record() {
   local group="$1" id="$2" status="$3" expect="$4" actual="$5" detail="$6"
-  local safe
+  local safe feature kind
   safe="$(printf '%s' "$detail" \
     | sed -E 's/sk-(aria|bf)_[A-Za-z0-9_-]+/[REDACTED]/g; s/Bearer [A-Za-z0-9._-]+/Bearer [REDACTED]/g; s/"(token|secret|password)"[[:space:]]*:[[:space:]]*"[^"]*"/"\1":"[REDACTED]"/g' \
     | tr '\n' ' ')"
+  feature="$E2E_TASK_ID"
+  [[ -z "$feature" ]] && feature="$(task_for_case "$group" "$id")"
+  kind="$E2E_TASK_KIND"
+  [[ -z "$kind" ]] && kind="$(task_kind_for "$feature")"
   jq -nc \
     --arg group "$group" --arg id "$id" --arg status "$status" \
     --arg expect "$expect" --arg actual "$actual" --arg detail "$safe" \
-    '{group:$group,id:$id,status:$status,expect:$expect,actual:$actual,detail:($detail[0:200])}' \
+    --arg feature "$feature" --arg kind "$kind" \
+    '{group:$group,id:$id,status:$status,expect:$expect,actual:$actual,detail:($detail[0:200]),feature:$feature,kind:$kind}' \
     >> "$RESULTS_FILE" 2>/dev/null
   case "$status" in
     PASS)
@@ -544,6 +695,12 @@ cleanup_resources() {
 
 cleanup_on_exit() {
   local rc=$?
+  if declare -F fixture_cleanup_all >/dev/null 2>&1; then
+    fixture_cleanup_all
+  fi
+  if [[ -n "$AUDIT_TMP_DIR" && -d "$ROOT/$AUDIT_TMP_DIR" ]]; then
+    rm -rf "$ROOT/$AUDIT_TMP_DIR"
+  fi
   if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
     cleanup_resources
     rm -rf "$WORK_DIR"
@@ -577,9 +734,9 @@ prepare_session_args() {
 }
 
 list_cases() {
-  printf '%-16s %-40s %s\n' GROUP CASE DESCRIPTION
-  case_catalog | while IFS=$'\t' read -r g i d; do
-    printf '%-16s %-40s %s\n' "$g" "$i" "$d"
+  printf '%-16s %-38s %-7s %s\n' GROUP CASE TASK DESCRIPTION
+  case_catalog | while IFS=$'\t' read -r g i t d; do
+    printf '%-16s %-38s %-7s %s\n' "$g" "$i" "$t" "$d"
   done
 }
 
@@ -647,8 +804,28 @@ run_self_test() {
     st_expect "secret redaction" 0
   fi
 
+  (( ${#TASK_IDS[@]} > 0 )); st_expect "task map loaded" $?
+  [[ "$(task_for_case mgmt-read trust)" != "-" ]]; st_expect "task_for_case lookup" $?
+  set_task T90 http
+  record selftest tagged PASS "-" "-" "tagged case"
+  grep -q '"feature":"T90"' "$RESULTS_FILE"; st_expect "record feature tag" $?
+  clear_task
+  WORK_DIR="$tmp"
+  build_coverage >/dev/null; st_expect "coverage matrix build" $?
+  jq -se 'any(.[]; .task=="T90" and .pass >= 1)' "$tmp/coverage.jsonl" >/dev/null 2>&1
+  st_expect "coverage T90 counted" $?
+  jq -se 'any(.[]; .task=="T90" and has("kinds"))' "$tmp/coverage.jsonl" >/dev/null 2>&1
+  st_expect "coverage kinds recorded" $?
+  jq -ne --arg pat "$T9X_PATTERN" --arg t "T90" '($t|test($pat))' >/dev/null 2>&1
+  st_expect "coverage pattern keeps T90" $?
+  jq -ne --arg pat "$T9X_PATTERN" --arg t "T9" '($t|test($pat))|not' >/dev/null 2>&1
+  st_expect "coverage pattern excludes T9" $?
+  WORK_DIR=""
+
   bash "$0" --not-a-real-flag >/dev/null 2>&1
   [[ $? -eq 2 ]]; st_expect "invalid argument exit 2" $?
+  bash "$0" --task-focus T30 --list >/dev/null 2>&1
+  [[ $? -eq 2 ]]; st_expect "unmapped task number exit 2" $?
 
   RESULTS_FILE=""
   rm -rf "$tmp"
@@ -665,16 +842,20 @@ write_report() {
     printf 'error: cannot create report directory %s\n' "$OUT_DIR" >&2
     return 1
   }
-  local cases duration ro
+  local cases duration ro coverage modes wf wl
   cases="$(jq -s '.' "$RESULTS_FILE" 2>/dev/null)" || cases='[]'
   [[ -n "$cases" ]] || cases='[]'
   duration=$(( (SECONDS - START_EPOCH) * 1000 ))
-  ro="false"
-  (( READ_ONLY )) && ro="true"
+  ro="false"; (( READ_ONLY )) && ro="true"
+  wf="false"; (( WITH_FIXTURES )) && wf="true"
+  wl="false"; (( WITH_LOCAL )) && wl="true"
+  coverage="$(build_coverage)"
+  [[ -n "$coverage" ]] || coverage='[]'
+  modes="$(jq -nc --argjson f "$wf" --argjson l "$wl" '{with_fixtures:$f,with_local:$l}')"
   local json="$OUT_DIR/user-e2e-report.json"
   local text="$OUT_DIR/user-e2e-report.txt"
   if ! jq -n \
-      --argjson cases "$cases" \
+      --argjson cases "$cases" --argjson coverage "$coverage" --argjson modes "$modes" \
       --arg data_url "$DATA_URL" --arg mgmt_url "$MGMT_URL" \
       --arg started_at "$STARTED_AT" --argjson duration_ms "$duration" \
       --argjson read_only "$ro" --argjson pass "$PASS" \
@@ -683,7 +864,9 @@ write_report() {
         tool: "aria-router-user-e2e",
         data_url: $data_url, mgmt_url: $mgmt_url,
         started_at: $started_at, duration_ms: $duration_ms, read_only: $read_only,
+        modes: $modes,
         summary: {pass: $pass, fail: $fail, skip: $skip, total: ($pass + $fail + $skip)},
+        coverage: $coverage,
         cases: $cases
       }' > "$json" 2>/dev/null; then
     printf 'error: cannot write JSON report\n' >&2
@@ -691,12 +874,27 @@ write_report() {
   fi
   {
     printf 'aria-router user E2E — %s\n' "$STARTED_AT"
-    printf 'data=%s mgmt=%s read_only=%s allow_mutating=%s\n' \
-      "$DATA_URL" "$MGMT_URL" "$ro" "$([[ $ALLOW_MUTATING -eq 1 ]] && printf true || printf false)"
+    printf 'data=%s mgmt=%s read_only=%s allow_mutating=%s with_fixtures=%s with_local=%s\n' \
+      "$DATA_URL" "$MGMT_URL" "$ro" \
+      "$([[ $ALLOW_MUTATING -eq 1 ]] && printf true || printf false)" "$wf" "$wl"
     printf 'PASS=%d FAIL=%d SKIP=%d TOTAL=%d duration_ms=%d\n\n' \
       "$PASS" "$FAIL" "$SKIP" "$((PASS + FAIL + SKIP))" "$duration"
-    jq -r '.cases[] | [.status, .group, .id, .actual, .detail] | @tsv' "$json" 2>/dev/null \
-      | while IFS=$'\t' read -r s g i a d; do printf '%-6s %-16s %-38s %-8s %s\n' "$s" "$g" "$i" "$a" "$d"; done
+    printf '=== task coverage (T90-T99 first; KINDS = verification types actually run) ===\n'
+    jq -r --arg pat "$T9X_PATTERN" '.coverage[] | select(.task|test($pat)) | [.task,.status,(.kinds // .kind),(.pass|tostring),(.fail|tostring),(.skip|tostring),(.cases|tostring),.stage] | @tsv' "$json" 2>/dev/null \
+      | while IFS=$'\t' read -r t s k p f sk n st; do
+          [[ -z "$t" ]] && continue
+          printf '%-6s %-10s %-18s P=%s F=%s S=%s N=%s %s\n' "$t" "$s" "$k" "$p" "$f" "$sk" "$n" "$st"
+        done
+    jq -r --arg pat "$T9X_PATTERN" '.coverage[] | select((.task|test($pat))|not) | [.task,.status,(.kinds // .kind),(.pass|tostring),(.fail|tostring),(.skip|tostring),(.cases|tostring),.stage] | @tsv' "$json" 2>/dev/null \
+      | while IFS=$'\t' read -r t s k p f sk n st; do
+          [[ -z "$t" ]] && continue
+          printf '%-6s %-10s %-18s P=%s F=%s S=%s N=%s %s\n' "$t" "$s" "$k" "$p" "$f" "$sk" "$n" "$st"
+        done
+    printf '\n=== cases ===\n'
+    jq -r '.cases[] | [.status, .group, .id, .feature, .kind, .actual, .detail] | @tsv' "$json" 2>/dev/null \
+      | while IFS=$'\t' read -r s g i t k a d; do
+          printf '%-6s %-16s %-38s %-6s %-8s %-8s %s\n' "$s" "$g" "$i" "$t" "$k" "$a" "$d"
+        done
   } > "$text"
   printf '\n=== summary: %d PASS / %d FAIL / %d SKIP (total %d) ===\n' \
     "$PASS" "$FAIL" "$SKIP" "$((PASS + FAIL + SKIP))"
@@ -709,8 +907,13 @@ run_groups() {
   local group fn
   for group in "${ALL_GROUPS[@]}"; do
     group_enabled "$group" || continue
-    if [[ "$group" == "local-optional" || "$group" == "bench-optional" ]] && (( WITH_LOCAL == 0 )); then
+    if [[ "$group" == "local-optional" || "$group" == "bench-optional" || "$group" == "task-offline" ]] \
+       && (( WITH_LOCAL == 0 )); then
       skip_case "$group" disabled "pass --with-local to enable this group"
+      continue
+    fi
+    if [[ "$group" == "task-fixtures" ]] && (( WITH_FIXTURES == 0 )); then
+      skip_case "$group" disabled "pass --with-fixtures to enable this group"
       continue
     fi
     printf '\n=== %s ===\n' "$group"
@@ -741,9 +944,16 @@ main() {
   need_cmd curl
   need_cmd jq
   need_cmd mktemp
+  load_task_map
+  validate_task_focus
   [[ -f "$CASES_LIB" ]] || die_usage "missing case library: $CASES_LIB"
   # shellcheck source=/dev/null
   source "$CASES_LIB"
+  if (( WITH_FIXTURES )); then
+    [[ -f "$FIXTURES_LIB" ]] || die_usage "missing fixture library: $FIXTURES_LIB"
+    # shellcheck source=/dev/null
+    source "$FIXTURES_LIB"
+  fi
   if (( LIST )); then list_cases; exit 0; fi
   if (( SELF_TEST )); then run_self_test; fi
   setup_workspace
