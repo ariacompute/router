@@ -27,6 +27,7 @@ aria-engine) — sharing providers, hard constraints, and forwarding.
 - [✨ Features](#-features)
 - [🚀 Quick start](#-quick-start)
 - [🧰 Command line](#-command-line)
+- [🧪 User-facing E2E checks](#-user-facing-e2e-checks)
 - [🔧 Configuration](#-configuration)
 
 **Deploy & serve**
@@ -192,6 +193,38 @@ The `aria-router` binary has four subcommands:
 | `--version` | — | Print version |
 
 `setup` is interactive: template → models (`base_url`, `api_key_env` name, gateway API key, three `provider_model_id` tiers; agent also `endpoint`/`model`/`fallback`; afm-d also System One `endpoint`/`fallback`) → admin → `upgrade_url`. The gateway API key is stored in `router.yml` (`backend_refs.api_key`); serve loads that path by default (or falls back to `$GATEWAY_API_KEY` / `--api-key-env`). Logical names `ariacompute/ariamodel-{small,mid,large}` stay fixed; swap upstream IDs only. CI: `--template` + `--admin-user` + `--admin-password` skips model prompts (gateway defaults).
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🧪 User-facing E2E checks
+
+[`scripts/run-user-e2e.sh`](scripts/run-user-e2e.sh) is a black-box suite that exercises a **running** router from a user's point of view: CLI read-only contracts, auth/login, API key lifecycle, OpenAI-compatible chat (JSON + SSE + route headers), all three decisioners, every management endpoint, and the Dashboard. It never builds, installs, starts, stops or upgrades a router process — point it at an instance that is already serving both planes.
+
+```bash
+# Default data :8899 / management :8090
+./scripts/run-user-e2e.sh
+
+# Explicit URLs plus admin credentials for the login/key journey
+./scripts/run-user-e2e.sh \
+  --data-url http://127.0.0.1:8899 --mgmt-url http://127.0.0.1:8090 \
+  --admin-user admin --admin-password '…'
+
+# Safe against a production instance: skip all mutating requests
+./scripts/run-user-e2e.sh --read-only
+
+# Offline helper verification and CI-friendly switches
+./scripts/run-user-e2e.sh --list
+./scripts/run-user-e2e.sh --self-test
+./scripts/run-user-e2e.sh --with-local --strict-skip
+```
+
+Case groups: `cli`, `auth`, `keys`, `data`, `decisioners`, `mgmt-read`, `mgmt-write`, `dashboard`, `local-optional`, `bench-optional` (the last two need `--with-local`). Select with `--group` / `--skip`; `--help` lists all flags and environment variables. Each case is `PASS`, `FAIL` or `SKIP`; a text summary and a machine-readable report are written to `out/user-e2e-report.txt` and `out/user-e2e-report.json` (override with `--out-dir`). Exit codes: `0` all executed cases passed, `1` at least one failure (or skipped cases with `--strict-skip`), `2` usage/environment error such as an unreachable service.
+
+Mutating cases use a per-run random prefix and revoke test keys on exit; `--read-only` skips them. `PUT /v1/router/config` writes `router.yml` verbatim and a real `upgrade` replaces the CLI, so both are never executed — only their rejecting/help contracts are checked. Provider upsert (no delete endpoint), trust publish, serve account sync and other irreversible writes require explicit `--allow-mutating`. Upstream failures (502/504) are reported as `SKIP` rather than router defects, and tokens/key secrets are redacted from stdout and reports.
 
 <div align="right">
 

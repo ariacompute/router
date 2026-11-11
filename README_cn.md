@@ -27,6 +27,7 @@
 - [✨ 功能](#-功能)
 - [🚀 快速开始](#-快速开始)
 - [🧰 命令行](#-命令行)
+- [🧪 用户视角 E2E 测试](#-用户视角-e2e-测试)
 - [🔧 配置](#-配置)
 
 **部署与服务**
@@ -192,6 +193,38 @@ cargo run -p aria-router -- serve \
 | `--version` | — | 打印版本 |
 
 `setup` 为交互式：template → models（`base_url`、`api_key_env` 变量名、gateway API key、三档 `provider_model_id`；agent 另有 `endpoint`/`model`/`fallback`；afm-d 另有 System One `endpoint`/`fallback`）→ admin → `upgrade_url`。API key 写入 `router.yml` 的 `backend_refs.api_key`；serve 默认加载该文件（无明文 key 时回退 `$GATEWAY_API_KEY` / `--api-key-env`）。逻辑名 `ariacompute/ariamodel-{small,mid,large}` 固定；只换上游 provider_model_id。CI：`--template` + `--admin-user` + `--admin-password` 跳过 models 提示（用 gateway 默认）。
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🧪 用户视角 E2E 测试
+
+[`scripts/run-user-e2e.sh`](scripts/run-user-e2e.sh) 是一套黑盒测试，从**用户视角**验证一个**已运行**的 router：CLI 只读契约、注册登录、API 密钥生命周期、OpenAI 兼容对话（JSON + SSE + 路由响应头）、三种决策器、全部管理面端点与 Dashboard。它不会编译、安装、启动、停止或升级 router 进程——请指向已在数据面与管理面同时提供服务的实例。
+
+```bash
+# 默认数据面 :8899 / 管理面 :8090
+./scripts/run-user-e2e.sh
+
+# 显式 URL + 管理员凭据（走登录/密钥旅程）
+./scripts/run-user-e2e.sh \
+  --data-url http://127.0.0.1:8899 --mgmt-url http://127.0.0.1:8090 \
+  --admin-user admin --admin-password '…'
+
+# 对生产实例安全：跳过所有写请求
+./scripts/run-user-e2e.sh --read-only
+
+# 离线自检与 CI 常用开关
+./scripts/run-user-e2e.sh --list
+./scripts/run-user-e2e.sh --self-test
+./scripts/run-user-e2e.sh --with-local --strict-skip
+```
+
+用例组：`cli`、`auth`、`keys`、`data`、`decisioners`、`mgmt-read`、`mgmt-write`、`dashboard`、`local-optional`、`bench-optional`（后两组需 `--with-local`）。用 `--group` / `--skip` 选择，`--help` 列出全部参数与环境变量。每条用例结果为 `PASS` / `FAIL` / `SKIP`；文本汇总与机器可读报告写入 `out/user-e2e-report.txt` 与 `out/user-e2e-report.json`（可用 `--out-dir` 覆盖）。退出码：`0` 已执行用例全部通过、`1` 存在失败（或 `--strict-skip` 下有跳过）、`2` 用法/环境错误（如服务不可达）。
+
+写用例使用单次运行的随机前缀，并在退出时撤销测试密钥；`--read-only` 会跳过它们。`PUT /v1/router/config` 会原样重写 `router.yml`，真实 `upgrade` 会替换 CLI，因此两者**永不执行**，只校验其拒绝/帮助契约。Provider upsert（无删除端点）、trust publish、serve account sync 等不可逆写需显式 `--allow-mutating`。上游故障（502/504）记为 `SKIP` 而非 router 缺陷；token 与密钥明文不会写入 stdout 或报告。
 
 <div align="right">
 
