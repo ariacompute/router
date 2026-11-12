@@ -2,6 +2,14 @@
   "name": "@ariacompute/router-rn",
   "version": "0.1.0",
   "main": "src/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ariacompute/router.git",
+    "directory": "bindings/react-native"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "node --test test/setup.test.cjs"
   },

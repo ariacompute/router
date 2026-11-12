@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ariacompute/router.git",
+    "directory": "bindings/typescript"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "node --test test/binding.test.mjs"
   },
