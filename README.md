@@ -1312,7 +1312,7 @@ This project is [MIT](./LICENSE) licensed.
 [org]: https://github.com/ariacompute
 [release-shield]: https://img.shields.io/github/v/release/ariacompute/router?style=flat-square&labelColor=black&color=555
 [release-link]: https://github.com/ariacompute/router/releases
-[rust-shield]: https://img.shields.io/github/rust/cargo/v/ariacompute-router?style=flat-square&labelColor=black&color=555
+[rust-shield]: https://img.shields.io/badge/language-Rust-555?style=flat-square&labelColor=black&logo=rust&logoColor=white
 [rust-link]: ./Cargo.toml
 [license-shield]: https://img.shields.io/github/license/ariacompute/router?style=flat-square&labelColor=black&color=555
 [license-link]: ./LICENSE
