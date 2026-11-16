@@ -264,6 +264,7 @@ fn complete_inner(
         let resp = if let Some(tok) = token_nonempty(h) {
             let app = data_router(st.clone());
             let body = serde_json::to_vec(&req_json).unwrap();
+            // `oneshot`'s error type is `Infallible`, so there is no failure to map.
             h.rt.block_on(async {
                 app.oneshot(
                     Request::post("/v1/chat/completions")
@@ -274,7 +275,7 @@ fn complete_inner(
                 )
                 .await
             })
-            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|e: std::convert::Infallible| match e {})
         } else {
             h.rt.block_on(sdk_chat_complete(st.clone(), req_json))
                 .map_err(|e| e.to_string())?
@@ -284,10 +285,12 @@ fn complete_inner(
         let bytes =
             h.rt.block_on(to_bytes(resp.into_body(), 1 << 22))
                 .map_err(|e| e.to_string())?;
+        // Keep the decision headers even when the call failed: `last_route()`
+        // must be able to diagnose 401/403/5xx responses (spec §3.7).
+        h.set_last_headers(headers);
         if status != StatusCode::OK {
             return Err(String::from_utf8_lossy(&bytes).into_owned());
         }
-        h.set_last_headers(headers);
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     } else if let Some(url) = &h.base_url {
         let url = format!("{}/v1/chat/completions", url.trim_end_matches('/'));
@@ -304,10 +307,11 @@ fn complete_inner(
         let headers = route_headers(resp.headers());
         let status = resp.status();
         let text = h.rt.block_on(resp.text()).map_err(|e| e.to_string())?;
+        // Keep the decision headers on failure too (spec §3.7).
+        h.set_last_headers(headers);
         if !status.is_success() {
             return Err(format!("remote status {status}: {text}"));
         }
-        h.set_last_headers(headers);
         Ok(text)
     } else {
         Err("uninitialized".into())

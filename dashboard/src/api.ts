@@ -204,6 +204,25 @@ export async function setUserEmail(id: string, email: string | null): Promise<vo
   await sendJson(`/v1/router/users/${encodeURIComponent(id)}/email`, 'PUT', { email });
 }
 
+/// Admin-only: create a local user (`POST /v1/router/users`).
+export async function createUser(
+  username: string,
+  password: string,
+  role: 'admin' | 'user' = 'user',
+): Promise<LocalUser> {
+  const { data } = await sendJson<{ ok: boolean; user: LocalUser }>('/v1/router/users', 'POST', {
+    username,
+    password,
+    role,
+  });
+  return data.user;
+}
+
+/// Admin-only: reset another user's password (`PUT /v1/router/users/{id}/password`).
+export async function resetUserPassword(id: string, password: string): Promise<void> {
+  await sendJson(`/v1/router/users/${encodeURIComponent(id)}/password`, 'PUT', { password });
+}
+
 /// Begin the public Aria Compute (serve) OAuth login handshake. Returns the
 /// URL the browser should be redirected to in order to authenticate at serve.
 export async function startAriaOAuth(site?: string): Promise<OAuthStart> {

@@ -1,8 +1,9 @@
 # aria-router 发版说明
 
 本说明覆盖本次发布的 `T90–T99` 特性集（C1–C9 / U1）。运行时契约（硬约束剪枝
-+ fail closed + semantic / agent / afm-d 三决策器隔离）保持不变；以下新增均为
-可开启能力，且绝不绕过该契约。
++ fail closed + semantic / agent / afm-d 三决策器隔离）保持不变。新增能力除特别
+标注外均为可开启；默认开启的只有重判边界追踪（`global.services.redecision`）与
+`backend_refs` 按权重分流，两者都可显式关闭，且绝不绕过该契约。
 
 ## 新增
 
@@ -10,7 +11,10 @@
   / `context-compaction` / `tool-continuation` / `same-turn` / `unknown`）。历史
   不连续（`unknown`）直接 fail closed，不复用冻结决策。所选边界通过新增响应头
   `x-aria-router-redecision` 在每个响应上可观测。由 `global.services.redecision`
-  配置（默认关闭）。
+  配置（`enabled` 默认 `true`；置 `enabled: false` 可退回 C1 之前的行为）。
+- **有界 backend 故障转移需显式开启（C8）** — `global.services.backend_failover`
+  默认 `enabled: false`，默认路径即 fail closed；置 `enabled: true`（并设
+  `max_attempts`）才会按权重序重试 backend。
 - **afm-d 三问模板（C2）** — `afm-d.question_template: single|three`。`three` 时在
   `route` 之外再问 阶段能力 / 难度 / 延续性，并归一为一个 typed `RouteDecision`；
   `hard` 难度在硬过滤后的 eligible 池内升档，答案同时写入执行证据。

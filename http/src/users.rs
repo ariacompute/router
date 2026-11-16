@@ -223,6 +223,20 @@ impl UserStore {
         })
     }
 
+    /// Admin-side user creation (spec §3.5 `POST /v1/router/users`).
+    ///
+    /// Reuses the same validation as self-registration (non-empty unique
+    /// username, password ≥ 8 chars, argon2id hash) but is not gated by
+    /// `allow_register` — the caller is already an authenticated admin.
+    pub fn create_user(
+        &mut self,
+        username: &str,
+        password: &str,
+        role: UserRole,
+    ) -> Result<UserPublic, RouterError> {
+        self.insert_user(username, password, role)
+    }
+
     pub fn register(
         &mut self,
         username: &str,
@@ -913,5 +927,36 @@ mod tests {
         assert!(store
             .upsert_serve_user("", Some("a@b.c".into()), None, &[])
             .is_err());
+    }
+
+    #[test]
+    fn admin_create_user_validates_and_ignores_register_gate() {
+        let (mut store, _dir) = store_with_admin();
+        // Admin creation works even with self-registration disabled.
+        let u = store
+            .create_user("carol", "password1", UserRole::User)
+            .unwrap();
+        assert_eq!(u.role, UserRole::User);
+        assert_eq!(store.list_public().len(), 2);
+        assert!(store.login("carol", "password1").is_ok());
+
+        // Duplicate username / weak password / empty username are rejected.
+        let err = store
+            .create_user("CAROL", "password1", UserRole::User)
+            .unwrap_err();
+        assert!(err.to_string().contains("already taken"), "{err}");
+        let err = store
+            .create_user("dave", "short", UserRole::User)
+            .unwrap_err();
+        assert!(err.to_string().contains("at least 8"), "{err}");
+        let err = store
+            .create_user("  ", "password1", UserRole::User)
+            .unwrap_err();
+        assert!(err.to_string().contains("username required"), "{err}");
+        // An explicit admin role is honoured.
+        let admin = store
+            .create_user("root2", "password1", UserRole::Admin)
+            .unwrap();
+        assert_eq!(admin.role, UserRole::Admin);
     }
 }

@@ -106,6 +106,15 @@ pub fn select_decision<'a>(
     Ok(matched.into_iter().next())
 }
 
+/// Confidence of a matched decision: the minimum confidence across its condition
+/// signals (projections count as 1.0).
+///
+/// Exposed so the HTTP layer can report the value it actually used on
+/// `x-aria-router-confidence` instead of a constant `1.0`.
+pub fn decision_confidence(d: &DecisionCfg, signals: &SignalSet) -> f32 {
+    confidence_of(d, signals)
+}
+
 fn confidence_of(d: &DecisionCfg, signals: &SignalSet) -> f32 {
     d.rules
         .conditions
@@ -1130,5 +1139,70 @@ mod tests {
 
         // Selected model is not in the eligible pool → None (fail closed).
         assert!(apply_competence("ghost", &eligible, 0.9, Some(0.95), &cfg).is_none());
+    }
+
+    #[test]
+    fn decision_confidence_is_min_of_condition_signals() {
+        let mut set = SignalSet::default();
+        set.hits.push(SignalHit {
+            kind: "keyword".into(),
+            name: "a".into(),
+            matched: true,
+            confidence: 0.9,
+        });
+        set.hits.push(SignalHit {
+            kind: "embedding".into(),
+            name: "e".into(),
+            matched: true,
+            confidence: 0.4,
+        });
+        let d = DecisionCfg {
+            name: "d".into(),
+            description: None,
+            priority: 1,
+            rules: RuleNode {
+                operator: Some("AND".into()),
+                conditions: vec![
+                    Condition {
+                        kind: "keyword".into(),
+                        name: "a".into(),
+                        equals: None,
+                    },
+                    Condition {
+                        kind: "embedding".into(),
+                        name: "e".into(),
+                        equals: None,
+                    },
+                    // Projections count as full confidence.
+                    Condition {
+                        kind: "projection".into(),
+                        name: "p".into(),
+                        equals: None,
+                    },
+                ],
+                not: None,
+            },
+            model_refs: vec![],
+            algorithm: None,
+            plugins: vec![],
+            locality: None,
+            emits: vec![],
+        };
+        assert!((decision_confidence(&d, &set) - 0.4).abs() < 1e-6);
+
+        // A missing signal contributes nothing (same as `confidence_of`).
+        let empty = DecisionCfg {
+            rules: RuleNode {
+                operator: Some("AND".into()),
+                conditions: vec![Condition {
+                    kind: "keyword".into(),
+                    name: "absent".into(),
+                    equals: None,
+                }],
+                not: None,
+            },
+            ..d
+        };
+        assert!((decision_confidence(&empty, &set) - 1.0).abs() < 1e-6);
     }
 }

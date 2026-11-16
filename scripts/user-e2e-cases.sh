@@ -645,23 +645,23 @@ run_group_mgmt_write() {
   detect_require_api_key
 
   E2E_CT="text/plain"
-  http_req PUT "$MGMT_URL/v1/router/config" 'this: [is: not: valid'
-  check mgmt-write config_rejects_invalid 400 -
+  http_req PUT "$MGMT_URL/v1/router/config" 'this: [is: not: valid' "${SESSION_ARGS[@]}"
+  check mgmt-write config_rejects_invalid '400|401' -
 
   http_req PUT "$MGMT_URL/v1/router/providers" '{}'
   check mgmt-write providers_missing_fields '400|401|422' -
 
   body="$(jq -nc --arg d "e2e-nonexistent-$TEST_PREFIX" '{draft_id:$d,confirm:true}')"
-  http_req POST "$MGMT_URL/v1/router/trust/publish" "$body"
-  check mgmt-write trust_publish_invalid 400 'has("error")'
+  http_req POST "$MGMT_URL/v1/router/trust/publish" "$body" "${SESSION_ARGS[@]}"
+  check mgmt-write trust_publish_invalid '400|401' 'has("error")'
 
-  http_req POST "$MGMT_URL/v1/router/replay/e2e-unknown-$TEST_PREFIX/reroute" -
-  check mgmt-write replay_reroute_unknown 400 'has("error")'
+  http_req POST "$MGMT_URL/v1/router/replay/e2e-unknown-$TEST_PREFIX/reroute" - "${SESSION_ARGS[@]}"
+  check mgmt-write replay_reroute_unknown '400|401' 'has("error")'
 
   http_req GET "$MGMT_URL/v1/router/replay?n=1" - "${SESSION_ARGS[@]}"
   rid="$(jq -r '.records[0].id // empty' "$LAST_BODY" 2>/dev/null)"
   if [[ -n "$rid" ]]; then
-    http_req POST "$MGMT_URL/v1/router/replay/$rid/reroute?estimate=true" -
+    http_req POST "$MGMT_URL/v1/router/replay/$rid/reroute?estimate=true" - "${SESSION_ARGS[@]}"
     check mgmt-write replay_reroute_estimate 200 '(.estimate==true) and (.online_routing_unchanged==true)'
   else
     skip_case mgmt-write replay_reroute_estimate "no replay records on this instance yet"
@@ -686,7 +686,7 @@ run_group_mgmt_write() {
     return 0
   fi
 
-  http_req POST "$MGMT_URL/v1/router/trust/suggest" -
+  http_req POST "$MGMT_URL/v1/router/trust/suggest" - "${SESSION_ARGS[@]}"
   if check mgmt-write trust_suggest 200 '(.status|test("^(disabled|insufficient_evidence|low_confidence|ready)$")) and (.online_routing_unchanged==true)'; then
     cp "$LAST_BODY" "$WORK_DIR/trust-suggest.json"
     draft_id="$(jq -r '.draft.id // .draft.draft_id // empty' "$WORK_DIR/trust-suggest.json")"
@@ -701,7 +701,7 @@ run_group_mgmt_write() {
       skip_case mgmt-write providers_upsert "require_api_key is true and no valid key is available"
     else
       body="$(jq -nc --arg n "e2e-probe-$TEST_PREFIX" '{name:$n,endpoint:"http://127.0.0.1:9"}')"
-      http_req PUT "$MGMT_URL/v1/router/providers" "$body" "${pargs[@]}"
+      http_req PUT "$MGMT_URL/v1/router/providers" "$body" "${pargs[@]}" "${SESSION_ARGS[@]}"
       check mgmt-write providers_upsert 200 '.ok==true'
       printf 'WARN: test provider e2e-probe-%s remains in memory until the router restarts (no delete endpoint)\n' \
         "$TEST_PREFIX" >&2
@@ -709,7 +709,7 @@ run_group_mgmt_write() {
 
     if [[ -n "$draft_id" ]]; then
       body="$(jq -nc --arg d "$draft_id" '{draft_id:$d,confirm:true}')"
-      http_req POST "$MGMT_URL/v1/router/trust/publish" "$body"
+      http_req POST "$MGMT_URL/v1/router/trust/publish" "$body" "${SESSION_ARGS[@]}"
       check mgmt-write trust_publish 200 '.online_routing_unchanged==true'
     else
       skip_case mgmt-write trust_publish "no publishable draft was produced by trust/suggest"

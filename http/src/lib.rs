@@ -174,6 +174,25 @@ pub fn resolve_dashboard_dir() -> Option<PathBuf> {
     cands.into_iter().find(|p| p.join("index.html").is_file())
 }
 
+/// Session gate for the management API (spec §3.5).
+///
+/// Applied with `route_layer` so it covers every API route but *not* the dashboard
+/// SPA fallback (the login page must stay loadable). With no local users the gate
+/// stays open, matching `gate_if_users` and the first-run `setup` experience.
+async fn mgmt_session_gate(
+    State(st): State<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if auth_api::is_public_mgmt_path(req.uri().path()) {
+        return next.run(req).await;
+    }
+    match auth_api::gate_if_users(&st, req.headers()) {
+        Ok(_) => next.run(req).await,
+        Err(e) => AppError(e).into_response(),
+    }
+}
+
 fn mgmt_api_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -188,12 +207,19 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
         .route("/v1/router/auth/me", get(auth_api::me))
         .route("/v1/router/auth/email", put(auth_api::set_my_email))
         .route("/v1/router/auth/password", post(auth_api::change_password))
-        .route("/v1/router/users", get(auth_api::list_users))
+        .route(
+            "/v1/router/users",
+            get(auth_api::list_users).post(auth_api::create_user),
+        )
         .route(
             "/v1/router/users/{id}/disabled",
             put(auth_api::set_user_disabled),
         )
         .route("/v1/router/users/{id}/email", put(auth_api::set_user_email))
+        .route(
+            "/v1/router/users/{id}/password",
+            put(auth_api::reset_user_password),
+        )
         .route(
             "/v1/router/settings/allow_register",
             put(auth_api::set_allow_register),
@@ -236,6 +262,12 @@ fn mgmt_api_router(state: Arc<AppState>) -> Router {
             put(set_spend_policy_ep).get(spend_view_ep),
         )
         .route("/v1/router/quota", get(quota_ep))
+        // Spec §3.5: every non-public management route requires a session while a
+        // user table exists. `route_layer` leaves the SPA fallback untouched.
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            mgmt_session_gate,
+        ))
         .with_state(state)
 }
 
@@ -1438,7 +1470,21 @@ async fn route_and_forward_inner(
                 set_boundary_header(res.headers_mut(), boundary_header.as_deref());
                 Ok(res)
             } else {
-                let body = forward(&doc, &decision.model, &fwd, &hdrs, &st.pool).await?;
+                // Time the upstream call so Elo gets a real latency (not the old
+                // hard-coded `routing_latency_ms.unwrap_or(0.0)`).
+                let started = std::time::Instant::now();
+                let forwarded = forward(&doc, &decision.model, &fwd, &hdrs, &st.pool).await;
+                let elapsed_ms = started.elapsed().as_millis() as f32;
+                let body = match forwarded {
+                    Ok(body) => {
+                        observe_elo(&doc, &decision.model, elapsed_ms, true);
+                        body
+                    }
+                    Err(e) => {
+                        observe_elo(&doc, &decision.model, elapsed_ms, false);
+                        return Err(e);
+                    }
+                };
                 if decision.cache_response {
                     let cache_plugins = [aria_router_config::PluginRef {
                         name: "response-cache".into(),
@@ -1447,11 +1493,6 @@ async fn route_and_forward_inner(
                     remember_response(&st.plugins, &cache_plugins, &fwd, &body);
                 }
                 maybe_store_semantic(&st, &decision, &last_user, &body);
-                global_elo().observe_latency(
-                    &decision.model,
-                    decision.routing_latency_ms.unwrap_or(0.0) as f32,
-                    &[],
-                );
                 let (pt, ct, src) = parse_json_usage(&body, prompt_est);
                 let accepted = json_preview(&body);
                 let tools = tool_outcomes_from(&body);
@@ -1499,6 +1540,30 @@ fn maybe_store_semantic(st: &AppState, decision: &RouteDecision, text: &str, bod
     );
 }
 
+/// Feed the Elo table with a real outcome.
+///
+/// `elo` / `ratings` only carry signal when there are peers to compare against, so
+/// the hard-pruned text pool (minus the chosen model) is passed as the peer set.
+/// Failures demote the model, keeping the next pick away from a dead backend.
+fn observe_elo(doc: &RouterDocument, model: &str, latency_ms: f32, ok: bool) {
+    if !ok {
+        global_elo().observe_failure(model);
+        return;
+    }
+    let all: Vec<String> = doc
+        .providers
+        .models
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
+    let peers: Vec<String> = hard_filter(doc, &all, None, Some("text"))
+        .into_iter()
+        .map(|c| c.name)
+        .filter(|n| n != model)
+        .collect();
+    global_elo().observe_latency(model, latency_ms, &peers);
+}
+
 /// Stream upstream SSE bytes to the client; record pool latency + cost when the body finishes.
 fn sse_response_body(
     st: Arc<AppState>,
@@ -1537,9 +1602,14 @@ impl SseCostStream {
             return;
         }
         self.recorded = true;
-        self.st
-            .pool
-            .record(self.inner.model(), self.inner.elapsed_ms(), ok);
+        let elapsed_ms = self.inner.elapsed_ms();
+        self.st.pool.record(self.inner.model(), elapsed_ms, ok);
+        observe_elo(
+            &snapshot_doc(&self.st),
+            &self.decision.model,
+            elapsed_ms,
+            ok,
+        );
         let text = self.inner.accumulated();
         let (pt, ct, src) = parse_sse_usage(&text, self.prompt_est);
         let outcome = if ok { "ok" } else { "interrupted" };
@@ -2206,12 +2276,20 @@ async fn route_semantic(
         .iter()
         .map(|h| json!({"kind": h.kind, "name": h.name, "matched": h.matched, "confidence": h.confidence}))
         .collect::<Vec<_>>());
+    // C5: report the confidence the selection actually used instead of a constant
+    // 1.0. A decision_ext override carries its own confidence; the no-match
+    // default path has no evidence and reports 0.0.
+    let confidence = match (&ext_meta, decision_cfg) {
+        (Some(ext), _) => ext.confidence,
+        (None, Some(d)) => aria_router_decision::decision_confidence(d, &signals),
+        (None, None) => 0.0,
+    };
     let decision =
         |model: String, algo: Option<String>, dname: String, cache_response: bool| RouteDecision {
             model,
             algorithm: algo,
             reason: format!("semantic:{dname}"),
-            confidence: 1.0,
+            confidence,
             layer: "semantic".into(),
             decision: dname,
             bypass: false,
@@ -2490,11 +2568,22 @@ async fn route_agent(
         api_key,
         canned,
     };
-    // The builtin agent only accepts a `submit_route` model from its own eligible
-    // pool and fails closed otherwise (overreach → 403), so no post-hoc fallback
-    // or eligibility re-check is needed here.
-    let mut decision = builtin.route(task, &tools).await?;
-    decision.layer = "agent".into();
+    // Spec §3.4: timeout / over-turns / malformed JSON / overreach fail closed *or*
+    // fall back to the recipe `fallback` model. Same contract as the delegate path
+    // and the AFM-D decisioner, so the two routers stay symmetrical.
+    let decision = match builtin.route(task, &tools).await {
+        Ok(mut d) => {
+            d.layer = "agent".into();
+            d
+        }
+        Err(e) => {
+            let mut fb = decision_ext::apply_fallback_or_err(agent.fallback.as_deref(), e.clone())?;
+            fb.layer = "agent-fallback".into();
+            fb.decision = "fallback".into();
+            fb.reason = format!("agent failed ({e}); recipe fallback");
+            fb
+        }
+    };
     let mut fwd = req;
     fwd.model = decision.model.clone();
     Ok((decision, fwd, None, vec![]))
@@ -3657,31 +3746,54 @@ global:
     }
 
     #[tokio::test]
-    async fn agent_overreach_fail_closed() {
+    async fn agent_overreach_uses_recipe_fallback_or_fails_closed() {
         let backend = mock_upstream().await;
-        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
-        let (st, _dir) = isolated_state(doc);
-        st.set_fake_agent(
-            "builtin",
-            RouteDecision {
-                model: "not-a-model".into(),
-                algorithm: None,
-                reason: "bad".into(),
-                confidence: 1.0,
-                layer: "agent".into(),
-                decision: "agent".into(),
-                bypass: false,
-                routing_latency_ms: None,
-                cache_response: false,
-                ..Default::default()
-            },
-        );
-        let app = data_router(st);
+        let overreach = || RouteDecision {
+            model: "not-a-model".into(),
+            algorithm: None,
+            reason: "bad".into(),
+            confidence: 1.0,
+            layer: "agent".into(),
+            decision: "agent".into(),
+            bypass: false,
+            routing_latency_ms: None,
+            cache_response: false,
+            ..Default::default()
+        };
         let body = json!({
             "model": "ariacompute/agent-auto",
             "messages": [{"role":"user","content":"hi"}]
         });
-        let res = app
+
+        // Spec §3.4: overreach degrades to the recipe fallback when one is set.
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        st.set_fake_agent("builtin", overreach());
+        let res = data_router(st)
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get("x-aria-router-layer").unwrap(),
+            "agent-fallback"
+        );
+        assert_eq!(
+            res.headers().get("x-aria-router-model").unwrap(),
+            "local/general"
+        );
+
+        // Without a fallback the same overreach fails closed (403).
+        let no_fallback = tiny_yaml(&backend).replace("      fallback: local/general\n", "");
+        let doc = RouterDocument::from_yaml_str(&no_fallback).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        st.set_fake_agent("builtin", overreach());
+        let res = data_router(st)
             .oneshot(
                 Request::post("/v1/chat/completions")
                     .header("content-type", "application/json")
@@ -6358,11 +6470,138 @@ global:
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{v}");
-        let (_, _, cost) = call(&app, "GET", "/v1/router/cost?n=5", None, &[]).await;
+        // Management routes are session-gated: no cookie → 401, cookie → data.
+        let (status, _, v) = call(&app, "GET", "/v1/router/cost?n=5", None, &[]).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{v}");
+        let (status, _, cost) = call(
+            &app,
+            "GET",
+            "/v1/router/cost?n=5",
+            None,
+            &[("cookie", cookie.as_str())],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{cost}");
         let recent = cost["recent"].as_array().unwrap();
         assert!(!recent.is_empty());
         assert_eq!(recent[0]["identity"], "local_user");
         assert_eq!(recent[0]["user"], "admin");
+    }
+
+    #[tokio::test]
+    async fn mgmt_api_requires_a_session_once_users_exist() {
+        let backend = mock_upstream().await;
+        let (st, _dir) = state_with_users(&backend);
+        let app = mgmt_router(st.clone());
+        let cookie = session_cookie(&st, "admin");
+
+        // Public surface stays reachable without a session.
+        for (method, uri) in [
+            ("GET", "/health"),
+            ("GET", "/v1/router/version"),
+            ("GET", "/v1/router/auth/register-status"),
+        ] {
+            let (status, _, v) = call(&app, method, uri, None, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{uri}: {v}");
+        }
+
+        // Every other management route is session-gated (spec §3.5).
+        for (method, uri) in [
+            ("GET", "/v1/router/overview"),
+            ("GET", "/v1/router/config"),
+            ("PUT", "/v1/router/config"),
+            ("GET", "/v1/router/cost"),
+            ("GET", "/v1/router/cost/by-competence"),
+            ("GET", "/v1/router/cost/model-performance"),
+            ("GET", "/v1/router/topology"),
+            ("GET", "/v1/router/models"),
+            ("POST", "/v1/router/validate"),
+            ("GET", "/v1/router/replay"),
+            ("GET", "/v1/router/trust"),
+            ("GET", "/v1/router/quota"),
+            ("GET", "/v1/router/providers"),
+            ("GET", "/v1/router/users"),
+            ("GET", "/v1/router/keys"),
+            ("POST", "/v1/router/chat"),
+        ] {
+            let (status, _, v) = call(&app, method, uri, None, &[]).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri}: {v}");
+        }
+
+        // With the session cookie the same routes answer.
+        for uri in ["/v1/router/overview", "/v1/router/cost"] {
+            let (status, _, v) = call(&app, "GET", uri, None, &[("cookie", cookie.as_str())]).await;
+            assert_eq!(status, StatusCode::OK, "{uri}: {v}");
+        }
+
+        // No local users yet → first-run setup stays open.
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (anon, _dir2) = isolated_state(doc);
+        let (status, _, v) =
+            call(&mgmt_router(anon), "GET", "/v1/router/overview", None, &[]).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+    }
+
+    #[tokio::test]
+    async fn semantic_confidence_header_reflects_selection() {
+        let backend = mock_upstream().await;
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml(&backend)).unwrap();
+        let (st, _dir) = isolated_state(doc);
+        let app = data_router(st);
+        let chat = |content: &str| {
+            json!({
+                "model": "ariacompute/semantic-auto",
+                "messages": [{"role": "user", "content": content}]
+            })
+        };
+
+        // A keyword decision reports the signal confidence (1.0), not a constant.
+        let (status, headers, v) = call(
+            &app,
+            "POST",
+            "/v1/chat/completions",
+            Some(chat("please explain")),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert_eq!(headers["x-aria-router-decision"], "explanatory");
+        assert_eq!(headers["x-aria-router-confidence"], "1.0000");
+
+        // No decision matched → default_model path has no evidence → 0.0.
+        let (status, headers, v) =
+            call(&app, "POST", "/v1/chat/completions", Some(chat("hi")), &[]).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert_eq!(headers["x-aria-router-decision"], "default");
+        assert_eq!(headers["x-aria-router-confidence"], "0.0000");
+    }
+
+    #[test]
+    fn elo_feedback_tracks_success_and_failure_with_real_peers() {
+        let doc = RouterDocument::from_yaml_str(
+            r#"
+version: v0.3
+providers:
+  defaults: {default_model: local/general}
+  models:
+    - name: local/general
+      backend_refs: [{name: primary, endpoint: 127.0.0.1:9}]
+    - name: local/fast
+      backend_refs: [{name: primary, endpoint: 127.0.0.1:8}]
+entrypoints: []
+recipes: []
+"#,
+        )
+        .unwrap();
+        let elo = global_elo();
+        elo.set("local/general", 1000.0);
+        elo.set("local/fast", 1000.0);
+        // Fast success with a real peer set moves the rating off the tie.
+        observe_elo(&doc, "local/general", 5.0, true);
+        assert!(elo.rating("local/general") > 1000.0);
+        // Failures always demote, peers or not.
+        observe_elo(&doc, "local/fast", 5.0, false);
+        assert!((elo.rating("local/fast") - 988.0).abs() < 1e-3);
     }
 
     #[tokio::test]
@@ -6673,11 +6912,17 @@ global:
     }
 
     fn text_req(model: &str) -> ChatRequest {
+        text_req_with(model, "route this")
+    }
+
+    /// Variant with an explicit utterance, for tests that must not share the
+    /// process-wide AFM-D System One decision cache with other tests.
+    fn text_req_with(model: &str, content: &str) -> ChatRequest {
         ChatRequest {
             model: model.into(),
             messages: vec![aria_router_core::ChatMessage {
                 role: "user".into(),
-                content: json!("route this"),
+                content: json!(content),
             }],
             stream: false,
             max_tokens: None,
@@ -6735,10 +6980,18 @@ global:
 "#
         );
         let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&yaml).unwrap());
-        let (d, fwd, _, _) =
-            route_request(&st, text_req("ariacompute/afm-d-auto"), &HashMap::new())
-                .await
-                .unwrap();
+        // Unique utterances: the AFM-D System One cache is process-wide, so a
+        // shared prompt would let the first half seed the second one.
+        let (d, fwd, _, _) = route_request(
+            &st,
+            text_req_with(
+                "ariacompute/afm-d-auto",
+                "afm-d ineligible choice with fallback",
+            ),
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(d.model, "local/general");
         assert!(d.reason.contains("fallback:local/general"), "{}", d.reason);
         assert_eq!(fwd.model, "local/general");
@@ -6746,9 +6999,16 @@ global:
         // Without a fallback the same choice fails closed.
         let yaml_no_fb = yaml.replace("      fallback: local/general\n", "");
         let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&yaml_no_fb).unwrap());
-        let err = route_request(&st, text_req("ariacompute/afm-d-auto"), &HashMap::new())
-            .await
-            .unwrap_err();
+        let err = route_request(
+            &st,
+            text_req_with(
+                "ariacompute/afm-d-auto",
+                "afm-d ineligible choice without fallback",
+            ),
+            &HashMap::new(),
+        )
+        .await
+        .unwrap_err();
         assert!(
             err.to_string().contains("not in eligible pool"),
             "expected fail-closed, got {err}"
@@ -6806,8 +7066,24 @@ global:
         assert_eq!(d.layer, "agent");
         assert_eq!(fwd.model, "local/general");
 
-        // A model outside the eligible pool is refused by the agent runtime.
+        // A model outside the eligible pool is refused by the agent runtime, which
+        // now degrades to the recipe `fallback` (spec §3.4, aligned with AFM-D).
         let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&yaml).unwrap());
+        st.set_fake_agent("builtin", RouteDecision::bypass("ghost/model"));
+        let (d, fwd, _, _) =
+            route_request(&st, text_req("ariacompute/agent-auto"), &HashMap::new())
+                .await
+                .unwrap();
+        assert_eq!(d.model, "local/general");
+        assert_eq!(d.layer, "agent-fallback");
+        assert_eq!(d.decision, "fallback");
+        assert!(d.reason.contains("not in eligible pool"), "{}", d.reason);
+        assert!(d.bypass);
+        assert_eq!(fwd.model, "local/general");
+
+        // Without a recipe fallback the same overreach fails closed.
+        let no_fallback = yaml.replace("      fallback: local/general\n", "");
+        let (st, _d) = isolated_state(RouterDocument::from_yaml_str(&no_fallback).unwrap());
         st.set_fake_agent("builtin", RouteDecision::bypass("ghost/model"));
         let err = route_request(&st, text_req("ariacompute/agent-auto"), &HashMap::new())
             .await

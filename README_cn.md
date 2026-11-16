@@ -60,7 +60,7 @@
 aria-router 为 OpenAI 兼容网关回答一个问题：*这条请求该由哪个模型回答，又受哪些约束？* 答案绝不是写死的单一目标。入口名映射到三条决策路径之一；硬约束在排名之前剪枝；任何落选路径都回落到失败关闭的决策。
 
 - 🔀 **三种并列决策器** —— `semantic`（信号→决策）、`agent`（进程内 builtin 工具循环）、`afm-d`（System One Choice）。一次请求不会串跑其中多种。
-- 🔒 **排名前先硬约束剪枝** —— location / auth / modality / tools 先剪枝；Compute 只进排名；无合格路径 → fail closed。
+- 🔒 **排名前先硬约束剪枝** —— locality / modality 先剪枝（authz 是软语义信号，tools 由 agent 决策器在提交时校验，不是剪枝维度）；Compute 只进排名；无合格路径 → fail closed。
 - 🧠 **AFM-D System One Choice** —— 模糊请求打到 `POST {endpoint}/v1/systemone`（aria-engine）；低分保护与失败关闭回落保证决策安全。
 - 🪶 **轻量 builtin agent** —— 进程内固定工具 + 有限 `max_turns`，`submit_route` → 类型化 `RouteDecision`；无 subprocess harness。
 - 🔌 **OpenAI 兼容 HTTP** —— 数据面（`/v1/chat/completions`、`/v1/models`）+ 管理面（health、validate、replay、providers、topology、playground、dashboard）。
@@ -418,7 +418,7 @@ curl -s http://127.0.0.1:8899/v1/chat/completions \
   -d '{"model":"local/general","messages":[{"role":"user","content":"Hi"}],"max_tokens":16}'
 ```
 
-硬约束（location / auth / modality / tools）在排名 **之前** 剪枝。Compute 只进排名。无合格路径 → fail closed。
+硬约束（locality / modality）在排名 **之前** 剪枝；`authz` 是软语义信号，tools 由 agent 决策器在提交时校验。Compute 只进排名。无合格路径 → fail closed。
 
 <div align="right">
 
@@ -475,7 +475,7 @@ IMPECCABLE_BROWSER=/usr/bin/google-chrome ./scripts/audit-ui.sh --url
 
 ## 🧭 三种决策器
 
-每个入口名精确映射到一种决策器；一次请求不会串跑多种。硬约束（location / auth / modality / tools）在排名 **之前** 剪枝，任何通过排名的合格路径都会产出类型化的 `RouteDecision`。无合格路径时，网关失败关闭。
+每个入口名精确映射到一种决策器；一次请求不会串跑多种。硬约束（locality / modality）在排名 **之前** 剪枝，任何通过排名的合格路径都会产出类型化的 `RouteDecision`。无合格路径时，网关失败关闭。
 
 | 决策器 | Recipe 块 | 行为 |
 |--------|-----------|------|
@@ -663,7 +663,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             json!({"model": "ariacompute/semantic-auto"}),
         )?
     );
-    println!("{}", r.last_route());
+    println!("{}", r.last_route()?);
 
     // 或连接已运行的 serve（开启 require_api_key 时需 token）：
     r.connect("http://127.0.0.1:8899");
@@ -1183,11 +1183,11 @@ python -m bench build-routing-eval
 | OpenAI 兼容 HTTP 网关（服务端） | ✅ | ❌ | ❌ |
 | 三种并列决策器（semantic / agent / afm-d） | ✅ | ❌ | ❌ |
 | 语义路由（信号 → 决策） | ✅ | ✅ | ✅ |
-| 硬约束剪枝（location/auth/modality/tools，决策前） | ✅ | ❌ | ❌ |
+| 硬约束剪枝（locality/modality，决策前） | ✅ | ❌ | ❌ |
 | 能力感知降级（competence-aware 经济降档） | ✅ | ✅ | ❌ |
-| 有界故障转移 / fail closed（不静默改行为） | ✅ | ✅ | ❌ |
-| 执行证据留存（任务/模型/工具/输出/能力 结构化证据链） | ✅ | ✅ | ❌ |
-| 长周期 Agent 编排 / 委托 | ✅ | ✅ | ❌ |
+| 默认 fail closed；有界故障转移需显式开启（`backend_failover.enabled`） | ✅ | ✅ | ❌ |
+| 执行证据留存（进程内：任务/模型/工具/能力 + 成本事件） | ✅ | ✅ | ❌ |
+| 有界 Agent tool-loop（builtin，`max_turns`）+ 可选委托端点 | ✅ | ✅ | ❌ |
 | 决策模型扩展 API（外置决策服务） | ✅ | ✅ | ❌ |
 | 多租户 / 鉴权 / 计费（API key·OAuth·Users·六因子成本） | ✅ | ❌ | ❌ |
 | 成本·能力可观测（按 tier 成本归因 + Dashboard） | ✅ | △ | ❌ |
@@ -1199,7 +1199,9 @@ python -m bench build-routing-eval
 
 图例：✅ 完整支持 · △ 部分/受限 · ❌ 不支持。
 
-**结论**：Router 在保持「硬约束 + fail closed + 三决策器隔离」的前提下，补齐了 HiRoute 的 competence-aware 软降级、结构化执行证据、可插拔决策扩展与长周期委托，并以生产级 OpenAI 兼容网关 + 多租户计费 + C ABI / 八语言 SDK 的组合，覆盖 vLLM SR 之外的服务端全栈需求。
+注：硬约束剪枝只覆盖 locality 与 modality —— `authz` 是软语义信号，`tools` 不是剪枝维度。`backend_failover` 需显式开启（`global.services.backend_failover.enabled`，默认 `false`），默认路径为 fail closed。
+
+**结论**：Router 在保持「硬约束 + fail closed + 三决策器隔离」的前提下，补齐了 HiRoute 的 competence-aware 软降级、结构化执行证据、可插拔决策扩展与有界 agent tool-loop，并以生产级 OpenAI 兼容网关 + 多租户计费 + C ABI / 八语言 SDK 的组合，覆盖 vLLM SR 之外的服务端全栈需求。三种决策器（semantic / agent / afm-d）并列，entrypoint 每次请求只选其一。
 
 <div align="right">
 

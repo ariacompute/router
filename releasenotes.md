@@ -2,8 +2,10 @@
 
 These notes cover the `T90–T99` feature set (C1–C9 / U1) implemented in this
 release. The runtime contract (hard-constraint pruning + fail-closed + the
-three-router-isolation of semantic / agent / afm-d) is unchanged; all additions
-below are opt-in and never bypass it.
+three-router-isolation of semantic / agent / afm-d) is unchanged. Additions are
+opt-in unless noted; the only default-on switches are the re-decision boundary
+tracker (`global.services.redecision`) and the weighted `backend_refs` spread,
+both of which can be turned off explicitly.
 
 ## Added
 
@@ -13,7 +15,11 @@ below are opt-in and never bypass it.
   (`unknown`) fails closed instead of reusing a frozen decision. The chosen
   boundary is observable on every response via the new
   `x-aria-router-redecision` header. Configurable under
-  `global.services.redecision` (off by default).
+  `global.services.redecision` (`enabled` defaults to `true`; set
+  `enabled: false` to fall back to the pre-C1 behaviour).
+- **Bounded backend failover is opt-in (C8)** — `global.services.backend_failover`
+  defaults to `enabled: false`, so the default path is fail closed; set
+  `enabled: true` (with `max_attempts`) to retry weight-ordered backends.
 - **afm-d three-question template (C2)** — `afm-d.question_template:
   single|three`. With `three`, stage-competence / difficulty / continuation are
   asked alongside `route` and normalised into one typed `RouteDecision`; a

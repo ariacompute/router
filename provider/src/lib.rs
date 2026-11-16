@@ -17,6 +17,9 @@ pub struct PoolState {
     pub client: reqwest::Client,
     pub latency_ms: Mutex<HashMap<String, f32>>,
     pub failures: Mutex<HashMap<String, u32>>,
+    /// Monotonic per-model counter driving weighted backend spread. Deterministic
+    /// (no RNG) so parallel tests stay reproducible.
+    backend_seq: Mutex<HashMap<String, u64>>,
 }
 
 impl Default for PoolState {
@@ -30,6 +33,7 @@ impl Default for PoolState {
             client,
             latency_ms: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
+            backend_seq: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -74,21 +78,65 @@ impl PoolState {
     pub fn failures_map(&self) -> HashMap<String, u32> {
         self.failures.lock().map(|g| g.clone()).unwrap_or_default()
     }
+
+    /// Next weighted-selection slot for `model` (wraps in the caller).
+    pub fn next_backend_slot(&self, model: &str) -> u64 {
+        let mut g = self
+            .backend_seq
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let slot = g.entry(model.to_string()).or_insert(0);
+        let current = *slot;
+        *slot = current.wrapping_add(1);
+        current
+    }
 }
 
-/// Ordered backend candidate chain (C8). With failover disabled the historical
-/// single highest-weight backend is used; when enabled, candidates are sorted
-/// by weight (descending, stable) and truncated to `max_attempts`.
+/// Backends ordered by weight (descending, stable) — the failover chain order.
+fn ordered_backends(p: &ProviderModel) -> Vec<&BackendRef> {
+    let mut refs: Vec<&BackendRef> = p.backend_refs.iter().collect();
+    refs.sort_by_key(|b| std::cmp::Reverse(b.weight));
+    refs
+}
+
+/// Deterministic weighted pick: `slot` modulo the total weight, walked over the
+/// weight-ordered backends. The long-run share equals the weight share and slot 0
+/// always lands on the highest-weight backend.
+fn weighted_index(refs: &[&BackendRef], slot: u64) -> usize {
+    let total: u64 = refs.iter().map(|b| u64::from(b.weight)).sum();
+    if total == 0 {
+        // All weights zero: keep the historical "first declared backend" pick.
+        return 0;
+    }
+    let slot = slot % total;
+    // `slot < total` guarantees a hit, so the fallback is unreachable in practice
+    // but keeps the function total without a dead statement.
+    refs.iter()
+        .map(|b| u64::from(b.weight))
+        .scan(0u64, |acc, w| {
+            *acc += w;
+            Some(*acc)
+        })
+        .position(|acc| slot < acc)
+        .unwrap_or(0)
+}
+
+/// Ordered backend candidate chain (C8) for one request.
+///
+/// With failover disabled only the weighted pick is used; when enabled the chain
+/// starts at the weighted pick and then degrades in weight order, truncated to
+/// `max_attempts`.
 fn backend_candidates<'a>(
     doc: &'a RouterDocument,
     model: &str,
+    slot: u64,
 ) -> Result<Vec<&'a BackendRef>, RouterError> {
     let provider = doc
         .provider(model)
         .ok_or_else(|| RouterError::FailClosed(format!("unknown provider model {model}")))?;
     let cfg = &doc.global.services.backend_failover;
     if !cfg.enabled {
-        return Ok(vec![pick_backend(provider)?]);
+        return Ok(vec![pick_backend(provider, slot)?]);
     }
     if provider.backend_refs.is_empty() {
         return Err(RouterError::Config(format!(
@@ -96,10 +144,12 @@ fn backend_candidates<'a>(
             provider.name
         )));
     }
-    let mut refs: Vec<&BackendRef> = provider.backend_refs.iter().collect();
-    refs.sort_by_key(|b| std::cmp::Reverse(b.weight));
-    refs.truncate(cfg.max_attempts.max(1) as usize);
-    Ok(refs)
+    let refs = ordered_backends(provider);
+    let first = weighted_index(&refs, slot);
+    let mut chain: Vec<&BackendRef> = refs[first..].to_vec();
+    chain.extend(refs[..first].iter().copied());
+    chain.truncate(cfg.max_attempts.max(1) as usize);
+    Ok(chain)
 }
 
 /// Join all candidate failures without leaking keys or request bodies.
@@ -137,7 +187,7 @@ async fn forward_once(
     backend: &BackendRef,
     extra_headers: &[(String, String)],
 ) -> Result<Value, RouterError> {
-    let url = format!("{}/v1/chat/completions", backend.url());
+    let url = format!("{}/v1/chat/completions", backend.url()?);
     let builder = request_builder(pool, &url, body, backend, extra_headers);
     let t0 = Instant::now();
     let resp = builder.send().await.map_err(|e| {
@@ -172,7 +222,7 @@ pub async fn forward(
     let provider = doc
         .provider(model)
         .ok_or_else(|| RouterError::FailClosed(format!("unknown provider model {model}")))?;
-    let candidates = backend_candidates(doc, model)?;
+    let candidates = backend_candidates(doc, model, pool.next_backend_slot(model))?;
     let mut body =
         serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
     let upstream_model = if provider.provider_model_id.is_empty() {
@@ -223,7 +273,7 @@ async fn open_sse_once(
     backend: &BackendRef,
     extra_headers: &[(String, String)],
 ) -> Result<SseByteStream, RouterError> {
-    let url = format!("{}/v1/chat/completions", backend.url());
+    let url = format!("{}/v1/chat/completions", backend.url()?);
     let builder = request_builder(pool, &url, body, backend, extra_headers);
     let t0 = Instant::now();
     let resp = builder.send().await.map_err(|e| {
@@ -268,7 +318,7 @@ pub async fn forward_sse_stream(
     let provider = doc
         .provider(model)
         .ok_or_else(|| RouterError::FailClosed(format!("unknown provider model {model}")))?;
-    let candidates = backend_candidates(doc, model)?;
+    let candidates = backend_candidates(doc, model, pool.next_backend_slot(model))?;
     let mut body =
         serde_json::to_value(req).map_err(|e| RouterError::InvalidParam(e.to_string()))?;
     let upstream_model = if provider.provider_model_id.is_empty() {
@@ -347,11 +397,21 @@ impl Stream for SseByteStream {
     }
 }
 
-fn pick_backend(p: &ProviderModel) -> Result<&aria_router_config::BackendRef, RouterError> {
-    p.backend_refs
-        .iter()
-        .max_by_key(|b| b.weight)
-        .ok_or_else(|| RouterError::Config(format!("model {} has no backend_refs", p.name)))
+/// Weighted backend pick for `slot` (see [`weighted_index`]). Slot 0 keeps the
+/// historical "highest weight wins" behaviour for the first request.
+fn pick_backend(
+    p: &ProviderModel,
+    slot: u64,
+) -> Result<&aria_router_config::BackendRef, RouterError> {
+    if p.backend_refs.is_empty() {
+        return Err(RouterError::Config(format!(
+            "model {} has no backend_refs",
+            p.name
+        )));
+    }
+    let refs = ordered_backends(p);
+    let idx = weighted_index(&refs, slot);
+    Ok(refs[idx])
 }
 
 pub fn backend_api_key(b: &aria_router_config::BackendRef) -> Option<String> {
@@ -528,26 +588,36 @@ global:
       enabled: true
 "#;
         let doc = RouterDocument::from_yaml_str(raw).unwrap();
-        let err = backend_candidates(&doc, "m").unwrap_err();
+        let err = backend_candidates(&doc, "m", 0).unwrap_err();
         assert!(err.to_string().contains("has no backend_refs"), "{err}");
+        // The weighted pick fails the same way when failover is off.
+        let p = doc.provider("m").unwrap();
+        assert!(matches!(pick_backend(p, 0), Err(RouterError::Config(_))));
     }
 
     #[test]
     fn backend_candidates_are_ordered_by_weight_and_capped() {
         let single = doc_with_backend("127.0.0.1:9");
-        assert_eq!(backend_candidates(&single, "m").unwrap().len(), 1);
-        assert_eq!(backend_candidates(&single, "m").unwrap()[0].name, "high");
+        assert_eq!(backend_candidates(&single, "m", 0).unwrap().len(), 1);
+        assert_eq!(backend_candidates(&single, "m", 0).unwrap()[0].name, "high");
         let chained = failover_doc("127.0.0.1:9", "127.0.0.1:8", true, 2);
-        let names: Vec<&str> = backend_candidates(&chained, "m")
+        let names: Vec<&str> = backend_candidates(&chained, "m", 0)
             .unwrap()
             .iter()
             .map(|b| b.name.as_str())
             .collect();
         assert_eq!(names, vec!["primary", "secondary"]);
+        // A slot inside the secondary share leads the chain, then wraps.
+        let rotated: Vec<&str> = backend_candidates(&chained, "m", 10)
+            .unwrap()
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect();
+        assert_eq!(rotated, vec!["secondary", "primary"]);
         let capped = failover_doc("127.0.0.1:9", "127.0.0.1:8", true, 1);
-        assert_eq!(backend_candidates(&capped, "m").unwrap().len(), 1);
+        assert_eq!(backend_candidates(&capped, "m", 0).unwrap().len(), 1);
         assert!(matches!(
-            backend_candidates(&chained, "unknown"),
+            backend_candidates(&chained, "unknown", 0),
             Err(RouterError::FailClosed(_))
         ));
         let exhausted = candidates_exhausted(
@@ -641,7 +711,67 @@ global:
     fn pick_backend_prefers_highest_weight() {
         let doc = doc_with_backend("127.0.0.1:9");
         let p = doc.provider("m").unwrap();
-        assert_eq!(pick_backend(p).unwrap().name, "high");
+        assert_eq!(pick_backend(p, 0).unwrap().name, "high");
+    }
+
+    #[test]
+    fn weighted_backend_spread_matches_weights() {
+        // weights: high=5, low=1 → five "high" then one "low", repeating.
+        let doc = doc_with_backend("127.0.0.1:9");
+        let p = doc.provider("m").unwrap();
+        let picks: Vec<&str> = (0..12)
+            .map(|slot| pick_backend(p, slot).unwrap().name.as_str())
+            .collect();
+        assert_eq!(
+            picks,
+            vec![
+                "high", "high", "high", "high", "high", "low", "high", "high", "high", "high",
+                "high", "low"
+            ]
+        );
+
+        // All-zero weights degrade to the first declared backend.
+        let zero = RouterDocument::from_yaml_str(
+            r#"
+version: v0.3
+providers:
+  defaults: {default_model: m}
+  models:
+    - name: m
+      backend_refs:
+        - {name: a, endpoint: 127.0.0.1:1, weight: 0}
+        - {name: b, endpoint: 127.0.0.1:2, weight: 0}
+entrypoints: []
+recipes: []
+"#,
+        )
+        .unwrap();
+        let p = zero.provider("m").unwrap();
+        assert_eq!(pick_backend(p, 7).unwrap().name, "a");
+    }
+
+    #[test]
+    fn pool_backend_slot_is_per_model_and_monotonic() {
+        let pool = PoolState::default();
+        assert_eq!(pool.next_backend_slot("m"), 0);
+        assert_eq!(pool.next_backend_slot("m"), 1);
+        assert_eq!(pool.next_backend_slot("other"), 0);
+        assert_eq!(pool.next_backend_slot("m"), 2);
+    }
+
+    #[tokio::test]
+    async fn unsupported_backend_protocol_is_reported() {
+        let doc = doc_with_backend("127.0.0.1:9");
+        let mut backend = doc.provider("m").unwrap().backend_refs[0].clone();
+        backend.endpoint = "127.0.0.1:9".into();
+        backend.protocol = "grpc".into();
+        let pool = PoolState::default();
+        let req = chat_req();
+        let body = serde_json::to_value(&req).unwrap();
+        let err = forward_once(&pool, "m", &body, &backend, &[])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
     }
 
     fn backend_with(extra: &str) -> aria_router_config::BackendRef {

@@ -20,7 +20,6 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-authors = ["Aria Compute"]
 
 [workspace.dependencies]
 aria-router-core = { path = "core", version = "0.1.0" }
@@ -45,7 +44,6 @@ http-body-util = "0.1"
 bytes = "1"
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-async-trait = "0.1"
 regex = "1"
 libc = "0.2"
 sha2 = "0.10"

@@ -53,7 +53,7 @@
 | 7 | **bindings** | rust/python/go/typescript/react-native/flutter/swift/kotlin |
 | 8 | **dashboard** | 管理面同端口 SPA（`dashboard/`）；`--no-dashboard` 仅 JSON API；Cost / API 密钥页 |
 | 9 | **cost** | 内存六因子账本；`GET /v1/router/cost`；按 model/layer/entrypoint/key/`local_user`/`serve_user` 分桶 |
-| 10 | **api-keys** | Dashboard 签发 `sk-aria_`（`owner_user_id`）；`keys_path` 只存 sha256；数据面与 `PUT /providers` Bearer；`require_api_key` |
+| 10 | **api-keys** | Dashboard 签发 `sk-aria_`（`owner_user_id`，`keys_path` 只存 sha256）；serve 同步的 `sk-bf-` 需明文存 `api_key` 才能作为 Bearer 回放（见 §3.5）；数据面与 `PUT /providers` Bearer；`require_api_key` |
 | 11 | **local-users** | `users_path` argon2；Register/Login session；`allow_register`；admin 管用户 |
 | 12 | **oauth-account** | OAuth 为 `router-keys.json` 中 `kind: oauth` 条目；关联 ariacompute.com/cn；`sk-bf-` 存储/展示（Dashboard Account） |
 | 13 | **stateful** | decision `emits`/`retention`；session sticky model（`x-aria-session` / body `session`） |
@@ -273,7 +273,7 @@ emits:
 - OAuth（公开登录）：`POST /v1/router/auth/oauth/start`（返回 serve authorize_url）→ `GET /v1/router/auth/oauth/callback`（换 code、upsert 绑定 serve 用户并签发本地会话；回跳仅 `127.0.0.1|localhost` loopback）。遗留 `/v1/router/serve/link/*` mgmt 端点与回调已删除；serve 账户（会话）：`GET /v1/router/serve/account`；`POST /v1/router/serve/account/sync` 自动从 serve 同步 `sk-bf-` 明文（serve `GET /api/api-keys` 现返回 secret，router 轮询写入 `kind:oauth` 记录的 `api_key`；新增 key 自动采用、401/403 或空列表 → 标记 `api_key_deleted`）。**手动粘贴入口 `POST /v1/router/serve/account/key` 已删除**——dashboard Account 页不再提供粘贴框，纯自动同步。
 - `GET /` 与 SPA fallback → `dashboard/dist`
 
-管理面默认只绑 `127.0.0.1`。本地密钥明文只在 POST 响应出现一次；`keys_path` 只存 sha256；密码 argon2id。
+管理面默认只绑 `127.0.0.1`。本地密钥（`sk-aria_`）明文只在 POST 响应出现一次，`keys_path` 只存 sha256；OAuth 条目（`sk-bf-`）由 serve 同步，须明文持有才能作为 Bearer 回放，属唯一例外。密码 argon2id。
 
 CLI 子命令：`setup` / `validate` / `serve` / `upgrade [version]` / `version`。CLI help 由 **clap** derive 生成（对齐 memo：`about` / `Usage` / `Commands` / `Options`；支持 `aria-router <cmd> --help`）。无参调用打印 help 并 exit **2**；`-v` / `--version` / 子命令 `version` 打印版本。
 
@@ -507,23 +507,23 @@ python -m bench routing \
 
 ## 7. HiRoute 对标候选需求（候选 · 待人工审核 · 未排期 · 不进入实施）
 
-> **状态声明（勿略过）**：本章是 [`docs/hiroute-vs-aria-router.md`](docs/hiroute-vs-aria-router.md) 差距分析的产物，**仅为候选输入**。
+> **状态声明（勿略过）**：本章是 HiRoute 公开资料（见 §7.1）差距分析的产物，**仅为候选输入**；原 `docs/hiroute-vs-aria-router.md` 已随仓库整理移除，其结论并入 §7.1–§7.4。
 > 依本文件开头「须经人工逐项审核，审核通过后方可据其生成 / 执行 `task.md`」与 `AGENTS.md` 的 Harness 约定：
 >
 > - 本章**未经人审**，不构成实施依据；`task.md` 不得据此生成待办任务或排期；
 > - 编号用 `C1–C9`（Candidate），**不占用、不重排** T0–T89；
 > - 本章**不修改** §1 阶段表、§1.2 硬不变量、§2 功能边界、§2.1 非目标以及 §3–§6 的任何既有条款；
 > - 「现状依据」为 2026-11-04 的源码核实结果，可能与 README 既有三方对比表的结论式判定不同，见 §7.4；
-> - HiRoute 的准确率与成本数字均为其特定研究口径（事后复核子集、衡量策略符合度而非任务完成率、API 等价估算），见对比文档 §1.2，**一律不作为验收目标值**。
+> - HiRoute 的准确率与成本数字均为其特定研究口径（事后复核子集、衡量策略符合度而非任务完成率、API 等价估算），**一律不作为验收目标值**。
 
 ### 7.1 资料与编号
 
 | 项 | 内容 |
 |---|---|
 | 主线 | 微信文章《HIROUTE 新版本发布：结合自己的真实工作选择最佳模型》 |
-| 补齐 | HiRoute GitHub README、决策扩展 README、System One 论文与复现材料、智能模型路由指南、Code map（完整链接见对比文档 §8） |
-| 对照 | 对比文档 §3 矩阵 #1–#39、§4 差异解读、§5 独有优势、§6 可借鉴方向 |
-| 编号 | `C<n>` 在「对比文档 §6」「本章」「[`task.md`](task.md) 候选池」三处一一对应 |
+| 补齐 | HiRoute GitHub README、决策扩展 README、System One 论文与复现材料、智能模型路由指南、Code map（公开仓库/论文链接不在此重复） |
+| 对照 | 本章 §7.2 的 C1–C9 逐项差距与「现状依据」（原矩阵 #1–#39 已并入各条） |
+| 编号 | `C<n>` 在「本章 §7.2」「[`task.md`](task.md) 候选池」两处一一对应 |
 
 ### 7.2 候选条目
 
@@ -537,7 +537,7 @@ python -m bench routing \
 
 #### C2 — afm-d 三问题模板
 
-- **来源**：矩阵 #4、对比文档 §4.3；[W][D1] 三问（上一步胜任度 / 这一步难度 / 问题是否延续）。
+- **来源**：矩阵 #4；[W][D1] 三问（上一步胜任度 / 这一步难度 / 问题是否延续）。
 - **现状依据**：engine 契约 `questions: Map<String, Value>` 已允许多键（工作区同级 `engine` 仓 `core/src/systemone.rs:11-15`，非本仓路径），但 `afm_d/src/lib.rs:560-597` 只发 1 个 `route` choice；`decision_from_systemone()`（`599-646`）只解析 `/answers/route.choice`；`track` 不进请求体，tier 快捷键与 256 条 FIFO 缓存会跳过 System One。
 - **影响面**：`afm_d`（与 engine 契约对齐）；不改 C ABI。
 - **前置 / 风险**：§1.2「检测 ≠ 执行」「Agent / AFM-D 输出必须是 typed `RouteDecision`」——三问答案须归一为单个 `RouteDecision`，并明确 `confidence` / `min_confidence` 语义。
@@ -609,9 +609,19 @@ python -m bench routing \
 | C7 | §2.1「硬 quota（软限流 429 允许）」为非目标 | 是否调整非目标边界，或仅做「记账不拦截」的软额度 |
 | C8 | §1.2「无合格路径 fail closed」 | 按序重试与 fail closed 的边界 |
 
-### 7.4 文档口径一致性待办（非候选需求）
+### 7.4 文档口径一致性台账（非候选需求）
 
-[`docs/hiroute-vs-aria-router.md`](docs/hiroute-vs-aria-router.md) §7 登记了 `README.md` / `README_cn.md` 既有三方对比表中若干 ✅ 与源码状态不符的判定（硬约束剪枝范围、Bounded failover、执行证据留存链、长周期委托、Takeaway 的单向表述）。属**文档修订**，不入候选池、不在本章排期；本章按最小改动原则不修改 README 本身。
+原 `docs/hiroute-vs-aria-router.md` 已移除，其 §7 登记的口径问题在本节就地留档。下表为**已按源码核实并修正**的判定，不再是待办：
+
+| 项 | 原判定（README 对比表） | 源码状态 | 处置 |
+|---|---|---|---|
+| 硬约束剪枝范围 | `Hard-constraint pruning (location/auth/modality/tools)` ✅ | `algorithm/src/lib.rs::hard_filter` 只剪 locality 与 modality；`authz` 是软语义信号（`signal/src/lib.rs`），`tools` 不是剪枝维度 | 已改为 `locality/modality`，并注明 authz 属软信号 |
+| Bounded failover | `Bounded failover / fail closed` ✅ | `global.services.backend_failover.enabled` 默认 `false`，默认路径 fail closed；显式开启后才按 `max_attempts` 重试 | 已标注「需显式开启」 |
+| 执行证据留存链 | `Execution evidence retention (…)` ✅ | 留存为进程内 `last_route`/replay 记录 + 成本事件，无外部证据链导出 | 收紧为进程内留存，不宣称外部链路 |
+| 长周期委托 | `Long-horizon agent orchestration / delegation` ✅ | agent 决策器限于 `max_turns` 内的 builtin tool-loop；跨请求委托需显式 `decision_ext` 端点 | 收窄为 bounded tool-loop + 可选扩展端点 |
+| Takeaway 单向表述 | 「Router keeps its … contract」式单向总结 | 三种决策器并列、按 entrypoint 选择，不存在「主决策器」 | 已改为并列表述 |
+
+> 维护约定：README 新增 ✅ 前须先对照源码状态；口径不一致按本表格式登记，不另建对比文档。
 
 ### 7.5 人审检查项
 

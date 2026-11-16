@@ -31,22 +31,31 @@ impl SignalSet {
     }
 }
 
-const LEARNED: &[&str] = &[
-    "classifier",
-    "complexity",
-    "domain",
-    "embedding",
-    "fact-check",
-    "fact_check",
-    "jailbreak",
-    "kb",
-    "modality",
-    "pii",
-    "preference",
-    "reask",
-    "user-feedback",
-    "user_feedback",
-];
+/// Reject learned-signal assets this build cannot honour.
+///
+/// `weight_path` means ONNX weights, which are never loaded; ignoring it silently
+/// would violate the repo contract (`AGENTS.md`: unimplemented YAML capability →
+/// `Unsupported` at validate *and* runtime).
+fn reject_unsupported_assets(s: &Signals) -> Result<(), RouterError> {
+    for (key, val) in &s.extra {
+        if aria_router_config::canonical_learned(key).is_none() {
+            continue;
+        }
+        let items: Vec<&serde_json::Value> = match val {
+            serde_json::Value::Array(a) => a.iter().collect(),
+            serde_json::Value::Object(_) => vec![val],
+            _ => continue,
+        };
+        for item in items {
+            if item.get("weight_path").is_some_and(|v| !v.is_null()) {
+                return Err(RouterError::Unsupported(format!(
+                    "learned signal {key}: weight_path (ONNX weights) is not implemented"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 
 pub fn extract(
     doc: &RouterDocument,
@@ -58,8 +67,12 @@ pub fn extract(
         return Ok(SignalSet::default());
     };
     let needed = referenced(&routing.decisions);
+    reject_unsupported_assets(&routing.signals)?;
     #[cfg(not(feature = "ml"))]
-    if let Some(kind) = needed.iter().find(|k| LEARNED.contains(&k.as_str())) {
+    if let Some(kind) = needed
+        .iter()
+        .find(|k| aria_router_config::canonical_learned(k).is_some())
+    {
         return Err(RouterError::Unsupported(format!(
             "learned signal {kind} requires feature ml / weights"
         )));
@@ -110,23 +123,23 @@ fn eval_learned(
     needed: &[String],
     text: &str,
 ) -> Result<Vec<SignalHit>, RouterError> {
+    use aria_router_config::canonical_learned;
     let mut hits = vec![];
-    let catalog_dim = doc.global.model_catalog.values().find_map(|e| e.dim);
-    for kind in LEARNED {
-        if !needed
-            .iter()
-            .any(|k| k == kind || k.replace('_', "-") == *kind)
-        {
+    let fallback_dim = doc.global.model_catalog.values().find_map(|e| e.dim);
+    // Iterate the *referenced* families so the emitted `kind` is exactly the
+    // spelling used by the decision (plural keys included).
+    for kind in needed {
+        let Some(canon) = canonical_learned(kind) else {
             continue;
-        }
-        let Some(raw) = s.extra.get(*kind).or_else(|| {
-            // YAML plural keys (vLLM SR): embeddings, domains, …
-            let plural = format!("{kind}s");
-            s.extra.get(plural.as_str()).or_else(|| {
-                let alt = kind.replace('-', "_");
-                s.extra.get(alt.as_str())
-            })
-        }) else {
+        };
+        // The configured family may use any accepted alias (`embedding` /
+        // `embeddings`, `fact-check` / `fact_check`, …).
+        let Some(raw) = s
+            .extra
+            .iter()
+            .find(|(k, _)| canonical_learned(k) == Some(canon))
+            .map(|(_, v)| v)
+        else {
             continue;
         };
         let items: Vec<serde_json::Value> = if raw.is_array() {
@@ -145,8 +158,16 @@ fn eval_learned(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unnamed")
                 .to_string();
+            // `model: <catalog_key>` selects the catalogue dim for this signal;
+            // validate() guarantees the key resolves.
+            let catalog_dim = obj
+                .get("model")
+                .and_then(|v| v.as_str())
+                .and_then(|k| doc.global.model_catalog.get(k.trim()))
+                .and_then(|e| e.dim)
+                .or(fallback_dim);
             let dim = ml::dim_from(obj, catalog_dim);
-            let (matched, confidence) = if *kind == "embedding" || *kind == "embeddings" {
+            let (matched, confidence) = if canon == "embedding" {
                 let threshold = obj
                     .get("threshold")
                     .and_then(|v| v.as_f64())
@@ -168,9 +189,8 @@ fn eval_learned(
             } else {
                 ml::classify_match(text, obj, dim)
             };
-            let kind_norm = kind.replace('_', "-");
             hits.push(SignalHit {
-                kind: kind_norm,
+                kind: kind.clone(),
                 name,
                 matched,
                 confidence,
@@ -462,6 +482,223 @@ recipes:
         };
         let err = extract(&doc, recipe, &req, &HashMap::new()).unwrap_err();
         assert!(matches!(err, RouterError::Unsupported(_)));
+    }
+
+    /// Plural learned family referenced by a decision: the `ml`-off gate must
+    /// reject it instead of silently producing no hit (B6).
+    #[test]
+    #[cfg(not(feature = "ml"))]
+    fn learned_plural_referenced_is_unsupported() {
+        let raw = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/general
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      signals:
+        embeddings:
+          - name: intent
+            candidates: ["a"]
+      decisions:
+        - name: d
+          rules:
+            operator: AND
+            conditions:
+              - type: embeddings
+                name: intent
+          modelRefs: [{model: local/general}]
+"#;
+        let doc = RouterDocument::from_yaml_str(raw).unwrap();
+        let recipe = doc.recipe("mom").unwrap();
+        let err = extract(&doc, recipe, &req_with("hello"), &HashMap::new()).unwrap_err();
+        assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
+        assert!(err.to_string().contains("embeddings"), "{err}");
+    }
+
+    /// Plural conditions resolve to the plural signal family and keep the original
+    /// spelling on the hit so the condition still matches (B6).
+    #[test]
+    #[cfg(feature = "ml")]
+    fn learned_plural_condition_hits_with_referenced_kind() {
+        let raw = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/general
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+global:
+  model_catalog:
+    embed_hash:
+      dim: 16
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      signals:
+        embeddings:
+          - name: tech
+            model: embed_hash
+            threshold: 0.05
+            candidates: ["installation guide", "troubleshooting"]
+      decisions:
+        - name: d
+          rules:
+            operator: AND
+            conditions:
+              - type: embeddings
+                name: tech
+          modelRefs: [{model: local/general}]
+"#;
+        let doc = RouterDocument::from_yaml_str(raw).unwrap();
+        let recipe = doc.recipe("mom").unwrap();
+        let set = extract(
+            &doc,
+            recipe,
+            &req_with("need installation guide"),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(
+            set.matched("embeddings", "tech"),
+            "hit kind must keep the YAML spelling"
+        );
+        assert!(set.get("embeddings", "tech").is_some());
+    }
+
+    /// `weight_path` in a learned signal means ONNX weights this build never loads,
+    /// so the runtime gate must fail loudly even for documents built in memory (B5).
+    #[test]
+    fn learned_weight_path_is_unsupported_at_runtime() {
+        let raw = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/general
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      signals:
+        embeddings:
+          - name: intent
+      decisions:
+        - name: d
+          rules:
+            operator: AND
+            conditions:
+              - type: embedding
+                name: intent
+          modelRefs: [{model: local/general}]
+"#;
+        let with_extra = |key: &str, value: serde_json::Value| {
+            let mut doc = RouterDocument::from_yaml_str(raw).unwrap();
+            doc.recipes[0]
+                .routing
+                .as_mut()
+                .unwrap()
+                .signals
+                .extra
+                .insert(key.into(), value);
+            let recipe = doc.recipe("mom").unwrap();
+            extract(&doc, recipe, &req_with("hi"), &HashMap::new())
+        };
+
+        // Array and mapping forms both trip the guard.
+        for value in [
+            serde_json::json!([{"name": "intent", "weight_path": "/tmp/e.onnx"}]),
+            serde_json::json!({"name": "intent", "weight_path": "/tmp/e.onnx"}),
+        ] {
+            let err = with_extra("embeddings", value).unwrap_err();
+            assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
+            assert!(err.to_string().contains("weight_path"), "{err}");
+        }
+
+        // Non-learned keys, scalar values and non-object items are tolerated.
+        for (key, value) in [
+            ("custom", serde_json::json!([{"weight_path": "/tmp/x"}])),
+            ("embeddings", serde_json::json!(3)),
+            ("embeddings", serde_json::json!([3])),
+        ] {
+            let _ = with_extra(key, value);
+        }
+    }
+
+    /// `eval_learned` visits only referenced families and tolerates every declared
+    /// shape (array / mapping / scalar / missing / non-object items).
+    #[test]
+    #[cfg(feature = "ml")]
+    fn eval_learned_tolerates_mixed_and_missing_declarations() {
+        let raw = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/general
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      signals:
+        keywords:
+          - name: hi
+            keywords: [hello]
+        embeddings:
+          name: emb
+          threshold: 0.05
+          candidates: ["hello"]
+        jailbreaks: "1"
+        domains:
+          - 3
+          - name: d
+      decisions:
+        - name: d
+          rules:
+            operator: AND
+            conditions:
+              - type: keyword
+                name: hi
+              - type: embeddings
+                name: emb
+              - type: jailbreak
+                name: j
+              - type: domain
+                name: d
+              - type: reask
+                name: undeclared
+          modelRefs: [{model: local/general}]
+"#;
+        let doc = RouterDocument::from_yaml_str(raw).unwrap();
+        let recipe = doc.recipe("mom").unwrap();
+        let set = extract(&doc, recipe, &req_with("hello"), &HashMap::new()).unwrap();
+        assert!(set.matched("keyword", "hi"));
+        // Mapping form is processed.
+        assert!(set.get("embeddings", "emb").is_some());
+        // Scalar family and non-object array items are skipped.
+        assert!(set.get("jailbreak", "j").is_none());
+        assert!(set.get("domain", "d").is_some());
+        // Referenced but undeclared family produces nothing.
+        assert!(set.get("reask", "undeclared").is_none());
     }
 
     #[test]

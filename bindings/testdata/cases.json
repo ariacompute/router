@@ -18,7 +18,7 @@
     {"id": "last_route_headers", "intent": "Decision headers after complete", "assert": "last_route().headers contains whitelisted x-aria-router-* values (incl. redecision when emitted) and never authorization/cookies"},
     {"id": "connect_models_not_silent", "intent": "models() on a connected handle", "assert": "GET {base_url}/v1/models is proxied; failure returns an error instead of an empty list"},
     {"id": "connect_last_route_headers", "intent": "last_route() on a connected handle", "assert": "headers from the most recent complete are exposed; no stale headers after a failed request"},
-    {"id": "last_route_failure_not_silent", "intent": "last_route failure or uninitialized handle", "assert": "each binding raises/returns its language error instead of {}"},
+    {"id": "last_route_failure_not_silent", "intent": "last_route on an uninitialized / closed handle", "assert": "each binding raises/returns its language error (Rust: RouterError::InvalidParam) instead of {}"},
     {"id": "destroy_alias_all_bindings", "intent": "close/destroy lifecycle on all eight SDKs", "assert": "destroy is available; later calls fail closed"}
   ]
 }

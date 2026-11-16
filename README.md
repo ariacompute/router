@@ -60,7 +60,7 @@ aria-engine) — sharing providers, hard constraints, and forwarding.
 aria-router answers one question for an OpenAI-compatible gateway: *which model should answer this request, and under what constraints?* The answer is never a single hard-coded target. Entries map to one of three decision paths; hard constraints prune before ranking; and everything falls back to a fail-closed decision.
 
 - 🔀 **Three parallel routers** — `semantic` (signal → decision), `agent` (in-process builtin tool-loop), and `afm-d` (System One Choice). One request never runs more than one of them.
-- 🔒 **Hard constraints before ranking** — location / auth / modality / tool pruning runs first; compute is ranking-only; no eligible path → fail closed.
+- 🔒 **Hard constraints before ranking** — locality / modality pruning runs first (authorization is a soft semantic signal; tool eligibility is enforced inside the agent decisioner); compute is ranking-only; no eligible path → fail closed.
 - 🧠 **AFM-D System One Choice** — ambiguous requests reach `POST {endpoint}/v1/systemone` against aria-engine; low-score protection and a fail-closed fallback keep the decision safe.
 - 🪶 **Lightweight builtin agent** — fixed in-process tools + a bounded `max_turns`, `submit_route` → typed `RouteDecision`; no subprocess harness.
 - 🔌 **OpenAI-compatible HTTP** — a data plane (`/v1/chat/completions`, `/v1/models`) plus a management plane (health, validate, replay, providers, topology, playground, dashboard).
@@ -424,7 +424,7 @@ curl -s -X POST http://127.0.0.1:8090/v1/router/keys \
   -d '{"name":"ops"}' | jq .
 ```
 
-Hard constraints (location / auth / modality / tools) prune **before** ranking. Compute is ranking only. No eligible path → fail closed.
+Hard constraints (locality / modality) prune **before** ranking; `authz` is a soft semantic signal and tool eligibility is enforced inside the agent decisioner. Compute is ranking only. No eligible path → fail closed.
 
 <div align="right">
 
@@ -481,7 +481,7 @@ IMPECCABLE_BROWSER=/usr/bin/google-chrome ./scripts/audit-ui.sh --url
 
 ## 🧭 Three routers
 
-Every entrypoint maps to exactly one router; a single request never runs more than one. Hard constraints (location / auth / modality / tools) prune **before** ranking, and any eligible path that survives ranking produces a typed `RouteDecision`. When no path is eligible, the gateway fails closed.
+Every entrypoint maps to exactly one router; a single request never runs more than one. Hard constraints (locality / modality) prune **before** ranking, and any eligible path that survives ranking produces a typed `RouteDecision`. When no path is eligible, the gateway fails closed.
 
 | Router | Recipe block | What it does |
 |--------|--------------|--------------|
@@ -669,7 +669,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             json!({"model": "ariacompute/semantic-auto"}),
         )?
     );
-    println!("{}", r.last_route());
+    println!("{}", r.last_route()?);
 
     // Or attach to a running serve (needs token when require_api_key):
     r.connect("http://127.0.0.1:8899");
@@ -1189,11 +1189,11 @@ See [`bench/corpus/README.md`](bench/corpus/README.md) and [`bench/vllm-sr/`](be
 | OpenAI-compatible HTTP gateway (server-side) | ✅ | ❌ | ❌ |
 | Three parallel routers (semantic / agent / afm-d) | ✅ | ❌ | ❌ |
 | Semantic routing (signal → decision) | ✅ | ✅ | ✅ |
-| Hard-constraint pruning (location/auth/modality/tools, pre-rank) | ✅ | ❌ | ❌ |
+| Hard-constraint pruning (locality/modality, pre-rank) | ✅ | ❌ | ❌ |
 | Competence-aware downgrade (economic, capability-floored) | ✅ | ✅ | ❌ |
-| Bounded failover / fail closed (no silent degrade) | ✅ | ✅ | ❌ |
-| Execution evidence retention (task/model/tool/output/competence chain) | ✅ | ✅ | ❌ |
-| Long-horizon agent orchestration / delegation | ✅ | ✅ | ❌ |
+| Fail closed by default; bounded failover opt-in (`backend_failover.enabled`) | ✅ | ✅ | ❌ |
+| Execution evidence retention (in-process: task/model/tool/competence + cost events) | ✅ | ✅ | ❌ |
+| Bounded agent tool-loop (builtin, `max_turns`) + optional delegation endpoint | ✅ | ✅ | ❌ |
 | Pluggable decision-model extension API | ✅ | ✅ | ❌ |
 | Multi-tenant / auth / billing (API key · OAuth · Users · six-factor cost) | ✅ | ❌ | ❌ |
 | Cost & competence observability (tier-attributed cost + dashboard) | ✅ | △ | ❌ |
@@ -1205,7 +1205,9 @@ See [`bench/corpus/README.md`](bench/corpus/README.md) and [`bench/vllm-sr/`](be
 
 Legend: ✅ full support · △ partial / limited · ❌ not supported.
 
-**Takeaway**: Router keeps its hard-constraint + fail-closed + three-router-isolation contract while adopting HiRoute's competence-aware soft downgrade, structured execution evidence, pluggable decision extension, and long-horizon delegation — and wraps them in a production-grade OpenAI-compatible gateway with multi-tenant billing and a C ABI / eight-language SDK, covering the full server-side stack beyond vLLM SR's semantic layer.
+Notes: hard-constraint pruning covers locality and modality only — `authz` is a soft semantic signal and `tools` is not a pruning dimension. `backend_failover` is opt-in (`global.services.backend_failover.enabled`, default `false`); the default path is fail closed.
+
+**Takeaway**: Router keeps its hard-constraint + fail-closed + three-router-isolation contract while adopting HiRoute's competence-aware soft downgrade, structured execution evidence, a pluggable decision extension and a bounded agent tool-loop — and wraps them in a production-grade OpenAI-compatible gateway with multi-tenant billing and a C ABI / eight-language SDK, covering the full server-side stack beyond vLLM SR's semantic layer. The three decisioners (semantic / agent / afm-d) are peers: an entrypoint selects exactly one per request.
 
 <div align="right">
 

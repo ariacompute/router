@@ -137,6 +137,7 @@ impl Router {
             let resp = if !self.setup.token.is_empty() {
                 let app = data_router(st.clone());
                 let body = serde_json::to_vec(&req).unwrap();
+                // `oneshot`'s error type is `Infallible`, so there is no failure to map.
                 self.rt
                     .block_on(async {
                         app.oneshot(
@@ -148,7 +149,7 @@ impl Router {
                         )
                         .await
                     })
-                    .map_err(|e| RouterError::Upstream(e.to_string()))?
+                    .unwrap_or_else(|e: std::convert::Infallible| match e {})
             } else {
                 self.rt
                     .block_on(sdk_chat_complete(st.clone(), req))
@@ -160,12 +161,14 @@ impl Router {
                 .rt
                 .block_on(to_bytes(resp.into_body(), 1 << 22))
                 .map_err(|e| RouterError::Upstream(e.to_string()))?;
+            // Keep the decision headers on failure so `last_route()` can explain a
+            // 401/403/5xx (spec §3.7), matching the C ABI.
+            self.set_last_headers(headers);
             if status != StatusCode::OK {
                 return Err(RouterError::Upstream(
                     String::from_utf8_lossy(&bytes).into_owned(),
                 ));
             }
-            self.set_last_headers(headers);
             serde_json::from_slice(&bytes).map_err(|e| RouterError::Upstream(e.to_string()))
         } else {
             let url = self
@@ -177,7 +180,7 @@ impl Router {
                     Some(self.setup.base_url.as_str())
                 })
                 .ok_or_else(|| RouterError::InvalidParam("not initialized".into()))?;
-            let (text, headers) = self
+            let (status, text, headers) = self
                 .rt
                 .block_on(async {
                     let client = reqwest::Client::new();
@@ -192,13 +195,16 @@ impl Router {
                     let headers = route_headers(resp.headers());
                     let status = resp.status();
                     let text = resp.text().await.map_err(|e| e.to_string())?;
-                    if !status.is_success() {
-                        return Err(format!("remote status {status}: {text}"));
-                    }
-                    Ok::<(String, Value), String>((text, headers))
+                    Ok::<(StatusCode, String, Value), String>((status, text, headers))
                 })
                 .map_err(RouterError::Upstream)?;
+            // Keep the decision headers on failure too (spec §3.7).
             self.set_last_headers(headers);
+            if !status.is_success() {
+                return Err(RouterError::Upstream(format!(
+                    "remote status {status}: {text}"
+                )));
+            }
             serde_json::from_str(&text).map_err(|e| RouterError::Upstream(e.to_string()))
         }
     }
@@ -257,17 +263,25 @@ impl Router {
         Ok(out)
     }
 
-    pub fn last_route(&self) -> Value {
-        let mut v = self
-            .state
-            .as_ref()
-            .map(|s| last_route_json(s))
-            .unwrap_or(serde_json::json!({}));
+    /// The most recent route decision plus the whitelisted `x-aria-router-*`
+    /// response headers of that request.
+    ///
+    /// Fails instead of returning `{}` when the handle was never initialised or
+    /// was closed: all eight bindings must surface a language error rather than a
+    /// silent empty object (`cases.json` → `last_route_failure_not_silent`).
+    pub fn last_route(&self) -> Result<Value, RouterError> {
+        let connected = self.base_url.is_some() || !self.setup.base_url.is_empty();
+        let mut v = match &self.state {
+            Some(st) => last_route_json(st),
+            // Remote mode carries no in-process decision; headers still apply.
+            None if connected => serde_json::json!({}),
+            None => return Err(RouterError::InvalidParam("not initialized".into())),
+        };
         let headers = self.last_headers.lock().unwrap().clone();
         if headers.as_object().is_some_and(|o| !o.is_empty()) {
             v["headers"] = headers;
         }
-        v
+        Ok(v)
     }
 
     /// Reset the handle; the native SDK owns no FFI handle to free.
@@ -408,7 +422,9 @@ mod tests {
             r.models().unwrap_err(),
             RouterError::InvalidParam(_)
         ));
-        assert_eq!(r.last_route(), serde_json::json!({}));
+        // Never initialised → a language error, not a silent `{}`.
+        let err = r.last_route().unwrap_err();
+        assert!(matches!(err, RouterError::InvalidParam(_)), "{err}");
         let err = r
             .complete(serde_json::json!([]), serde_json::json!({}))
             .unwrap_err();
@@ -475,7 +491,8 @@ mod tests {
         r.connect(&endpoint);
         let err = r.models().unwrap_err();
         assert!(matches!(err, RouterError::Upstream(_)), "{err}");
-        assert_eq!(r.last_route(), serde_json::json!({}));
+        // Connected but nothing routed yet → empty decision (headers only).
+        assert_eq!(r.last_route().unwrap(), serde_json::json!({}));
         // Connection refused → Upstream, not a silent empty result.
         let err = r
             .complete(
@@ -664,7 +681,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out["auth"], "Bearer sk-remote");
-        let lr = r.last_route();
+        let lr = r.last_route().unwrap();
         assert_eq!(lr["headers"]["x-aria-router-layer"], "semantic");
         assert_eq!(
             lr["headers"]["x-aria-router-redecision"],
@@ -680,7 +697,7 @@ mod tests {
             .complete(serde_json::json!([]), serde_json::json!({}))
             .unwrap_err();
         assert!(err.to_string().contains("remote status 500"), "{err}");
-        assert_eq!(failing.last_route(), serde_json::json!({}));
+        assert_eq!(failing.last_route().unwrap(), serde_json::json!({}));
         stub.shutdown();
     }
 
@@ -702,12 +719,13 @@ mod tests {
         assert_eq!(chunks.lock().unwrap().len(), 1);
         assert_eq!(chunks.lock().unwrap()[0], out.to_string());
         assert!(out.to_string().contains("hello-from-router"));
-        assert!(r.last_route()["headers"]["x-aria-router-layer"].is_string());
+        assert!(r.last_route().unwrap()["headers"]["x-aria-router-layer"].is_string());
         r.complete_stream(serde_json::json!([]), serde_json::json!({}), None)
             .unwrap();
         r.close();
         assert!(r.models().is_err());
-        assert_eq!(r.last_route(), serde_json::json!({}));
+        // Closed handle → error, not `{}` (matches the other seven bindings).
+        assert!(r.last_route().is_err());
         r.destroy();
         let _ = std::fs::remove_dir_all(&dir);
     }

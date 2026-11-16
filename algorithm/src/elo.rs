@@ -35,6 +35,17 @@ impl EloTable {
         g.insert(loser.to_string(), rl + k * (0.0 - el));
     }
 
+    /// Record a failed call: the rating drops by half a K-factor, mirroring a
+    /// loss against an evenly rated peer. Successful calls keep feeding
+    /// [`Self::observe_latency`], so `elo` / `ratings` carry a real signal instead
+    /// of a permanent 1000-point tie.
+    pub fn observe_failure(&self, model: &str) {
+        let mut g = self.inner.lock().unwrap();
+        let r = *g.get(model).unwrap_or(&1000.0);
+        let k = 24.0;
+        g.insert(model.to_string(), r - k * 0.5);
+    }
+
     /// Prefer lower latency as a soft win signal for `model`.
     pub fn observe_latency(&self, model: &str, latency_ms: f32, peers: &[String]) {
         if peers.is_empty() {
@@ -81,6 +92,12 @@ mod tests {
         assert!(t.rating("c") < fast);
         t.observe_latency("d", 10.0, &[]); // no-op without peers
         assert!((t.rating("d") - 1000.0).abs() < 1e-3);
+        // Failures demote, successes with slow latency demote too (asymmetric).
+        t.set("f", 1000.0);
+        t.observe_failure("f");
+        assert!((t.rating("f") - 988.0).abs() < 1e-3);
+        t.observe_failure("unknown-model");
+        assert!((t.rating("unknown-model") - 988.0).abs() < 1e-3);
         // 100..500ms scores 0.5 → neutral (expected 0.5), rating unchanged.
         t.set("mid", 1000.0);
         t.observe_latency("mid", 250.0, &["peer".into()]);

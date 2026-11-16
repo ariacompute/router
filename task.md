@@ -518,13 +518,38 @@ host 套件暴露）。
 
 ---
 
+## T100 — 完整性评估缺陷修复（已完成）
+
+依据 `router-completeness-assessment.md` §4 缺陷清单逐条修复（评估 A4「覆盖率 100% 门禁红」不在本次范围）。
+
+| 编号 | 修复 |
+|---|---|
+| A1 | `ffi` / Rust SDK 删除对 `oneshot`（错误类型 `Infallible`）的永不可达 `map_err`；删除未使用的 `workspace.package.authors` 与 `http` 的 `async-trait` 依赖 |
+| A2 | `complete` 的非 2xx 响应（内嵌路由与 remote 两个分支）在判状态前写入 `set_last_headers`，错误体原样返回 |
+| A3 | Rust SDK `last_route()` 改为 `Result<Value, RouterError>`：未初始化/已关闭抛错，成功时附 `headers`；同步 `bindings/testdata/cases.json` 与宿主断言 |
+| B1 | `mgmt_api_router` 挂 `route_layer` session 门控：用户表非空时除 health / version / 登录注册 / OAuth 外一律 401；SPA fallback 与首启（无用户）保持开放 |
+| B2 | `UserStore::create_user` + `POST /v1/router/users`、`PUT /v1/router/users/{id}/password`（admin）；Dashboard Users 页补建用户表单与行内重置密码 |
+| B3 | Elo 接真实信号：非流式按上游耗时、SSE 在 `finish()` 按首包耗时回填；peers 取硬剪枝后合格池；新增 `EloTable::observe_failure` 在失败时降分 |
+| B4 | builtin agent 的失败按 recipe `fallback` 兜底（`layer=agent-fallback`，`reason` 带原始错误），无 fallback 时仍 fail closed |
+| B5 | `global.model_catalog[].weight_path` 与 learned 信号 `weight_path` 在 validate 与运行时均为 `Unsupported`；learned `model:` 必须解析到 `model_catalog` |
+| B6 | 新增唯一规范化入口 `config::canonical_learned`（单数/复数/下划线）；validate、ml-off 门控、`eval_learned` 共用；命中的 `kind` 保持 YAML 原文 |
+| C1–C4/C7 | 清除指向已删除 `docs/hiroute-vs-aria-router.md` 的引用并把口径台账落到 `requirements.md` §7.4；README 中英修正硬约束剪枝范围 / failover 默认值 / 证据链与委托表述；releasenotes 修正 `redecision` 默认开启；`keys_path` 口径改为「`sk-aria_` 只存 sha256，`sk-bf-` 明文回读」 |
+| C5 | `decision::decision_confidence` 回填 `RouteDecision.confidence`（无匹配取 0.0，`decision_ext` 覆盖沿用其值） |
+| C6 | `backend_refs` 按 weight 比例分流（权重降序累积 + 每模型序号轮转，确定性）；`protocol` 在 endpoint 无 scheme 时生效，非 `http(s)` 为 `Unsupported` |
+
+验证：`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`、
+`cargo test --workspace --all-features`、`cargo test -p aria-router-signal`（无 `ml`）、
+`./scripts/run-binding-tests.sh`、`npm --prefix dashboard run build && npm --prefix dashboard run test`。
+
+---
+
 ## 候选池（未排期 · 待人审）
 
-> 对应 [`requirements.md` §7](requirements.md) 与 [`docs/hiroute-vs-aria-router.md`](docs/hiroute-vs-aria-router.md) §6。
+> 对应 [`requirements.md` §7](requirements.md)（C1–C9；差距记录与口径台账并入该章 §7.1–§7.4）。
 > **本节不是实施清单**：条目均为「候选 / 待人工审核 / 未排期 / 不进入实施」，编号 `C1–C9` 与规格 §7 一一对应。
 > 依 Harness 约定，`requirements.md` 须经人工逐项审核通过后，方可据其生成 / 执行 `task.md`；**本节不得被当作待办勾选，也不占用、不重排 T0–T89**。上文 T0–T89 的勾选状态与内容一律不变。
 
-| 候选 | 方向 | 规格 §7 | 对比文档 | 现状摘要 |
+| 候选 | 方向 | 规格 §7 | 原始出处 | 现状摘要 |
 |---|---|---|---|---|
 | C1 | 显式化逐步重判边界 | §7.2 C1 | 矩阵 #1 / §6 | `prefix_reuse` + sticky 只做「粘住」，无重判边界 |
 | C2 | afm-d 三问题模板 | §7.2 C2 | 矩阵 #4 / §4.3 / §6 | `questions` 固定 1 个 `route` choice |
@@ -536,7 +561,7 @@ host 套件暴露）。
 | C8 | backend 候选链 / 同名模型 failover | §7.2 C8 | 矩阵 #9 #27 / §6 | 单取最大权重，无 retry / failover |
 | C9 | 策略一致性指标与离线复现 | §7.2 C9 | 矩阵 #35–#38 / §6 | bench 无 consistency 指标，corpus 为 tiny fixtures |
 
-**文档口径一致性待办（非候选需求）**：[`docs/hiroute-vs-aria-router.md`](docs/hiroute-vs-aria-router.md) §7 登记了 README 中英三方对比表中若干 ✅ 与源码状态不符的判定；属文档修订，不入候选池、不在本节排期。
+**文档口径一致性台账（非候选需求）**：README 中英三方对比表的 ✅ 判定与源码状态的核对结果登记在 [`requirements.md` §7.4](requirements.md)（硬约束剪枝范围、Bounded failover、执行证据留存链、长周期委托、Takeaway 表述），已按源码修正；属文档维护，不入候选池、不在本节排期。
 
 **未排期声明**：本节不含任何待办勾选项、验收记录或提交记录。人审通过前，不产生任何实施任务。
 

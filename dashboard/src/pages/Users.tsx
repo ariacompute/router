@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react';
-import { getJson, sendJson, setUserEmail, type LocalUser, type Overview } from '../api';
+import {
+  createUser,
+  getJson,
+  resetUserPassword,
+  sendJson,
+  setUserEmail,
+  type LocalUser,
+  type Overview,
+} from '../api';
 import styles from './page.module.css';
 
 export default function Users() {
@@ -8,6 +16,12 @@ export default function Users() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [emailEdits, setEmailEdits] = useState<Record<string, string>>({});
+  const [pwdEdits, setPwdEdits] = useState<Record<string, string>>({});
+  const [newUser, setNewUser] = useState<{
+    username: string;
+    password: string;
+    role: 'admin' | 'user';
+  }>({ username: '', password: '', role: 'user' });
 
   function load() {
     setErr(null);
@@ -53,6 +67,38 @@ export default function Users() {
     }
   }
 
+  async function create() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await createUser(newUser.username.trim(), newUser.password, newUser.role);
+      setNewUser({ username: '', password: '', role: 'user' });
+      load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetPassword(u: LocalUser) {
+    const next = (pwdEdits[u.id] ?? '').trim();
+    if (next.length < 8) {
+      setErr('password must be at least 8 characters');
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await resetUserPassword(u.id, next);
+      setPwdEdits((m) => ({ ...m, [u.id]: '' }));
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function toggleAllow() {
     setBusy(true);
     setErr(null);
@@ -80,6 +126,45 @@ export default function Users() {
         </button>
       </div>
       {err ? <p className={styles.err}>{err}</p> : null}
+      <div className={styles.row} style={{ marginBottom: '1rem' }}>
+        <input
+          className="input-field"
+          style={{ maxWidth: '12rem' }}
+          value={newUser.username}
+          onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
+          placeholder="username"
+          disabled={busy}
+        />
+        <input
+          className="input-field"
+          style={{ maxWidth: '12rem' }}
+          type="password"
+          value={newUser.password}
+          onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+          placeholder="password (min 8)"
+          disabled={busy}
+        />
+        <select
+          className="input-field"
+          style={{ maxWidth: '8rem' }}
+          value={newUser.role}
+          onChange={(e) =>
+            setNewUser({ ...newUser, role: e.target.value === 'admin' ? 'admin' : 'user' })
+          }
+          disabled={busy}
+        >
+          <option value="user">user</option>
+          <option value="admin">admin</option>
+        </select>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={create}
+          disabled={busy || !newUser.username.trim() || newUser.password.length < 8}
+        >
+          Create user
+        </button>
+      </div>
       <table className={styles.table}>
         <thead>
           <tr>
@@ -88,7 +173,7 @@ export default function Users() {
             <th>Role</th>
             <th>Created</th>
             <th>Status</th>
-            <th />
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -128,14 +213,33 @@ export default function Users() {
                 )}
               </td>
               <td>
-                <button
-                  type="button"
-                  className={u.disabled ? 'btn-ghost btn-sm' : 'btn-danger btn-sm'}
-                  onClick={() => toggleDisabled(u)}
-                  disabled={busy}
-                >
-                  {u.disabled ? 'Enable' : 'Disable'}
-                </button>
+                <div className={styles.row}>
+                  <button
+                    type="button"
+                    className={u.disabled ? 'btn-ghost btn-sm' : 'btn-danger btn-sm'}
+                    onClick={() => toggleDisabled(u)}
+                    disabled={busy}
+                  >
+                    {u.disabled ? 'Enable' : 'Disable'}
+                  </button>
+                  <input
+                    className="input-field"
+                    style={{ maxWidth: '10rem' }}
+                    type="password"
+                    value={pwdEdits[u.id] ?? ''}
+                    placeholder="new password"
+                    onChange={(e) => setPwdEdits((m) => ({ ...m, [u.id]: e.target.value }))}
+                    disabled={busy}
+                  />
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm"
+                    onClick={() => resetPassword(u)}
+                    disabled={busy}
+                  >
+                    Reset
+                  </button>
+                </div>
               </td>
             </tr>
           ))}

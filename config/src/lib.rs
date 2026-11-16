@@ -477,15 +477,30 @@ fn default_weight() -> u32 {
 }
 
 impl BackendRef {
-    pub fn url(&self) -> String {
+    /// Resolved base URL for the OpenAI-compatible endpoint.
+    ///
+    /// `protocol` supplies the scheme when `endpoint` carries none; only `http`
+    /// and `https` are implemented, anything else fails with `Unsupported`
+    /// (validate rejects it up front as well).
+    pub fn url(&self) -> Result<String, RouterError> {
         if !self.base_url.is_empty() {
-            return self.base_url.trim_end_matches('/').to_string();
+            return Ok(self.base_url.trim_end_matches('/').to_string());
         }
         let ep = self.endpoint.trim();
         if ep.starts_with("http://") || ep.starts_with("https://") {
-            return ep.trim_end_matches('/').to_string();
+            return Ok(ep.trim_end_matches('/').to_string());
         }
-        format!("http://{ep}")
+        let scheme = match self.protocol.trim().to_ascii_lowercase().as_str() {
+            "" | "http" => "http",
+            "https" => "https",
+            other => {
+                return Err(RouterError::Unsupported(format!(
+                    "backend {}: protocol {other} is not supported (http|https)",
+                    self.name
+                )))
+            }
+        };
+        Ok(format!("{scheme}://{ep}"))
     }
 }
 
@@ -927,30 +942,30 @@ pub struct AfmDRecipe {
     pub question_template: Option<AfmDQuestionTemplate>,
 }
 
-const LEARNED_SIGNAL_KEYS: &[&str] = &[
-    "classifier",
-    "classifiers",
-    "complexity",
-    "domain",
-    "domains",
-    "embedding",
-    "embeddings",
-    "fact-check",
-    "fact_check",
-    "fact_checks",
-    "jailbreak",
-    "jailbreaks",
-    "kb",
-    "modality",
-    "pii",
-    "preference",
-    "preferences",
-    "reask",
-    "reasks",
-    "user-feedback",
-    "user_feedback",
-    "user_feedbacks",
-];
+/// Canonical (singular) name of a learned signal family.
+///
+/// The YAML surface accepts both the singular (`embedding`, `fact_check`) and the
+/// vLLM Semantic Router plural forms (`embeddings`, `fact_checks`). Every consumer
+/// (validate, the `ml`-off runtime gate, and hit evaluation) resolves names through
+/// this single table so a plural spelling can never slip past the `Unsupported`
+/// gate and turn into a silent no-op.
+pub fn canonical_learned(kind: &str) -> Option<&'static str> {
+    Some(match kind.trim() {
+        "classifier" | "classifiers" => "classifier",
+        "complexity" => "complexity",
+        "domain" | "domains" => "domain",
+        "embedding" | "embeddings" => "embedding",
+        "fact-check" | "fact_check" | "fact-checks" | "fact_checks" => "fact-check",
+        "jailbreak" | "jailbreaks" => "jailbreak",
+        "kb" => "kb",
+        "modality" => "modality",
+        "pii" => "pii",
+        "preference" | "preferences" => "preference",
+        "reask" | "reasks" => "reask",
+        "user-feedback" | "user_feedback" | "user-feedbacks" | "user_feedbacks" => "user-feedback",
+        _ => return None,
+    })
+}
 
 const IMPLEMENTED_ALGOS: &[&str] = &[
     "static",
@@ -1017,6 +1032,7 @@ impl RouterDocument {
                 self.version
             )));
         }
+        self.validate_providers()?;
         let recipe_by_name: HashMap<&str, &Recipe> =
             self.recipes.iter().map(|r| (r.name.as_str(), r)).collect();
         for ep in &self.entrypoints {
@@ -1161,6 +1177,33 @@ impl RouterDocument {
         self.validate_services()
     }
 
+    /// Provider declarations the runtime can actually honour.
+    ///
+    /// `weight_path` implies ONNX weights (never loaded by this build) and
+    /// `backend_refs.protocol` currently supports only `http` / `https`; both are
+    /// rejected here instead of being parsed and silently ignored.
+    fn validate_providers(&self) -> Result<(), RouterError> {
+        for (key, entry) in &self.global.model_catalog {
+            if entry.weight_path.is_some() {
+                return Err(RouterError::Unsupported(format!(
+                    "global.model_catalog.{key}.weight_path (ONNX weights) is not implemented"
+                )));
+            }
+        }
+        for m in &self.providers.models {
+            for b in &m.backend_refs {
+                let proto = b.protocol.trim().to_ascii_lowercase();
+                if !proto.is_empty() && proto != "http" && proto != "https" {
+                    return Err(RouterError::Unsupported(format!(
+                        "model {} backend {}: protocol {proto} is not supported (http|https)",
+                        m.name, b.name
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn validate_protection(&self, p: &ProtectionCfg) -> Result<(), RouterError> {
         if !p.enabled {
             return Ok(());
@@ -1217,25 +1260,15 @@ impl RouterDocument {
 
     fn validate_routing(&self, routing: &Routing) -> Result<(), RouterError> {
         for (key, val) in &routing.signals.extra {
-            let learned = LEARNED_SIGNAL_KEYS.contains(&key.as_str());
-            if !learned && !key.is_empty() {
-                return Err(RouterError::Config(format!("unknown signal family {key}")));
-            }
-            if !learned {
+            if key.is_empty() {
                 continue;
             }
-            let referenced = routing.decisions.iter().any(|d| {
-                d.rules
-                    .conditions
-                    .iter()
-                    .any(|c| c.kind == *key || c.kind.replace('_', "-") == *key)
-            });
-            if referenced && !val.is_null() {
-                // Stage C: learned types are known but require ml feature / weights.
-                // Validation of "referenced without implementation" happens at runtime
-                // unless empty. Empty extra is ok; non-empty extra still allowed to parse.
-                let _ = referenced;
+            if canonical_learned(key).is_none() {
+                return Err(RouterError::Config(format!("unknown signal family {key}")));
             }
+            // Declared-but-unimplemented learned assets fail loudly (B5) instead of
+            // being parsed and then silently ignored at runtime.
+            self.validate_learned_assets(key, val)?;
         }
         for d in &routing.decisions {
             if let Some(algo) = &d.algorithm {
@@ -1286,6 +1319,45 @@ impl RouterDocument {
         Ok(())
     }
 
+    /// Reject learned-signal entries whose declared inputs cannot be honoured:
+    /// `weight_path` (no ONNX runtime is linked) and `model:` references that do not
+    /// resolve to a `global.model_catalog` key.
+    fn validate_learned_assets(
+        &self,
+        key: &str,
+        val: &serde_json::Value,
+    ) -> Result<(), RouterError> {
+        let items: Vec<&serde_json::Value> = match val {
+            serde_json::Value::Array(a) => a.iter().collect(),
+            serde_json::Value::Object(_) => vec![val],
+            _ => return Ok(()),
+        };
+        for item in items {
+            let Some(obj) = item.as_object() else {
+                continue;
+            };
+            if obj.get("weight_path").is_some_and(|v| !v.is_null()) {
+                return Err(RouterError::Unsupported(format!(
+                    "learned signal {key}: weight_path (ONNX weights) is not implemented"
+                )));
+            }
+            if let Some(m) = obj.get("model") {
+                let model = m.as_str().map(str::trim).unwrap_or_default();
+                if model.is_empty() {
+                    return Err(RouterError::Unsupported(format!(
+                        "learned signal {key}: model must name a global.model_catalog key"
+                    )));
+                }
+                if !self.global.model_catalog.contains_key(model) {
+                    return Err(RouterError::Unsupported(format!(
+                        "learned signal {key}: model {model} is not in global.model_catalog"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn recipe(&self, name: &str) -> Result<&Recipe, RouterError> {
         self.recipes
             .iter()
@@ -1315,6 +1387,9 @@ impl RouterDocument {
         }
     }
 
+    /// Learned families referenced by a decision, in the spelling used by the YAML.
+    /// Plural / underscore aliases are resolved through [`canonical_learned`] so an
+    /// `embeddings` or `fact_checks` condition is treated exactly like the singular.
     pub fn learned_signal_referenced(&self, recipe: &Recipe) -> Vec<String> {
         let Some(routing) = &recipe.routing else {
             return vec![];
@@ -1322,7 +1397,7 @@ impl RouterDocument {
         let mut out = vec![];
         for d in &routing.decisions {
             for c in &d.rules.conditions {
-                if LEARNED_SIGNAL_KEYS.contains(&c.kind.as_str()) {
+                if canonical_learned(&c.kind).is_some() && !out.contains(&c.kind) {
                     out.push(c.kind.clone());
                 }
             }
@@ -2705,13 +2780,18 @@ recipes: []
         assert_eq!(model.ranking_cost(), 2.5);
 
         let mut reference = model.backend_refs[0].clone();
-        assert_eq!(reference.url(), "http://127.0.0.1:9");
+        assert_eq!(reference.url().unwrap(), "http://127.0.0.1:9");
         reference.base_url = "http://base.example/".into();
-        assert_eq!(reference.url(), "http://base.example");
+        assert_eq!(reference.url().unwrap(), "http://base.example");
         reference.base_url.clear();
         reference.endpoint = "https://up.example/".into();
-        assert_eq!(reference.url(), "https://up.example");
-        assert_eq!(reference.protocol, "http");
+        assert_eq!(reference.url().unwrap(), "https://up.example");
+        // `protocol` supplies the scheme when the endpoint has none.
+        reference.endpoint = "up2.example".into();
+        reference.protocol = "https".into();
+        assert_eq!(reference.url().unwrap(), "https://up2.example");
+        reference.protocol = "grpc".into();
+        assert!(matches!(reference.url(), Err(RouterError::Unsupported(_))));
         assert_eq!(reference.weight, 100);
     }
 
@@ -3215,5 +3295,145 @@ recipes:
             serde_yaml::from_str("providers:\n  defaults: {}\n").unwrap();
         patch_setup_models(&mut no_models, &opts);
         assert!(no_models["providers"].get("models").is_none());
+    }
+
+    #[test]
+    fn canonical_learned_normalises_singular_and_plural_families() {
+        for (raw, canon) in [
+            ("classifier", "classifier"),
+            ("classifiers", "classifier"),
+            ("domain", "domain"),
+            ("domains", "domain"),
+            ("embedding", "embedding"),
+            ("embeddings", "embedding"),
+            ("fact_check", "fact-check"),
+            ("fact_checks", "fact-check"),
+            ("fact-check", "fact-check"),
+            ("jailbreaks", "jailbreak"),
+            ("preferences", "preference"),
+            ("reasks", "reask"),
+            ("user_feedbacks", "user-feedback"),
+            ("user_feedback", "user-feedback"),
+            ("kb", "kb"),
+            ("modality", "modality"),
+            ("complexity", "complexity"),
+            ("pii", "pii"),
+        ] {
+            assert_eq!(canonical_learned(raw), Some(canon), "{raw}");
+        }
+        assert_eq!(canonical_learned("nope"), None);
+        assert_eq!(canonical_learned(" embeddings "), Some("embedding"));
+    }
+
+    #[test]
+    fn learned_signal_referenced_accepts_plural_spellings() {
+        let doc = RouterDocument::from_yaml_str(&TINY.replace(
+            "              - type: keyword\n                name: needs_explain",
+            "              - type: embeddings\n                name: emb",
+        ))
+        .unwrap();
+        assert_eq!(
+            doc.learned_signal_referenced(&doc.recipes[0]),
+            vec!["embeddings".to_string()]
+        );
+        // Duplicate references are reported once.
+        let dup = RouterDocument::from_yaml_str(
+            &TINY.replace(
+                "              - type: keyword\n                name: needs_explain",
+                "              - type: embedding\n                name: emb\n              - type: embeddings\n                name: emb2",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            dup.learned_signal_referenced(&dup.recipes[0]),
+            vec!["embedding".to_string(), "embeddings".to_string()]
+        );
+    }
+
+    #[test]
+    fn model_catalog_weight_path_is_unsupported() {
+        let yaml = format!(
+            "{TINY}\nglobal:\n  model_catalog:\n    embed_hash:\n      dim: 64\n      weight_path: /tmp/model.onnx\n"
+        );
+        let err = RouterDocument::from_yaml_str(&yaml).unwrap_err();
+        assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
+        assert!(err.to_string().contains("weight_path"), "{err}");
+
+        // Without weight_path the same catalogue entry is fine.
+        let ok = format!("{TINY}\nglobal:\n  model_catalog:\n    embed_hash:\n      dim: 64\n");
+        RouterDocument::from_yaml_str(&ok).unwrap();
+    }
+
+    #[test]
+    fn learned_signal_weight_path_and_model_reference_are_validated() {
+        let with_signal = |signal: &str| {
+            format!(
+                "{TINY}\nglobal:\n  model_catalog:\n    embed_hash:\n      dim: 64\n"
+            )
+            .replace(
+                "        keywords:\n          - name: needs_explain\n            operator: OR\n            keywords: [\"explain\", \"walk me through\"]\n",
+                signal,
+            )
+        };
+
+        // weight_path implies ONNX weights → Unsupported.
+        let err = RouterDocument::from_yaml_str(&with_signal(
+            "        embeddings:\n          - name: emb\n            weight_path: /tmp/e.onnx\n",
+        ))
+        .unwrap_err();
+        assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
+        assert!(err.to_string().contains("weight_path"), "{err}");
+
+        // `model:` must resolve to a global.model_catalog key.
+        let err = RouterDocument::from_yaml_str(&with_signal(
+            "        embeddings:\n          - name: emb\n            model: nope\n",
+        ))
+        .unwrap_err();
+        assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
+        assert!(err.to_string().contains("model_catalog"), "{err}");
+        let err = RouterDocument::from_yaml_str(&with_signal(
+            "        embeddings:\n          - name: emb\n            model: 12\n",
+        ))
+        .unwrap_err();
+        assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
+
+        // A resolvable reference passes validation.
+        RouterDocument::from_yaml_str(&with_signal(
+            "        embeddings:\n          - name: emb\n            model: embed_hash\n",
+        ))
+        .unwrap();
+
+        // Mapping form (single family object) is checked the same way.
+        let err = RouterDocument::from_yaml_str(&with_signal(
+            "        classifier:\n          name: intent\n          weight_path: /tmp/c.onnx\n",
+        ))
+        .unwrap_err();
+        assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
+
+        // Scalar / mixed arrays carry no assets and are tolerated.
+        RouterDocument::from_yaml_str(&with_signal("        reasks: 3\n")).unwrap();
+        RouterDocument::from_yaml_str(&with_signal("        reasks:\n          - 3\n")).unwrap();
+    }
+
+    #[test]
+    fn backend_protocol_must_be_http_or_https() {
+        let proto = |p: &str| {
+            TINY.replace(
+                "        - name: primary\n          endpoint: 127.0.0.1:9",
+                &format!("        - name: primary\n          endpoint: up.example\n          protocol: {p}"),
+            )
+        };
+        for ok in ["http", "https"] {
+            RouterDocument::from_yaml_str(&proto(ok)).unwrap();
+        }
+        // Omitting `protocol` keeps the historical `http://` default.
+        RouterDocument::from_yaml_str(&TINY.replace(
+            "        - name: primary\n          endpoint: 127.0.0.1:9",
+            "        - name: primary\n          endpoint: up.example",
+        ))
+        .unwrap();
+        let err = RouterDocument::from_yaml_str(&proto("grpc")).unwrap_err();
+        assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
+        assert!(err.to_string().contains("protocol grpc"), "{err}");
     }
 }

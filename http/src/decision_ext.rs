@@ -122,7 +122,9 @@ pub async fn decide(req: &ChatRequest, cfg: &DecisionExtCfg) -> Result<RouteDeci
     })
 }
 
-fn apply_fallback_or_err(
+/// Fallback contract shared by the `decision_ext` client and the builtin agent:
+/// a non-empty `fallback` model absorbs the failure, otherwise it fails closed.
+pub(crate) fn apply_fallback_or_err(
     fallback: Option<&str>,
     err: RouterError,
 ) -> Result<RouteDecision, RouterError> {

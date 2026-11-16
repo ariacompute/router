@@ -44,6 +44,34 @@ pub fn gate_if_users(
     Ok(Some(require_user(st, headers)?))
 }
 
+/// Management paths reachable without a dashboard session.
+///
+/// Spec §3.5: once users exist, everything except health / build metadata / the
+/// public auth surface (login, register, OAuth callback) requires a session.
+const PUBLIC_MGMT_PATHS: &[&str] = &[
+    "/health",
+    "/v1/router/version",
+    "/v1/router/auth/register-status",
+    "/v1/router/auth/register",
+    "/v1/router/auth/login",
+    "/v1/router/auth/logout",
+    "/v1/router/auth/oauth/start",
+    "/v1/router/auth/oauth/callback",
+];
+
+pub fn is_public_mgmt_path(path: &str) -> bool {
+    PUBLIC_MGMT_PATHS.contains(&path)
+}
+
+/// Session user, but only when they hold the admin role.
+pub fn require_admin(st: &AppState, headers: &HeaderMap) -> Result<UserPublic, RouterError> {
+    let u = require_user(st, headers)?;
+    if !matches!(u.role, UserRole::Admin) {
+        return Err(RouterError::Unauthorized("admin required".into()));
+    }
+    Ok(u)
+}
+
 #[derive(Deserialize)]
 pub struct AuthBody {
     pub username: String,
@@ -148,6 +176,48 @@ pub async fn list_users(
     Ok(Json(
         json!({"users": st.users.lock().unwrap().list_public()}),
     ))
+}
+
+#[derive(Deserialize)]
+pub struct CreateUserBody {
+    pub username: String,
+    pub password: String,
+    /// Defaults to a regular user; admins may create another admin explicitly.
+    #[serde(default)]
+    pub role: Option<UserRole>,
+}
+
+/// Admin: create a local user (`POST /v1/router/users`).
+pub async fn create_user(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<CreateUserBody>,
+) -> Result<Json<Value>, AppError> {
+    require_admin(&st, &headers).map_err(AppError)?;
+    let role = body.role.unwrap_or(UserRole::User);
+    let user = st
+        .users
+        .lock()
+        .unwrap()
+        .create_user(&body.username, &body.password, role)
+        .map_err(AppError)?;
+    Ok(Json(json!({"ok": true, "user": user})))
+}
+
+/// Admin: reset another user's password (`PUT /v1/router/users/{id}/password`).
+pub async fn reset_user_password(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<PasswordBody>,
+) -> Result<Json<Value>, AppError> {
+    require_admin(&st, &headers).map_err(AppError)?;
+    st.users
+        .lock()
+        .unwrap()
+        .set_password(&id, &body.password)
+        .map_err(AppError)?;
+    Ok(Json(json!({"ok": true, "id": id})))
 }
 
 #[derive(Deserialize)]
@@ -1054,6 +1124,185 @@ global:
         )
         .await
         .is_err());
+    }
+
+    #[test]
+    fn public_mgmt_paths_are_allowlisted() {
+        for p in [
+            "/health",
+            "/v1/router/version",
+            "/v1/router/auth/register-status",
+            "/v1/router/auth/register",
+            "/v1/router/auth/login",
+            "/v1/router/auth/logout",
+            "/v1/router/auth/oauth/start",
+            "/v1/router/auth/oauth/callback",
+        ] {
+            assert!(is_public_mgmt_path(p), "{p} must stay public");
+        }
+        for p in [
+            "/v1/router/config",
+            "/v1/router/overview",
+            "/v1/router/cost",
+            "/v1/router/cost/by-competence",
+            "/v1/router/cost/model-performance",
+            "/v1/router/topology",
+            "/v1/router/models",
+            "/v1/router/validate",
+            "/v1/router/replay",
+            "/v1/router/trust",
+            "/v1/router/trust/suggest",
+            "/v1/router/quota",
+            "/v1/router/providers",
+            "/v1/router/chat",
+            "/v1/router/users",
+            "/v1/router/keys",
+            "/v1/router/auth/me",
+            "/v1/router/auth/password",
+            "/v1/router/serve/account",
+        ] {
+            assert!(!is_public_mgmt_path(p), "{p} must require a session");
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_creates_user_and_resets_password() {
+        let (st, _dir) = state(true);
+        let admin_h = cookie_headers(&session_for(&st, "admin"));
+        st.users
+            .lock()
+            .unwrap()
+            .register("bob", "password1", true)
+            .unwrap();
+        let bob_h = cookie_headers(&session_for(&st, "bob"));
+        let bob_id = st
+            .users
+            .lock()
+            .unwrap()
+            .list_public()
+            .into_iter()
+            .find(|u| u.username == "bob")
+            .unwrap()
+            .id;
+
+        // Anonymous and non-admin callers cannot create users.
+        for h in [HeaderMap::new(), bob_h.clone()] {
+            let err = create_user(
+                State(st.clone()),
+                h,
+                Json(CreateUserBody {
+                    username: "mallory".into(),
+                    password: "password1".into(),
+                    role: None,
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err.0, RouterError::Unauthorized(_)), "{:?}", err.0);
+        }
+
+        // Admin creates a regular user by default, or an explicit admin.
+        let Json(ok) = create_user(
+            State(st.clone()),
+            admin_h.clone(),
+            Json(CreateUserBody {
+                username: "carol".into(),
+                password: "password1".into(),
+                role: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ok["ok"], true);
+        assert_eq!(ok["user"]["username"], "carol");
+        assert_eq!(ok["user"]["role"], "user");
+        let Json(ok) = create_user(
+            State(st.clone()),
+            admin_h.clone(),
+            Json(CreateUserBody {
+                username: "root2".into(),
+                password: "password1".into(),
+                role: Some(UserRole::Admin),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ok["user"]["role"], "admin");
+
+        // Duplicate username and short password are bad requests.
+        let err = create_user(
+            State(st.clone()),
+            admin_h.clone(),
+            Json(CreateUserBody {
+                username: "carol".into(),
+                password: "password1".into(),
+                role: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err.0, RouterError::InvalidParam(_)), "{:?}", err.0);
+        let err = create_user(
+            State(st.clone()),
+            admin_h.clone(),
+            Json(CreateUserBody {
+                username: "shorty".into(),
+                password: "short".into(),
+                role: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err.0, RouterError::InvalidParam(_)), "{:?}", err.0);
+
+        // Admin resets another user's password; the new credential works.
+        let Json(ok) = reset_user_password(
+            State(st.clone()),
+            admin_h.clone(),
+            axum::extract::Path(bob_id.clone()),
+            Json(PasswordBody {
+                password: "password2".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ok["id"], bob_id);
+        assert!(st.users.lock().unwrap().login("bob", "password2").is_ok());
+
+        // Non-admin cannot reset, and unknown ids / weak passwords fail.
+        let err = reset_user_password(
+            State(st.clone()),
+            bob_h,
+            axum::extract::Path(bob_id.clone()),
+            Json(PasswordBody {
+                password: "password3".into(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err.0, RouterError::Unauthorized(_)), "{:?}", err.0);
+        let err = reset_user_password(
+            State(st.clone()),
+            admin_h.clone(),
+            axum::extract::Path("usr_missing".to_string()),
+            Json(PasswordBody {
+                password: "password3".into(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err.0, RouterError::InvalidParam(_)), "{:?}", err.0);
+        let err = reset_user_password(
+            State(st.clone()),
+            admin_h,
+            axum::extract::Path(bob_id),
+            Json(PasswordBody {
+                password: "short".into(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err.0, RouterError::InvalidParam(_)), "{:?}", err.0);
     }
 
     #[tokio::test]
