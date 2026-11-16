@@ -7,6 +7,8 @@
 #   html             write an HTML report to target/llvm-cov/html
 #   lcov             write lcov.info at the repo root
 #   self-test        run the gate helper against synthetic fixtures
+#                    (pass / real gap / executed brace / missing input /
+#                    unreadable source; CI runs this before the real gate)
 #
 # The predicate is fixed for every mode: --workspace --all-features with only
 # build scripts exempted, so local runs and CI cannot drift apart.
@@ -23,7 +25,9 @@
 # The JSON export from `cargo llvm-cov report --json` is consulted only to skip
 # lines that carry no executable code (a bare `}` closing an `if let` or a match
 # arm that newer LLVM versions emit as `DA:<line>,0`). Real uncovered lines still
-# fail. See docs/coverage-exclusions.md.
+# fail. A source path the helper cannot read is treated as code (still a real
+# gap, with a warning) rather than as bad input, so widening the ignore regex
+# cannot turn the gate red for the wrong reason. See docs/coverage-exclusions.md.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

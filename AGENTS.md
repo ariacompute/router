@@ -62,6 +62,9 @@ Location / auth / modality 硬剪枝在决策前；fail closed；实名模型 by
 **T101** 覆盖率门禁解除工具链钉版：门禁改判「有代码的行」（lcov `DA:` + `coverage.json` 段计数，
 剔除只有分隔符的无代码行并计数 `no-code lines ignored`），CI 回到 stable 并加 `setup-python`，
 LLVM 23 新暴露的 78 个真实缺口逐行补测（无豁免），见 `task.md` 与 `docs/coverage-exclusions.md`。
+**T102** 完整性评估 v2 剩余缺口 N1/N4：CI `test` job 加默认 feature 口径 `cargo test --workspace`（守卫
+`ml` 关闭路径的 2 个用例）；覆盖率门禁对不可读源码路径改为按「有代码」处理（负缓存 + stderr 告警，
+仍 exit 1），`coverage` job 先跑 `--self-test`（5 场景），见 `task.md`。
 阶段 **T（T90–T99）** 已落地（C1–C9 + U1）：重判边界/响应头、afm-d 三问模板、低分保护状态机、信任度证据门槛与显式发布、模型表现页、生产执行证据、Key 软额度、backend failover、离线策略一致性、impeccable 风格 UI 审计与视觉重做；详见 `README.md` / `README_cn.md` 与 `releasenotes.md` / `releasenotes_cn.md`。
 
 ## Trust stores (eMudhra/emSign CA key compromise, 2026-10)

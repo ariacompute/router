@@ -24,9 +24,14 @@ A zero-hit line is therefore dropped from the gate only when both hold:
 
 Dropped lines are counted and printed as ``no-code lines ignored: N`` so the
 exclusion is visible. Every line that holds real code still fails when it is
-not executed. Exit codes: 0 = every executable line is covered; 1 = real
-uncovered lines; 2 = missing/unparseable input (fail closed, never a silent
-pass).
+not executed.
+
+A source path that lcov names but this process cannot read (a widened
+``--ignore-filename-regex`` leaking registry/rustc paths, a file removed
+mid-run) is never a reason to abort: its zero-hit lines are treated as code, so
+they surface as a real gap with a diagnostic on stderr. Exit codes: 0 = every
+executable line is covered; 1 = real uncovered lines; 2 = missing/unparseable
+input (fail closed, never a silent pass).
 """
 
 from __future__ import annotations
@@ -99,11 +104,25 @@ def is_no_code(text: str) -> bool:
     return bool(body) and set(body) <= DELIMITERS
 
 
+def read_source(name: str) -> list[str] | None:
+    """Return the source lines of ``name``, or ``None`` when it is unreadable.
+
+    A path the gate cannot read says nothing about whether the line holds code,
+    so the caller must not treat it as a no-code line: failing closed on a
+    missing file is what keeps a widened filename filter from silently passing.
+    """
+    try:
+        return Path(name).read_text(encoding="utf-8").split("\n")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 def no_code_lines(
     records: list[tuple[str, int, int]], by_file: dict[str, dict[int, list[int]]]
 ) -> set[tuple[str, int]]:
     """Collect the zero-hit ``(file, line)`` pairs that hold no executable code."""
-    sources: dict[str, list[str]] = {}
+    sources: dict[str, list[str] | None] = {}
+    unreadable: set[str] = set()
     ignored: set[tuple[str, int]] = set()
     for name, line, count in records:
         if count != 0 or (name, line) in ignored:
@@ -117,10 +136,20 @@ def no_code_lines(
         if any(count > 0 for count in segments):
             continue
         if name not in sources:
-            sources[name] = Path(name).read_text(encoding="utf-8").split("\n")
+            # A negative cache: an unreadable file is probed once, not per line.
+            sources[name] = read_source(name)
+            if sources[name] is None:
+                unreadable.add(name)
         source = sources[name]
+        if source is None:
+            continue
         if line - 1 < len(source) and is_no_code(source[line - 1]):
             ignored.add((name, line))
+    for name in sorted(unreadable):
+        print(
+            f"coverage_gate: cannot read {name}; treating its zero-hit lines as code",
+            file=sys.stderr,
+        )
     return ignored
 
 
@@ -249,14 +278,45 @@ def self_test() -> int:
             missing_code = 2
         outcomes.append(("missing-input", missing_code))
 
+        # An unreadable source path is *not* a no-code line: the zero-hit line
+        # is reported as a real gap (exit 1) with a diagnostic, never as bad
+        # input (exit 2) and never silently ignored.
+        unreadable = root / "missing.rs"
+        lcov.write_text(f"SF:{unreadable}\nDA:1,0\nend_of_record\n", encoding="utf-8")
+        coverage.write_text(
+            json.dumps(
+                {
+                    "data": [
+                        {
+                            "files": [
+                                {
+                                    "filename": str(unreadable),
+                                    "segments": [[1, 1, 0, True, True, False]],
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        errors = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errors):
+            outcomes.append(("unreadable-source", run_gate(lcov, coverage, False)))
+        warned = str(unreadable) in errors.getvalue()
+
         expected = [
             ("real-gap", 1),
             ("all-covered", 0),
             ("executed-brace", 1),
             ("missing-input", 2),
+            ("unreadable-source", 1),
         ]
-        ok = outcomes == expected and counted
-        print("self-test:", "ok" if ok else f"FAILED outcomes={outcomes!r} counted={counted}")
+        ok = outcomes == expected and counted and warned
+        print(
+            "self-test:",
+            "ok" if ok else f"FAILED outcomes={outcomes!r} counted={counted} warned={warned}",
+        )
         return 0 if ok else 2
 
 

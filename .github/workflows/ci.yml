@@ -49,6 +49,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test workspace (all features)
         run: cargo test --workspace --all-features
+      # `ml` is off by default, and the tests that pin "learned signal without
+      # the feature => Unsupported" only compile in that configuration
+      # (`signal/src/lib.rs`, `#[cfg(not(feature = "ml"))]`). Without this step
+      # they were never executed on PRs; only release tags ran the default
+      # feature set.
+      - name: Test workspace (default features, ml off)
+        run: cargo test --workspace
 
   coverage:
     name: coverage (100% lines)
@@ -67,6 +74,10 @@ jobs:
           python-version: "3.12"
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
+      # The fixtures pin the no-code predicate and the unreadable-path
+      # fallback, so they must run where the gate runs (seconds, stdlib only).
+      - name: Verify coverage gate fixtures
+        run: python3 scripts/coverage_gate.py --self-test
       - name: Enforce 100% line coverage
         run: |
           chmod +x scripts/coverage.sh

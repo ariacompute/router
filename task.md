@@ -574,6 +574,38 @@ host 套件暴露）。
 `cargo test --workspace --all-features`、`./scripts/coverage.sh self-test`、`./scripts/coverage.sh`
 （stable 工具链实测 `lines: 24766, covered: 24766 (100.00%)`，`no-code lines ignored: 48`）。
 
+## T102 — 完整性评估 v2 剩余缺口 N1/N4（已完成）
+
+依据 `router-completeness-assessment-v2.md` §4「剩余缺口」：N1（CI 从不执行「关闭 `ml` feature」的路径）与
+N4（`coverage_gate.py` 对源码路径可读性敏感，不可读即 exit 2）。N2（Swift 不进 CI）、N3（ONNX 不实现）、
+N5（两项默认开启行为）属可接受折衷或有意设计，本次不动。
+
+- [x] **N1** `.github/workflows/ci.yml` 的 `test` job 在 `cargo test --workspace --all-features` 之后追加
+      `cargo test --workspace`（默认 feature 口径，`signal/Cargo.toml` 的 `default = []`），让
+      `signal/src/lib.rs` 中 `#[cfg(not(feature = "ml"))]` 的 `learned_referenced_is_unsupported` 与
+      `learned_plural_referenced_is_unsupported` 在 PR / push 上真正执行。之前这两个测试只在打 tag 的
+      `release.yml` 覆盖到，规格 §3.2「无 `ml` 且 learned 被引用 → `Unsupported`」与 B6 的复数规范化
+      修复在 CI 上没有守卫。同 job 复用 `Swatinem/rust-cache` 与 target，feature 切换只重编受影响 crate。
+- [x] **N4** `scripts/coverage_gate.py` 的 `no_code_lines()` 新增 `read_source()`：`Path.read_text` 抛
+      `OSError` / `UnicodeDecodeError` 时返回 `None` 并**负缓存**（每文件只探测一次），该文件的零命中行
+      **不**计入 `ignored`，即按「有代码」处理 → 仍以 exit 1 报出逐文件逐行的真实缺口，并按文件名排序
+      一次性向 stderr 告警 `cannot read <path>; treating its zero-hit lines as code`。exit 2 的语义收窄
+      回「缺输入 / 解析失败 / 两报告文件集合不相交 / 过滤后 0 行」，不再因范围过滤参数变化而误判。
+- [x] `--self-test` 场景由 4 个扩到 5 个：新增 `unreadable-source`（合成 `SF:` 指向不存在的 `missing.rs`，
+      `DA:1,0` 且段计数 0 → 断言 exit **1** 而非 2，并断言 stderr 含该路径）；CI `coverage` job 在
+      `./scripts/coverage.sh` 之前新增 `python3 scripts/coverage_gate.py --self-test`，让谓词与兜底本身
+      也受守卫。
+- [x] 文档口径：`requirements.md` §4 T 条写明 test 的两种 feature 口径与覆盖率 job 的自测步骤；
+      `docs/coverage-exclusions.md` 补不可读路径处理与 5 项自测清单；`scripts/coverage.sh` 头部注释同步。
+
+验证：`cargo test --workspace`（555 passed，含 2 个 `ml`-off 用例）、
+`cargo test --workspace --all-features`（564 passed）、`python3 scripts/coverage_gate.py --self-test`
+（`self-test: ok`）、不可读源码路径的合成 lcov/JSON → `cannot read <path>` 告警且 **exit 1**、新脚本对既有一份
+`lcov.info` 的逐行判定与 `git show HEAD:scripts/coverage_gate.py` 完全一致（正常路径零变化）、
+`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`。
+注：本机 `cargo-llvm-cov` 0.6.16 与 rustc 1.100 的 lcov 归属口径异常（同一份代码在干净 target 下只导出 8154 行），
+100% 覆盖率数字以 CI 为准，本次改动不触 Rust 源码。
+
 ---
 
 ## 候选池（未排期 · 待人审）

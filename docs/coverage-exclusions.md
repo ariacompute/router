@@ -45,8 +45,18 @@ match, … — so no test can cover them. The gate cross-checks `lcov.info` with
 Dropped lines are printed as `no-code lines ignored: N`, so the exclusion stays
 visible. A zero-hit line that holds real code always fails the gate; the 78
 branches uncovered by LLVM 23 were covered with tests, not exempted.
+
+A source path that lcov names but the gate cannot read (a widened
+`--ignore-filename-regex` leaking registry/rustc paths, a file deleted mid-run)
+is **not** treated as a no-code line: the line stays in the denominator, so it
+surfaces as a real gap with `coverage_gate: cannot read <path>; treating its
+zero-hit lines as code` on stderr. The unreadable file is probed once (negative
+cache), and exit 2 remains reserved for missing/unparseable input. Treating
+such lines as no-code would let a filter change silently pass, which the
+fail-closed rule forbids.
+
 `scripts/coverage.sh self-test` exercises pass / real gap / executed brace /
-missing input.
+missing input / unreadable source, and CI runs it before the real gate.
 
 Do not replace the lcov line counts with the JSON `summary`/`totals`: those
 count per test-binary instantiation (see above), so they cannot express the
@@ -97,7 +107,7 @@ asserted. Keep that shape when adding similar paths: no `unwrap`, no
 scripts/coverage.sh            # 100% gate (writes lcov.info + coverage.json)
 scripts/coverage.sh report     # per-file summary + no-code lines ignored
 scripts/coverage.sh html       # target/llvm-cov/html/index.html
-scripts/coverage.sh self-test  # gate fixtures: pass / real gap / executed brace / missing input
+scripts/coverage.sh self-test  # gate fixtures: pass / real gap / executed brace / missing input / unreadable source
 ```
 
 The gate needs `python3` (standard library only).
