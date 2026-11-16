@@ -133,6 +133,51 @@ jobs:
                          check=True)
           PY
 
+  e2e:
+    name: e2e (user-facing black-box)
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ARIA_ROUTER_BIN: ${{ github.workspace }}/target/release/aria-router
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install E2E tools
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+      - name: Build aria-router for fixture instances
+        run: cargo build -p aria-router --release
+      - name: Verify E2E harness helpers
+        run: bash scripts/run-user-e2e.sh --self-test
+      - name: Run offline + isolated E2E checks
+        run: |
+          chmod +x scripts/run-user-e2e.sh scripts/audit-ui.sh
+          ./scripts/run-user-e2e.sh \
+            --group cli,task-static,task-fixtures,task-offline \
+            --with-local --with-fixtures \
+            --out-dir out/e2e
+      - name: Require executed E2E cases
+        run: |
+          jq -e '
+            (.summary.fail == 0) and (.summary.pass >= 20) and
+            (([.cases[] | select(.group == "task-fixtures" and .status == "PASS")] | length) >= 3)
+          ' out/e2e/user-e2e-report.json
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: user-e2e-report
+          path: out/e2e
+          if-no-files-found: ignore
+
   bindings:
     name: bindings
     needs: [test]
