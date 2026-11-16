@@ -749,6 +749,53 @@ recipes:
         assert!(set.matched("embedding", "tech") || set.get("embedding", "tech").is_some());
     }
 
+    #[test]
+    #[cfg(feature = "ml")]
+    fn learned_embedding_honours_dim_and_aggregation() {
+        let raw = r#"
+version: v0.3
+providers:
+  models:
+    - name: local/general
+      backend_refs: [{name: p, endpoint: 127.0.0.1:1}]
+entrypoints:
+  - model_names: [auto]
+    router: semantic
+    recipe: mom
+recipes:
+  - name: mom
+    router: semantic
+    routing:
+      signals:
+        embeddings:
+          - name: tech
+            threshold: 0.15
+            dim: 32
+            aggregation_method: max
+            candidates: ["installation guide", "troubleshooting"]
+      decisions:
+        - name: d
+          rules:
+            operator: AND
+            conditions:
+              - type: embedding
+                name: tech
+          modelRefs: [{model: local/general}]
+"#;
+        let doc = RouterDocument::from_yaml_str(raw).unwrap();
+        let recipe = doc.recipe("mom").unwrap();
+        let set = extract(
+            &doc,
+            recipe,
+            &req_with("need installation guide help"),
+            &HashMap::new(),
+        )
+        .unwrap();
+        let hit = set.get("embedding", "tech").expect("embedding hit");
+        assert!(hit.matched, "confidence={}", hit.confidence);
+        assert!(hit.confidence > 0.15, "confidence={}", hit.confidence);
+    }
+
     fn req_with(text: &str) -> ChatRequest {
         ChatRequest {
             model: "auto".into(),

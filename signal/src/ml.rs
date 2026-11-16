@@ -174,6 +174,33 @@ mod tests {
     }
 
     #[test]
+    fn dim_from_prefers_extra_then_catalog_then_default() {
+        let mut extra = serde_json::Map::new();
+        assert_eq!(dim_from(&extra, Some(128)), 128);
+        assert_eq!(dim_from(&extra, None), DEFAULT_DIM);
+        extra.insert("dim".into(), serde_json::json!(32));
+        assert_eq!(dim_from(&extra, Some(128)), 32);
+    }
+
+    #[test]
+    fn classify_match_reads_threshold_and_description() {
+        let mut extra = serde_json::Map::new();
+        extra.insert(
+            "description".into(),
+            serde_json::json!("installation guide"),
+        );
+        extra.insert("threshold".into(), serde_json::json!(0.99));
+        let (matched, conf) = classify_match("installation guide", &extra, 64);
+        assert!(conf > 0.0);
+        assert!(matched, "identical text must clear the threshold: {conf}");
+
+        // A stricter threshold than the maximum similarity rejects the match.
+        extra.insert("threshold".into(), serde_json::json!(1.5));
+        let (matched, _) = classify_match("installation guide", &extra, 64);
+        assert!(!matched);
+    }
+
+    #[test]
     fn embed_match_empty_candidates_and_mean_aggregation() {
         let (ok, c) = embed_match("anything", &[], 0.1, "max", 64);
         assert!(!ok);

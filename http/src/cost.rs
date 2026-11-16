@@ -404,6 +404,13 @@ mod tests {
         large.cost_usd = 0.05;
         ledger.record(large);
 
+        // mid tier event: its notional weight (4x) must be applied too.
+        let mut mid = base_event();
+        mid.competence_tier = Some("mid".into());
+        mid.model = "ariacompute/ariamodel-mid".into();
+        mid.cost_usd = 0.01;
+        ledger.record(mid);
+
         // unknown tier event
         let mut unk = base_event();
         unk.competence_tier = None;
@@ -412,6 +419,7 @@ mod tests {
         let v = ledger.by_competence_tier();
         let tiers = v["by_tier"].as_object().unwrap();
         assert_eq!(tiers["small"]["requests"], 1);
+        assert_eq!(tiers["mid"]["requests"], 1);
         assert_eq!(tiers["large"]["requests"], 1);
         assert_eq!(tiers["unknown"]["requests"], 1);
         // notional large cost > actual → positive estimated savings

@@ -144,6 +144,62 @@ fn setup_validate_status_and_failure_exit_codes() {
 }
 
 #[test]
+fn setup_status_reports_missing_keys_and_users_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+
+    let out = bin()
+        .env("ARIA_COMPUTE_HOME", home)
+        .args([
+            "setup",
+            "--template",
+            "semantic",
+            "--admin-user",
+            "admin",
+            "--admin-password",
+            "password1",
+        ])
+        .output()
+        .expect("run setup");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Point keys/users at files that do not exist so `--status` reports the
+    // "file missing" fallbacks instead of reading the generated stores.
+    let cfg = home.join("router.yml");
+    let text = std::fs::read_to_string(&cfg).unwrap();
+    let text = text
+        .replace(
+            "keys_path: ~/.ariacompute/router-keys.json",
+            "keys_path: absent-keys.json",
+        )
+        .replace(
+            "users_path: ~/.ariacompute/router-users.json",
+            "users_path: absent-users.json",
+        );
+    std::fs::write(&cfg, text).unwrap();
+
+    let out = bin()
+        .env("ARIA_COMPUTE_HOME", home)
+        .args(["setup", "--status"])
+        .output()
+        .expect("run setup --status");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("local_api_keys: (file missing)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("users: (file missing)"), "{stdout}");
+    assert!(stdout.contains("site: (none)"), "{stdout}");
+    assert!(stdout.contains("linked_user: (none)"), "{stdout}");
+    assert!(stdout.contains("oauth_api_key: missing"), "{stdout}");
+}
+
+#[test]
 fn setup_prompts_through_stdio_without_a_tty() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
@@ -235,4 +291,70 @@ fn setup_reads_the_password_from_a_real_tty_with_masked_echo() {
     assert!(status.success(), "masked prompt setup failed");
     assert!(home.join("router.yml").is_file());
     assert!(home.join("router-users.json").is_file());
+}
+#[test]
+fn setup_repairs_a_corrupt_config_and_reports_default_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let flags = [
+        "setup",
+        "--template",
+        "semantic",
+        "--admin-user",
+        "admin",
+        "--admin-password",
+        "password1",
+    ];
+
+    // A corrupt config makes the "existing serve_site" probe fall back to the
+    // default site instead of failing the whole setup.
+    std::fs::write(home.join("router.yml"), "not: [valid\n").unwrap();
+    let out = bin()
+        .env("ARIA_COMPUTE_HOME", home)
+        .args(flags)
+        .output()
+        .expect("run setup over a corrupt config");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = bin()
+        .env("ARIA_COMPUTE_HOME", home)
+        .arg("validate")
+        .output()
+        .expect("run validate");
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "ok");
+
+    // Dropping the configured paths makes `--status` report the built-in
+    // defaults instead of the generated overrides.
+    let cfg = home.join("router.yml");
+    let text = std::fs::read_to_string(&cfg).unwrap();
+    let filtered: String = text
+        .lines()
+        .filter(|line| {
+            let l = line.trim_start();
+            !l.starts_with("keys_path:") && !l.starts_with("users_path:")
+        })
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&cfg, filtered).unwrap();
+
+    let out = bin()
+        .env("ARIA_COMPUTE_HOME", home)
+        .args(["setup", "--status"])
+        .output()
+        .expect("run setup --status");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("keys_path: ~/.ariacompute/router-keys.json"),
+        "{stdout}"
+    );
 }

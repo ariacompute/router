@@ -1429,6 +1429,13 @@ pub const SEMANTIC_GATEWAY_YAML: &str = include_str!("../examples/semantic-gatew
 pub const AGENT_GATEWAY_YAML: &str = include_str!("../examples/agent-gateway.yaml");
 pub const AFM_D_GATEWAY_YAML: &str = include_str!("../examples/afm-d-gateway.yaml");
 
+/// Require a resolved home directory. Split out so the "no home" failure is
+/// testable: it only happens on hosts without `$HOME` and without a passwd
+/// entry, which cannot be reproduced in a unit test.
+pub fn require_home(home: Option<PathBuf>) -> Result<PathBuf, RouterError> {
+    home.ok_or_else(|| RouterError::Io("could not resolve home directory".into()))
+}
+
 /// `$HOME/.ariacompute` (overridable via `ARIA_COMPUTE_HOME`).
 pub fn aria_home() -> Result<PathBuf, RouterError> {
     if let Ok(override_home) = std::env::var("ARIA_COMPUTE_HOME") {
@@ -1436,9 +1443,7 @@ pub fn aria_home() -> Result<PathBuf, RouterError> {
             return Ok(PathBuf::from(override_home));
         }
     }
-    let home = dirs::home_dir()
-        .ok_or_else(|| RouterError::Io("could not resolve home directory".into()))?;
-    Ok(home.join(".ariacompute"))
+    Ok(require_home(dirs::home_dir())?.join(".ariacompute"))
 }
 
 pub fn default_config_path() -> Result<PathBuf, RouterError> {
@@ -1528,9 +1533,7 @@ pub fn resolve_home_path(
         return default();
     }
     if let Some(rest) = t.strip_prefix("~/") {
-        let home = dirs::home_dir()
-            .ok_or_else(|| RouterError::Io("could not resolve home directory".into()))?;
-        return Ok(home.join(rest));
+        return Ok(require_home(dirs::home_dir())?.join(rest));
     }
     if t.starts_with('/') {
         return Ok(PathBuf::from(t));
@@ -1755,6 +1758,13 @@ pub fn write_default_config_with(
     )
 }
 
+/// Map a parse failure of the embedded starter template into a config error.
+/// The embedded YAML always parses, so the mapping is generic over the error
+/// type and covered by a unit test with an injected failure.
+fn embedded_template<T, E: std::fmt::Display>(parsed: Result<T, E>) -> Result<T, RouterError> {
+    parsed.map_err(|e| RouterError::Config(format!("embedded template: {e}")))
+}
+
 /// Write gateway starter YAML with optional model/backend overrides.
 pub fn write_default_config_with_opts(
     kind: &str,
@@ -1779,8 +1789,7 @@ pub fn write_default_config_with_opts(
             p.file_name().and_then(|s| s.to_str()).unwrap_or("file")
         )
     };
-    let mut doc: serde_yaml::Value = serde_yaml::from_str(body)
-        .map_err(|e| RouterError::Config(format!("embedded template: {e}")))?;
+    let mut doc: serde_yaml::Value = embedded_template(serde_yaml::from_str(body))?;
     patch_setup_models(&mut doc, models);
     if let Some(map) = doc.as_mapping_mut() {
         let mut g = serde_yaml::Mapping::new();
@@ -2310,12 +2319,12 @@ recipes:
 
     fn assert_track_e_routing(routing: &Routing) {
         let prio = |n: &str| {
-            routing
+            let found = routing
                 .decisions
                 .iter()
                 .find(|d| d.name == n)
-                .map(|d| d.priority)
-                .unwrap_or_else(|| panic!("missing decision {n}"))
+                .map(|d| d.priority);
+            found.expect("track E decision must exist")
         };
         // Track E: multi_question > systems_mid > factoid > intro_teach
         assert!(prio("multi_question") > prio("systems_mid"));
@@ -2373,13 +2382,8 @@ recipes:
             ),
         ] {
             let doc = RouterDocument::from_yaml_str(raw).unwrap();
-            let r = doc
-                .recipe(recipe)
-                .unwrap_or_else(|_| panic!("{label}: recipe {recipe}"));
-            let routing = r
-                .routing
-                .as_ref()
-                .unwrap_or_else(|| panic!("{label}: routing"));
+            let r = doc.recipe(recipe).expect(label);
+            let routing = r.routing.as_ref().expect(label);
             assert_track_e_routing(routing);
         }
     }
@@ -3435,5 +3439,34 @@ recipes:
         let err = RouterDocument::from_yaml_str(&proto("grpc")).unwrap_err();
         assert!(matches!(err, RouterError::Unsupported(_)), "{err}");
         assert!(err.to_string().contains("protocol grpc"), "{err}");
+    }
+
+    #[test]
+    fn recipe_lookup_reports_unknown_names() {
+        let doc = RouterDocument::from_yaml_str(TINY).unwrap();
+        assert!(doc.recipe("mom").is_ok());
+        let err = doc.recipe("nope").unwrap_err();
+        assert!(err.to_string().contains("recipe nope not found"), "{err}");
+    }
+
+    #[test]
+    fn require_home_reports_a_missing_home_directory() {
+        // `dirs::home_dir()` never fails in-process; pass the Option in directly.
+        let err = require_home(None).unwrap_err();
+        assert!(
+            err.to_string().contains("could not resolve home directory"),
+            "{err}"
+        );
+        assert_eq!(
+            require_home(Some(PathBuf::from("/home/tester"))).unwrap(),
+            PathBuf::from("/home/tester")
+        );
+    }
+
+    #[test]
+    fn embedded_template_maps_parse_failures() {
+        let err = embedded_template::<serde_yaml::Value, _>(Err("boom")).unwrap_err();
+        assert!(err.to_string().contains("embedded template: boom"), "{err}");
+        assert!(embedded_template::<serde_yaml::Value, _>(serde_yaml::from_str("a: 1")).is_ok());
     }
 }

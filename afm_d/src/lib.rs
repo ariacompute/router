@@ -1212,6 +1212,33 @@ mod tests {
             AfmDAnswers::from_reason(&easy.reason).unwrap().continuation,
             0.0
         );
+
+        // Every competence answer has its own score and factor.
+        let medium = decision_from_systemone(
+            &three_answers("a/small", "medium", "easy", "new", 1.0),
+            &task,
+        )
+        .unwrap();
+        assert!((medium.confidence - 0.9).abs() < 1e-6, "{medium:?}");
+        assert!(
+            medium.reason.contains("competence=0.5"),
+            "{}",
+            medium.reason
+        );
+    }
+
+    #[test]
+    fn systemone_payload_requires_route_and_choice() {
+        let task = three_task();
+        let err = decision_from_systemone(&serde_json::json!({"answers": {}}), &task).unwrap_err();
+        assert!(err.to_string().contains("missing answers.route"), "{err}");
+
+        let err = decision_from_systemone(&serde_json::json!({"answers": {"route": {}}}), &task)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("missing answers.route.choice"),
+            "{err}"
+        );
     }
 
     #[test]

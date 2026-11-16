@@ -1905,4 +1905,38 @@ mod tests {
             Some(5.0)
         );
     }
+
+    #[test]
+    fn load_reports_unreadable_and_malformed_files() {
+        let dir = tempdir().unwrap();
+        // A directory at the keys path makes `read_to_string` fail.
+        let as_dir = dir.path().join("keys-dir.json");
+        std::fs::create_dir(&as_dir).unwrap();
+        let err = KeyStore::load(&as_dir).unwrap_err();
+        assert!(err.to_string().contains("read"), "{err}");
+
+        // Broken JSON is a config error that names the file.
+        let broken = dir.path().join("keys.json");
+        std::fs::write(&broken, b"{not json").unwrap();
+        let err = KeyStore::load(&broken).unwrap_err();
+        assert!(err.to_string().contains("keys file"), "{err}");
+    }
+
+    #[test]
+    fn legacy_serve_path_without_parent_falls_back_to_cwd() {
+        // `/` has no parent component, so the legacy sidecar resolves against `.`.
+        assert_eq!(
+            KeyStore::legacy_serve_path(std::path::Path::new("/")),
+            std::path::PathBuf::from("./router-serve.json")
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_serve_reports_unreadable_sidecar() {
+        let dir = tempdir().unwrap();
+        // A directory named like the legacy sidecar exists but cannot be read.
+        std::fs::create_dir(dir.path().join("router-serve.json")).unwrap();
+        let err = KeyStore::load(&dir.path().join("keys.json")).unwrap_err();
+        assert!(err.to_string().contains("router-serve.json"), "{err}");
+    }
 }

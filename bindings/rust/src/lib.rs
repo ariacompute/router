@@ -46,6 +46,13 @@ fn route_headers(headers: &HeaderMap) -> Value {
     Value::Object(out)
 }
 
+/// Map an in-process call failure into the SDK's upstream error. Generic over
+/// the error type so the mapping can be covered by a test without provoking an
+/// in-process request failure.
+fn upstream<T, E: std::fmt::Display>(result: Result<T, E>) -> Result<T, RouterError> {
+    result.map_err(|e| RouterError::Upstream(e.to_string()))
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SetupConfig {
     pub base_url: String,
@@ -151,16 +158,11 @@ impl Router {
                     })
                     .unwrap_or_else(|e: std::convert::Infallible| match e {})
             } else {
-                self.rt
-                    .block_on(sdk_chat_complete(st.clone(), req))
-                    .map_err(|e| RouterError::Upstream(e.to_string()))?
+                upstream(self.rt.block_on(sdk_chat_complete(st.clone(), req)))?
             };
             let headers = route_headers(resp.headers());
             let status = resp.status();
-            let bytes = self
-                .rt
-                .block_on(to_bytes(resp.into_body(), 1 << 22))
-                .map_err(|e| RouterError::Upstream(e.to_string()))?;
+            let bytes = upstream(self.rt.block_on(to_bytes(resp.into_body(), 1 << 22)))?;
             // Keep the decision headers on failure so `last_route()` can explain a
             // 401/403/5xx (spec §3.7), matching the C ABI.
             self.set_last_headers(headers);
@@ -660,6 +662,14 @@ mod tests {
         assert!(v.get("authorization").is_none());
         assert!(v.get("x-aria-router-reason").is_none());
         assert_eq!(route_headers(&HeaderMap::new()), serde_json::json!({}));
+    }
+
+    #[test]
+    fn upstream_mapper_preserves_success_and_renders_failures() {
+        assert_eq!(upstream(Ok::<_, String>(7)).unwrap(), 7);
+        let err = upstream(Err::<i32, _>("body read failed")).unwrap_err();
+        assert!(matches!(err, RouterError::Upstream(_)), "{err}");
+        assert!(err.to_string().contains("body read failed"), "{err}");
     }
 
     #[test]

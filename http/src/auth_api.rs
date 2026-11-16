@@ -376,6 +376,40 @@ fn oauth_error_redirect(msg: &str) -> Response {
     Redirect::temporary(&format!("/?error={}", urlencoding_encode(msg))).into_response()
 }
 
+/// Fold an oauth step's error into the dashboard error redirect.
+///
+/// The steps below only fail for environment problems (unwritable user file),
+/// which a test cannot provoke through the handler, so the mapping lives here
+/// and is exercised directly.
+#[allow(clippy::result_large_err)] // one redirect response per failure arm
+fn oauth_step<T>(result: Result<T, RouterError>) -> Result<T, Response> {
+    result.map_err(|e| oauth_error_redirect(&e.to_string()))
+}
+
+/// Build the HTTP client used to talk to serve. `reqwest` only fails here on a
+/// broken TLS backend, which cannot be provoked in-process; the mapping is
+/// generic over the error type so a test can inject one.
+#[allow(clippy::result_large_err)] // one redirect response per failure arm
+fn oauth_client<E: std::fmt::Display>(
+    built: Result<reqwest::Client, E>,
+) -> Result<reqwest::Client, Response> {
+    built.map_err(|e| oauth_error_redirect(&e.to_string()))
+}
+
+/// Same as [`oauth_client`] for the serve API helpers, which report upstream.
+fn serve_http_client<E: std::fmt::Display>(
+    built: Result<reqwest::Client, E>,
+) -> Result<reqwest::Client, RouterError> {
+    built.map_err(|e| RouterError::Upstream(format!("serve client: {e}")))
+}
+
+/// A serve client with the shared 30s timeout applied.
+fn serve_client_builder() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+}
+
 pub async fn oauth_callback(
     State(st): State<Arc<AppState>>,
     Query(q): Query<LinkCallbackQ>,
@@ -403,10 +437,7 @@ async fn oauth_callback_inner(st: &Arc<AppState>, q: LinkCallbackQ) -> Result<Re
         "{}/api/router-link/exchange",
         site_url.trim_end_matches('/')
     );
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| oauth_error_redirect(&e.to_string()))?;
+    let client = oauth_client(serve_client_builder())?;
     let body: Value = client
         .post(&exchange_url)
         .json(&json!({"code": code}))
@@ -459,17 +490,12 @@ async fn oauth_callback_inner(st: &Arc<AppState>, q: LinkCallbackQ) -> Result<Re
     // Upsert the serve identity as a router dashboard user (role by whitelist /
     // first-admin bootstrap). The serve role is intentionally NOT mirrored.
     let admin_emails = st.doc.lock().unwrap().global.admin_emails.clone();
-    let user = st
-        .users
-        .lock()
-        .unwrap()
-        .upsert_serve_user(
-            &serve_id_str,
-            serve_email.clone(),
-            serve_name,
-            &admin_emails,
-        )
-        .map_err(|e| oauth_error_redirect(&e.to_string()))?;
+    let user = oauth_step(st.users.lock().unwrap().upsert_serve_user(
+        &serve_id_str,
+        serve_email.clone(),
+        serve_name,
+        &admin_emails,
+    ))?;
     // Store the serve account globally (api key / link_token) for LLM proxying.
     let link_token = body
         .get("link_token")
@@ -503,17 +529,10 @@ async fn oauth_callback_inner(st: &Arc<AppState>, q: LinkCallbackQ) -> Result<Re
         api_key: None,
         owner_user_id: Some(user.id.clone()),
     };
-    keys_guard
-        .apply_exchange(exchange)
-        .map_err(|e| oauth_error_redirect(&e.to_string()))?;
+    oauth_step(keys_guard.apply_exchange(exchange))?;
     drop(keys_guard);
     // Issue a router dashboard session for the upserted user.
-    let token = st
-        .users
-        .lock()
-        .unwrap()
-        .issue_session(&user.id)
-        .map_err(|e| oauth_error_redirect(&e.to_string()))?;
+    let token = oauth_step(st.users.lock().unwrap().issue_session(&user.id))?;
     // Best-effort: auto-sync the serve API key from serve. Serve now returns the
     // plaintext secret in the key list, so store it directly as the durable Bearer
     // credential — no manual paste needed. Run in a detached task so the handler
@@ -546,10 +565,7 @@ async fn sync_serve_key(st: Arc<AppState>, site_url: String, link_token: String)
 
 /// Call a serve JSON API endpoint authenticated with a Bearer token.
 async fn serve_json(url: &str, bearer: &str) -> Result<Value, RouterError> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| RouterError::Upstream(format!("serve client: {e}")))?;
+    let client = serve_http_client(serve_client_builder())?;
     let req = client
         .request(Method::GET, url)
         .header(header::AUTHORIZATION, format!("Bearer {bearer}"));
@@ -651,10 +667,7 @@ pub async fn serve_account_sync(
         )
     })?;
     let list_url = format!("{}/api/api-keys", site_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| RouterError::Upstream(format!("serve client: {e}")))?;
+    let client = serve_http_client(serve_client_builder())?;
     let resp = client
         .get(&list_url)
         .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
@@ -1876,5 +1889,75 @@ global:
             "created_at": "2025-01-01T00:00:00Z"
         })])
         .is_none());
+    }
+
+    #[test]
+    fn client_builders_map_failures_to_redirects() {
+        // `reqwest` only fails to build on a broken TLS backend, which cannot be
+        // provoked in-process; the error is injected instead.
+        let res = oauth_client(Err::<reqwest::Client, _>("tls backend unavailable")).unwrap_err();
+        assert_eq!(location(&res), "/?error=tls%20backend%20unavailable");
+
+        let err =
+            serve_http_client(Err::<reqwest::Client, _>("tls backend unavailable")).unwrap_err();
+        assert!(matches!(err, RouterError::Upstream(_)), "{err}");
+        assert!(err.to_string().contains("serve client"), "{err}");
+
+        // A healthy builder still yields a usable client on both paths.
+        assert!(serve_http_client(serve_client_builder()).is_ok());
+        assert!(oauth_client(serve_client_builder()).is_ok());
+    }
+
+    #[test]
+    fn oauth_step_maps_step_errors_to_redirects() {
+        assert_eq!(oauth_step(Ok::<_, RouterError>(7)).unwrap(), 7);
+        let res = oauth_step(Err::<(), _>(RouterError::Io(
+            "users.json unwritable".into(),
+        )))
+        .unwrap_err();
+        assert!(
+            location(&res).ends_with("users.json%20unwritable"),
+            "{:?}",
+            location(&res)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "missing user nobody")]
+    fn session_for_panics_on_unknown_user() {
+        let (st, _dir) = state(true);
+        let _ = session_for(&st, "nobody");
+    }
+
+    #[tokio::test]
+    async fn serve_account_sync_reports_network_and_parse_failures() {
+        let (st, _dir) = state(true);
+        let h = cookie_headers(&session_for(&st, "admin"));
+        {
+            let mut keys = st.keys.lock().unwrap();
+            keys.oauth_set_site("cn").unwrap();
+            keys.set_site_url_for_test("http://127.0.0.1:1");
+            keys.oauth_set_api_key("sk-bf-SYNCKEY1234567", None)
+                .unwrap();
+        }
+        // Connection failure is surfaced with the endpoint, not swallowed.
+        let err = serve_account_sync(State(st.clone()), h.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            err.0.to_string().contains("serve request to"),
+            "{:?}",
+            err.0
+        );
+
+        // A 200 with a non-JSON body is an upstream error too.
+        let base = spawn_serve(
+            (200, "application/json", "{}".into()),
+            (200, "text/plain", "nope".into()),
+        )
+        .await;
+        st.keys.lock().unwrap().set_site_url_for_test(&base);
+        let err = serve_account_sync(State(st.clone()), h).await.unwrap_err();
+        assert!(err.0.to_string().contains("serve json from"), "{:?}", err.0);
     }
 }

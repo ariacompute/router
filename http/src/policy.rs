@@ -741,6 +741,55 @@ mod tests {
     }
 
     #[test]
+    fn model_performance_applies_every_tier_weight() {
+        let event = |tier: &str, cost: f64| CostEvent {
+            model: format!("local/{tier}"),
+            competence_tier: Some(tier.into()),
+            cost_usd: cost,
+            ..CostEvent::default()
+        };
+        let out = model_performance(
+            &[
+                event("small", 0.001),
+                event("mid", 0.01),
+                event("large", 0.1),
+            ],
+            &[],
+        );
+        let tiers = out["by_tier"].as_array().unwrap();
+        assert_eq!(tiers.len(), 3);
+        let notional = |i: usize| tiers[i]["notional_cost_usd"].as_f64().unwrap();
+        assert_eq!(tiers[0]["name"], "large");
+        assert!((notional(0) - 0.1).abs() < 1e-12);
+        assert_eq!(tiers[1]["name"], "mid");
+        assert!((notional(1) - 0.04).abs() < 1e-12);
+        assert_eq!(tiers[2]["name"], "small");
+        assert!((notional(2) - 0.016).abs() < 1e-12);
+        assert_eq!(out["has_evidence"], false);
+    }
+
+    #[test]
+    fn evidence_seed_finish_marks_missing_tool_outcomes() {
+        let seed = EvidenceSeed {
+            replay_id: "r1".into(),
+            tools_declared: true,
+            ..EvidenceSeed::default()
+        };
+        let ev = seed.finish("ok", None, None, 10.0);
+        assert_eq!(ev.tool_outcomes, Some(json!([{"status": "no-outcome"}])));
+        assert_eq!(ev.ts_unix, 10.0);
+        assert_eq!(ev.outcome, "ok");
+
+        // An explicit outcome always wins over the placeholder.
+        let ev = seed.finish("ok", None, Some(json!([{"status": "ok"}])), 11.0);
+        assert_eq!(ev.tool_outcomes, Some(json!([{"status": "ok"}])));
+
+        // Without declared tools there is no placeholder at all.
+        let ev = EvidenceSeed::default().finish("ok", None, None, 12.0);
+        assert!(ev.tool_outcomes.is_none());
+    }
+
+    #[test]
     fn amend_seed_only_fills_missing_fields() {
         let mut st = RuntimeState::default();
         st.set_seed(EvidenceSeed {

@@ -19,4 +19,5 @@ bindings/flutter/build/
 out/
 bench/vllm-sr/.vllm-sr/
 lcov.info
+coverage.json
 detect-out/

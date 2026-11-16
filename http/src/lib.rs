@@ -73,6 +73,18 @@ pub struct AppState {
     pub runtime: Mutex<RuntimeState>,
 }
 
+/// Resolve a configured path, falling back to `fallback` when the environment
+/// cannot expand it (no resolvable home directory). The failure only happens on
+/// hosts without `$HOME` and without a passwd entry, so the fallback lives in
+/// this helper to stay reachable from a unit test.
+fn resolve_path_or(
+    raw: &str,
+    fallback: PathBuf,
+    resolve: fn(&str) -> Result<PathBuf, RouterError>,
+) -> PathBuf {
+    resolve(raw).unwrap_or(fallback)
+}
+
 impl AppState {
     pub fn new(doc: RouterDocument) -> Self {
         Self::with_path(doc, PathBuf::new())
@@ -83,19 +95,25 @@ impl AppState {
             .global
             .keys_path
             .as_deref()
-            .map(|p| resolve_keys_path(p).unwrap_or_else(|_| PathBuf::from(p)))
+            .map(|p| resolve_path_or(p, PathBuf::from(p), resolve_keys_path))
             .unwrap_or_else(|| {
-                resolve_keys_path("~/.ariacompute/router-keys.json")
-                    .unwrap_or_else(|_| PathBuf::from("router-keys.json"))
+                resolve_path_or(
+                    "~/.ariacompute/router-keys.json",
+                    PathBuf::from("router-keys.json"),
+                    resolve_keys_path,
+                )
             });
         let users_path = doc
             .global
             .users_path
             .as_deref()
-            .map(|p| resolve_users_path(p).unwrap_or_else(|_| PathBuf::from(p)))
+            .map(|p| resolve_path_or(p, PathBuf::from(p), resolve_users_path))
             .unwrap_or_else(|| {
-                resolve_users_path("~/.ariacompute/router-users.json")
-                    .unwrap_or_else(|_| PathBuf::from("router-users.json"))
+                resolve_path_or(
+                    "~/.ariacompute/router-users.json",
+                    PathBuf::from("router-users.json"),
+                    resolve_users_path,
+                )
             });
         let keys = KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path));
         let users = UserStore::load(&users_path).unwrap_or_else(|_| UserStore::empty(users_path));
@@ -553,8 +571,11 @@ fn replace_config(st: &AppState, doc: RouterDocument, raw: &str) -> Result<(), R
         .map(resolve_keys_path)
         .transpose()?
         .unwrap_or_else(|| {
-            resolve_keys_path("~/.ariacompute/router-keys.json")
-                .unwrap_or_else(|_| PathBuf::from("router-keys.json"))
+            resolve_path_or(
+                "~/.ariacompute/router-keys.json",
+                PathBuf::from("router-keys.json"),
+                resolve_keys_path,
+            )
         });
     let keys = KeyStore::load(&keys_path).unwrap_or_else(|_| KeyStore::empty(keys_path));
     *st.keys.lock().unwrap() = keys;
@@ -8089,5 +8110,191 @@ global:
         assert_eq!(d.model, "local/general");
         assert!(d.reason.contains("competence="), "{}", d.reason);
         assert!(aria_router_afm_d::AfmDAnswers::from_reason(&d.reason).is_some());
+    }
+
+    #[test]
+    fn resolve_path_or_falls_back_without_a_home_directory() {
+        // `dirs::home_dir()` only fails on hosts without $HOME *and* without a
+        // passwd entry, so the fallback is driven through a failing resolver.
+        let failing = |_: &str| Err(RouterError::Io("could not resolve home directory".into()));
+        assert_eq!(
+            resolve_path_or(
+                "~/router-keys.json",
+                PathBuf::from("router-keys.json"),
+                failing
+            ),
+            PathBuf::from("router-keys.json")
+        );
+        assert_eq!(
+            resolve_path_or(
+                "/tmp/abs-router-keys.json",
+                PathBuf::from("unused"),
+                resolve_keys_path
+            ),
+            PathBuf::from("/tmp/abs-router-keys.json")
+        );
+    }
+
+    #[test]
+    fn chat_auth_falls_back_to_header_then_anonymous() {
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml("http://127.0.0.1:9")).unwrap();
+        let (st, _d) = isolated_state(doc);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-aria-user", axum::http::HeaderValue::from_static("alice"));
+        let auth = resolve_chat_auth(&st, &headers, &json!({})).unwrap();
+        assert_eq!(auth.user, "alice");
+        assert_eq!(auth.identity, "anonymous");
+
+        // A header that is not valid visible ASCII is ignored, not trusted.
+        headers.insert(
+            "x-aria-user",
+            axum::http::HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+        let auth = resolve_chat_auth(&st, &headers, &json!({})).unwrap();
+        assert_eq!(auth.user, "anonymous");
+
+        // An explicit body user always wins over the header.
+        headers.insert("x-aria-user", axum::http::HeaderValue::from_static("alice"));
+        let auth = resolve_chat_auth(&st, &headers, &json!({"user": "bob"})).unwrap();
+        assert_eq!(auth.user, "bob");
+    }
+
+    #[test]
+    fn attach_route_headers_falls_back_when_values_are_not_headers() {
+        // A control character cannot become a header value; the layer/decision
+        // headers fall back to "none" and the model header is skipped.
+        let mut d = RouteDecision::bypass("bad\u{1}model");
+        d.layer = "bad\u{1}layer".into();
+        d.decision = "bad\u{1}decision".into();
+        let mut h = HeaderMap::new();
+        attach_route_headers(&mut h, &d);
+        assert_eq!(h["x-aria-router-layer"], "none");
+        assert_eq!(h["x-aria-router-decision"], "none");
+        assert!(h.get("x-aria-router-model").is_none());
+    }
+
+    #[test]
+    fn replace_config_reports_unwritable_config_path() {
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml("http://127.0.0.1:9")).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("missing-dir").join("router.yml");
+        let (st, _keys_dir) = isolated_state_with_path(doc.clone(), config_path);
+        let err = replace_config(&st, doc, "version: v0.3").unwrap_err();
+        assert!(err.to_string().contains("write"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn route_entries_reject_missing_router_sections() {
+        // Validation rejects these at load time; the runtime guards are the
+        // defence in depth for a document assembled in memory.
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml("http://127.0.0.1:9")).unwrap();
+        let (st, _d) = isolated_state(doc.clone());
+        let meta = HashMap::new();
+
+        let mut semantic = doc.recipes[0].clone();
+        assert_eq!(semantic.name, "mom");
+        semantic.routing = None;
+        let err = route_semantic(
+            &st,
+            &doc,
+            &semantic,
+            text_req("ariacompute/semantic-auto"),
+            &meta,
+            "key",
+            "replay",
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("missing routing"), "{err}");
+
+        let mut agent = doc.recipes[1].clone();
+        assert_eq!(agent.name, "agent-default");
+        agent.agent = None;
+        let err = route_agent(&st, &doc, &agent, text_req("ariacompute/agent-auto"), &meta)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("missing agent"), "{err}");
+
+        let afm_yaml = r#"version: v0.3
+listeners:
+  - name: http
+    address: 127.0.0.1
+    port: 8899
+providers:
+  defaults:
+    default_model: local/general
+  models:
+    - name: local/general
+      provider_model_id: echo
+      locality: local
+      modality: text
+      capabilities: [chat]
+      backend_refs:
+        - name: primary
+          endpoint: http://127.0.0.1:9
+recipes:
+  - name: afm-d-default
+    router: afm-d
+    afm-d:
+      endpoint: http://127.0.0.1:9/v1/systemone
+      timeout_ms: 2000
+      question_template: three
+global:
+  require_api_key: false
+"#;
+        let afm_doc = RouterDocument::from_yaml_str(afm_yaml).unwrap();
+        let (afm_st, _afm_dir) = isolated_state(afm_doc.clone());
+        let mut afm = afm_doc.recipes[0].clone();
+        assert_eq!(afm.name, "afm-d-default");
+        afm.afm_d = None;
+        let err = route_afm_d(
+            &afm_st,
+            &afm_doc,
+            &afm,
+            text_req("local/general"),
+            &meta,
+            "key",
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("missing afm-d"), "{err}");
+    }
+
+    #[test]
+    fn trust_entrypoint_falls_back_without_entrypoints() {
+        let mut doc = RouterDocument::from_yaml_str(&tiny_yaml("http://127.0.0.1:9")).unwrap();
+        assert_eq!(trust_entrypoint(&doc), "ariacompute/semantic-auto");
+        doc.entrypoints.clear();
+        assert_eq!(trust_entrypoint(&doc), "ariacompute/semantic-auto");
+    }
+
+    #[tokio::test]
+    async fn reroute_without_entrypoints_uses_the_placeholder_model() {
+        let doc = RouterDocument::from_yaml_str(&tiny_yaml("http://127.0.0.1:9")).unwrap();
+        let (st, _d) = isolated_state(doc);
+        st.doc.lock().unwrap().entrypoints.clear();
+        let cfg = st.doc.lock().unwrap().global.services.router_replay.clone();
+        st.replay_log.push(
+            ReplayRecord {
+                id: "rec-noep".into(),
+                decision: RouteDecision::bypass("local/general"),
+                prompt_preview: Some("hello".into()),
+                ..Default::default()
+            },
+            &cfg,
+        );
+        let app = mgmt_router(st.clone());
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            "/v1/router/replay/rec-noep/reroute",
+            None,
+            &[],
+        )
+        .await;
+        // Without any entrypoint the reroute cannot resolve a route; the
+        // placeholder model must not turn into a panic.
+        assert!(!status.is_success(), "{status}");
     }
 }

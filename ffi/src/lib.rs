@@ -103,6 +103,13 @@ pub extern "C" fn aria_router_init(config_path: *const c_char) -> *mut AriaRoute
     }
 }
 
+/// Map any error into the C ABI's string error. Generic over the error type so
+/// a unit test can inject one: the host failures below (no home directory, a
+/// truncated body) cannot be provoked in-process.
+fn map_err_string<T, E: std::fmt::Display>(result: Result<T, E>) -> Result<T, String> {
+    result.map_err(|e| e.to_string())
+}
+
 fn resolve_init_config_path(config_path: *const c_char) -> Result<std::path::PathBuf, String> {
     if !config_path.is_null() {
         match cstr(config_path) {
@@ -110,11 +117,10 @@ fn resolve_init_config_path(config_path: *const c_char) -> Result<std::path::Pat
                 let t = s.trim();
                 // Expand `~/…` (shell does not expand inside library calls).
                 if t.starts_with("~/") {
-                    return aria_router_config::resolve_home_path(
+                    return map_err_string(aria_router_config::resolve_home_path(
                         t,
                         aria_router_config::default_config_path,
-                    )
-                    .map_err(|e| e.to_string());
+                    ));
                 }
                 return Ok(std::path::PathBuf::from(t));
             }
@@ -122,7 +128,7 @@ fn resolve_init_config_path(config_path: *const c_char) -> Result<std::path::Pat
             Err(()) => return Err("invalid config_path".into()),
         }
     }
-    aria_router_config::default_config_path().map_err(|e| e.to_string())
+    map_err_string(aria_router_config::default_config_path())
 }
 
 #[no_mangle]
@@ -277,14 +283,11 @@ fn complete_inner(
             })
             .unwrap_or_else(|e: std::convert::Infallible| match e {})
         } else {
-            h.rt.block_on(sdk_chat_complete(st.clone(), req_json))
-                .map_err(|e| e.to_string())?
+            map_err_string(h.rt.block_on(sdk_chat_complete(st.clone(), req_json)))?
         };
         let headers = route_headers(resp.headers());
         let status = resp.status();
-        let bytes =
-            h.rt.block_on(to_bytes(resp.into_body(), 1 << 22))
-                .map_err(|e| e.to_string())?;
+        let bytes = map_err_string(h.rt.block_on(to_bytes(resp.into_body(), 1 << 22)))?;
         // Keep the decision headers even when the call failed: `last_route()`
         // must be able to diagnose 401/403/5xx responses (spec §3.7).
         h.set_last_headers(headers);
@@ -294,19 +297,17 @@ fn complete_inner(
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     } else if let Some(url) = &h.base_url {
         let url = format!("{}/v1/chat/completions", url.trim_end_matches('/'));
-        let resp =
-            h.rt.block_on(async {
-                let client = reqwest::Client::new();
-                let mut req = client.post(&url).json(&req_json);
-                if let Some(tok) = token_nonempty(h) {
-                    req = req.header("authorization", format!("Bearer {tok}"));
-                }
-                req.send().await
-            })
-            .map_err(|e| e.to_string())?;
+        let resp = map_err_string(h.rt.block_on(async {
+            let client = reqwest::Client::new();
+            let mut req = client.post(&url).json(&req_json);
+            if let Some(tok) = token_nonempty(h) {
+                req = req.header("authorization", format!("Bearer {tok}"));
+            }
+            req.send().await
+        }))?;
         let headers = route_headers(resp.headers());
         let status = resp.status();
-        let text = h.rt.block_on(resp.text()).map_err(|e| e.to_string())?;
+        let text = map_err_string(h.rt.block_on(resp.text()))?;
         // Keep the decision headers on failure too (spec §3.7).
         h.set_last_headers(headers);
         if !status.is_success() {
@@ -1292,5 +1293,14 @@ mod tests {
         ));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn map_err_string_preserves_success_and_renders_failures() {
+        assert_eq!(map_err_string(Ok::<_, String>(7)).unwrap(), 7);
+        assert_eq!(
+            map_err_string(Err::<(), _>("no home directory")).unwrap_err(),
+            "no home directory"
+        );
     }
 }

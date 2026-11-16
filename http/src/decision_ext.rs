@@ -294,6 +294,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delayed_but_malformed_body_is_reported() {
+        use axum::response::IntoResponse;
+        use axum::routing::post;
+        // 200 with a body that is not JSON: decoding fails and fails closed.
+        async fn ext() -> impl IntoResponse {
+            (
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                "not-json",
+            )
+        }
+        let app = axum::Router::new().route("/v1/decision", post(ext));
+        let endpoint = spawn_app(app).await;
+        let cfg = DecisionExtCfg {
+            endpoint: Some(endpoint),
+            ..Default::default()
+        };
+        let err = decide(&req(), &cfg).await.unwrap_err();
+        assert!(matches!(err, RouterError::Extension(_)), "{err}");
+        assert!(err.to_string().contains("decode"), "{err}");
+    }
+
+    #[tokio::test]
     async fn timeout_without_fallback_errors() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         // Raw TCP stub: accept, wait, then answer. It is independent of the client's

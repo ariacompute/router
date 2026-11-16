@@ -490,10 +490,15 @@ impl From<&UserRecord> for UserPublic {
 
 fn hash_password(password: &str) -> Result<String, RouterError> {
     let salt = SaltString::generate(&mut rand::thread_rng());
-    let hash = Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| RouterError::Io(format!("password hash: {e}")))?;
+    let hash = password_hash_result(Argon2::default().hash_password(password.as_bytes(), &salt))?;
     Ok(hash.to_string())
+}
+
+/// Map an Argon2 failure into a router error. The default parameters cannot
+/// fail in-process, so the mapping is generic over the error type and covered
+/// by a unit test with an injected error.
+fn password_hash_result<T, E: std::fmt::Display>(hashed: Result<T, E>) -> Result<T, RouterError> {
+    hashed.map_err(|e| RouterError::Io(format!("password hash: {e}")))
 }
 
 fn verify_password(password: &str, hash: &str) -> Result<(), RouterError> {
@@ -958,5 +963,34 @@ mod tests {
             .create_user("root2", "password1", UserRole::Admin)
             .unwrap();
         assert_eq!(admin.role, UserRole::Admin);
+    }
+
+    #[test]
+    fn persist_reports_uncreatable_parent_directory() {
+        // A regular file where the parent directory should be makes
+        // `create_dir_all` fail on every platform.
+        let dir = tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let mut store = UserStore::empty(blocker.join("users.json"));
+        let err = store
+            .create_user("carol", "password1", UserRole::User)
+            .unwrap_err();
+        assert!(err.to_string().contains("mkdir"), "{err}");
+    }
+
+    #[test]
+    fn password_hash_failures_are_reported() {
+        // Argon2 with the default parameters cannot fail in-process; inject the
+        // error so the mapping stays covered.
+        let err = password_hash_result(Err::<String, _>("salt rejected")).unwrap_err();
+        assert!(
+            err.to_string().contains("password hash: salt rejected"),
+            "{err}"
+        );
+        assert_eq!(
+            password_hash_result(Ok::<_, String>("hash")).unwrap(),
+            "hash"
+        );
     }
 }

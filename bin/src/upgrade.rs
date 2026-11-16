@@ -135,9 +135,7 @@ pub async fn run_with(
     println!("upgraded to {ver}");
     println!(
         "libaria-router_ffi installed under {} (set ARIA_ROUTER_FFI_LIB if needed)",
-        lib_dir()
-            .map_err(|e| io::Error::other(e.to_string()))?
-            .display()
+        lib_dir().map_err(io_err)?.display()
     );
     Ok(())
 }
@@ -381,14 +379,17 @@ fn extract_archive(archive: &Path, dest: &Path) -> io::Result<()> {
     }
 }
 
+/// Map a zip error into `InvalidData` without a closure, so the mapping stays a
+/// covered line even though `by_index` cannot fail after a successful open.
+fn zip_err<E: std::fmt::Display>(e: E) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+}
+
 fn extract_zip(archive: &Path, dest: &Path) -> io::Result<()> {
     let file = fs::File::open(archive)?;
-    let mut zip =
-        zip::ZipArchive::new(file).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(zip_err)?;
     for i in 0..zip.len() {
-        let mut entry = zip
-            .by_index(i)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let mut entry = zip.by_index(i).map_err(zip_err)?;
         let out_path = match entry.enclosed_name() {
             Some(p) => dest.join(p),
             None => continue,
@@ -517,6 +518,7 @@ fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::ENV_LOCK;
 
     fn sample_releases() -> Vec<ReleaseInfo> {
         vec![
@@ -664,9 +666,7 @@ mod tests {
 
     fn with_home<T>(f: impl FnOnce(&Path) -> T) -> T {
         // Same lock as `crate::tests`: `ARIA_COMPUTE_HOME` is process-global.
-        let _g = crate::tests::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
         let out = f(dir.path());
@@ -1169,5 +1169,23 @@ mod tests {
         assert_eq!(parse_semver("vx"), None);
         assert_eq!(parse_semver("v1.2.3+build"), Some((1, 2, 3)));
         assert!(select_release(&[], None).is_err());
+    }
+
+    #[test]
+    fn extract_zip_rejects_a_non_zip_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("release.zip");
+        std::fs::write(&archive, b"not a zip archive").unwrap();
+        let err = extract_zip(&archive, &dir.path().join("out")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn install_cli_to_requires_a_parent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(CLI_BIN_NAME), b"binary").unwrap();
+        // `/` has no parent, so the staged copy has nowhere to go.
+        let err = install_cli_to(dir.path(), Path::new("/")).unwrap_err();
+        assert!(err.to_string().contains("no parent"), "{err}");
     }
 }

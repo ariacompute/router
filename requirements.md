@@ -325,7 +325,9 @@ C API（`include/aria_router.h`）：
 - H：register→login；`allow_register=false` 拒注册；无用户 register→503；session 门控 keys；OAuth 为 keys `kind=oauth`；`sk-bf-` Bearer → `by_serve_user`；engine 单一 `router_api_key`（双前缀）。
 - T（测试与覆盖率）：`cargo test --workspace --all-features` 全绿，每项功能含正常 + 异常路径用例；
   `scripts/coverage.sh` 门禁为 **100% 行覆盖**（`--workspace --all-features`，仅豁免 `build.rs`），
-  口径为合并后的 lcov `DA:` 记录（见 `docs/coverage-exclusions.md` 的统计口径说明与豁免清单）；
+  口径为合并后的 lcov `DA:` 记录，并按 `cargo llvm-cov report --json` 的段计数剔除**只有分隔符、
+  没有可执行代码**的行（`no-code lines ignored` 单独计数，真实未覆盖行仍失败；见
+  `docs/coverage-exclusions.md`）；门禁跑在 stable 工具链上，不钉版本；
   豁免项必须文件级、可审计并写明原因，禁止用 `#[cfg]` 散落屏蔽「凑覆盖率」；
   `.github/workflows/ci.yml` 在 `pull_request` 与 `push main` 上跑 fmt / clippy（`-D warnings`）/
   test（`--all-features`）/ coverage（复用同一脚本）/ bindings 五个 job 且全绿。

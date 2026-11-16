@@ -1057,6 +1057,63 @@ mod tests {
     }
 
     #[test]
+    fn confidence_strategy_ties_between_two_matches_on_priority() {
+        let set = SignalSet {
+            hits: vec![
+                hit("keyword", "a", true, 0.5),
+                hit("keyword", "b", true, 0.5),
+            ],
+        };
+        let recipe = recipe_with(
+            "confidence",
+            vec![
+                decision_cfg(
+                    "first",
+                    1,
+                    vec![Condition {
+                        kind: "keyword".into(),
+                        name: "a".into(),
+                        equals: None,
+                    }],
+                ),
+                decision_cfg(
+                    "second",
+                    9,
+                    vec![Condition {
+                        kind: "keyword".into(),
+                        name: "b".into(),
+                        equals: None,
+                    }],
+                ),
+            ],
+            true,
+        );
+        // Equal confidence falls through to the higher priority.
+        let chosen = select_decision(&recipe, &set, &ProjectionMap::default(), "confidence")
+            .unwrap()
+            .unwrap();
+        assert_eq!(chosen.name, "second");
+    }
+
+    #[test]
+    fn rule_operator_not_inverts_every_condition() {
+        let mut set = SignalSet::default();
+        set.hits.push(hit("keyword", "a", false, 1.0));
+        let node = RuleNode {
+            operator: Some("NOT".into()),
+            conditions: vec![Condition {
+                kind: "keyword".into(),
+                name: "a".into(),
+                equals: None,
+            }],
+            not: None,
+        };
+        assert!(eval_rule(&node, &set, &ProjectionMap::default()).unwrap());
+        set.hits[0].matched = true;
+        assert!(!eval_rule(&node, &set, &ProjectionMap::default()).unwrap());
+    }
+
+    #[test]
     fn confidence_of_uses_projection_constant_and_signal_confidence() {
         let set = SignalSet {
             hits: vec![hit("keyword", "a", true, 0.5)],

@@ -541,6 +541,39 @@ host 套件暴露）。
 `cargo test --workspace --all-features`、`cargo test -p aria-router-signal`（无 `ml`）、
 `./scripts/run-binding-tests.sh`、`npm --prefix dashboard run build && npm --prefix dashboard run test`。
 
+## T101 — 覆盖率门禁解除工具链钉版（已完成）
+
+背景：A4「覆盖率 100% 门禁红」原是靠把 CI 钉在 rustc 1.99 换来的。1.100 / LLVM 23 修正了 lcov 的
+行归属（1.99 把 match 臂、链式续行、兜底闭包算成外层区域的计数），于是同一份代码报出 127 个零命中行：
+其中 49 行是纯 `}`（无代码），78 行是一直没测过的错误/兜底分支。钉住旧器等于拿「数字好看」换掉真实信号。
+
+- [x] `scripts/coverage_gate.py`：读 `lcov.info` 判行覆盖，读 `coverage.json`（同一 run）确认该行没有
+      任何已执行段；仅当**行文本只剩分隔符**`{}()[];,` 且该行无执行段时剔除，计数打印为
+      `no-code lines ignored: N`。输入缺失 / 解析失败 / 两报告文件集合不相交 / 过滤后为 0 行 → 退出码 2
+      （失败关闭）。`--self-test` 固化为 4 个场景（通过 / 真实缺口 / 已执行的花括号 / 缺输入）。
+- [x] `scripts/coverage.sh`：check/report/lcov 模式先跑测试出 lcov，再 `cargo llvm-cov report --json`
+      （复用 profdata、不重跑测试），两个报告喂同一个 helper，退出码直传。
+- [x] `.github/workflows/ci.yml`：覆盖率 job 回到 `dtolnay/rust-toolchain@stable`，加 `actions/setup-python@v7`
+      （3.12），失败时 `lcov.info` + `coverage.json` 一并上传。
+- [x] 78 个真实缺口逐行补测（不是豁免）。无代码的 49 行与新暴露的 78 行在
+      `docs/coverage-exclusions.md` 里有口径说明。
+- [x] 环境相关、进程内无法制造的失败分支（无 `$HOME`、`reqwest` 客户端构建失败、Argon2 失败、
+      zip 索引越界）统一走「泛型映射 helper + 注入错误」：`config::require_home`/`embedded_template`、
+      `http::resolve_path_or`/`oauth_step`/`oauth_client`/`serve_http_client`/`password_hash_result`、
+      `provider::client_or_default`/`body_or_upstream`、`ffi::map_err_string`、`bindings::upstream`、
+      `upgrade::zip_err`。映射本身有单测，测试里不再靠 `unwrap` 或屏蔽代码凑覆盖率。
+- [x] 新补用例覆盖：`embed` 全部 MIME 分支、`cost`/`policy` 的 mid/large 权重、`decision` 的
+      confidence 平局与 `NOT` 算子、`afm_d` 的 medium 档与缺失 `answers.route`、`agent` 的显式
+      `small` 档与非 JSON 上游、`signal` 的 `dim`/`aggregation_method`、`http` 的 header 回退用户、
+      不可解析的路由头、`replace_config` 写失败、`recipe`/`routing` 缺失的防御分支、`keys`/`users`
+      的持久化与哈希失败、`bin` 的损坏配置修复与默认路径回退、`upgrade` 的非 zip 包与无父目录目标。
+- [x] 文档：`docs/coverage-exclusions.md` 的「Gap regions」改写为「无可执行代码的行」，`requirements.md`
+      §4 T 条口径同步；不再出现 `RUSTUP_TOOLCHAIN` / `1.99.0`。
+
+验证：`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`、
+`cargo test --workspace --all-features`、`./scripts/coverage.sh self-test`、`./scripts/coverage.sh`
+（stable 工具链实测 `lines: 24766, covered: 24766 (100.00%)`，`no-code lines ignored: 48`）。
+
 ---
 
 ## 候选池（未排期 · 待人审）

@@ -22,13 +22,27 @@ pub struct PoolState {
     backend_seq: Mutex<HashMap<String, u64>>,
 }
 
+/// Fall back to a plain client when the tuned builder fails. A broken TLS
+/// backend is the only realistic cause and cannot be provoked in-process, so
+/// the fallback is generic over the error type and covered by a unit test.
+fn client_or_default<E>(built: Result<reqwest::Client, E>) -> reqwest::Client {
+    built.unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Map a body-read failure into an upstream error. Generic over the error type
+/// so a truncated body can be injected in a test.
+fn body_or_upstream<T, E: std::fmt::Display>(result: Result<T, E>) -> Result<T, RouterError> {
+    result.map_err(|e| RouterError::Upstream(e.to_string()))
+}
+
 impl Default for PoolState {
     fn default() -> Self {
-        let client = reqwest::Client::builder()
-            .pool_idle_timeout(Duration::from_secs(90))
-            .timeout(Duration::from_secs(300))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        let client = client_or_default(
+            reqwest::Client::builder()
+                .pool_idle_timeout(Duration::from_secs(90))
+                .timeout(Duration::from_secs(300))
+                .build(),
+        );
         Self {
             client,
             latency_ms: Mutex::new(HashMap::new()),
@@ -195,10 +209,7 @@ async fn forward_once(
         RouterError::Upstream(e.to_string())
     })?;
     let status = resp.status();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| RouterError::Upstream(e.to_string()))?;
+    let text = body_or_upstream(resp.text().await)?;
     let ms = t0.elapsed().as_millis() as f32;
     if !status.is_success() {
         pool.record(model, ms, false);
@@ -282,10 +293,7 @@ async fn open_sse_once(
     })?;
     let status = resp.status();
     if !status.is_success() {
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| RouterError::Upstream(e.to_string()))?;
+        let text = body_or_upstream(resp.text().await)?;
         pool.record(model, t0.elapsed().as_millis() as f32, false);
         return Err(RouterError::Upstream(format!("{status}: {text}")));
     }
@@ -1051,6 +1059,29 @@ providers:
             .map(|_| ())
             .expect_err("upstream 500 must be an error");
         assert!(matches!(err, RouterError::Upstream(_)));
+    }
+
+    #[test]
+    fn client_or_default_and_body_or_upstream_map_failures() {
+        // A failed builder needs a broken TLS backend; inject it instead.
+        let _ = client_or_default::<&str>(Err("tls backend failed"));
+        let _ = client_or_default(Ok::<_, &str>(reqwest::Client::new()));
+
+        assert_eq!(body_or_upstream(Ok::<_, String>("body")).unwrap(), "body");
+        let err = body_or_upstream(Err::<String, _>("truncated body")).unwrap_err();
+        assert!(matches!(err, RouterError::Upstream(_)), "{err}");
+        assert!(err.to_string().contains("truncated body"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn forward_sse_unknown_model_fails_closed() {
+        let doc = doc_with_backend("127.0.0.1:9");
+        let err = forward_sse_stream(&doc, "cloud/ghost", &chat_req(), &[], &PoolState::default())
+            .await
+            .map(|_| ())
+            .unwrap_err();
+        assert!(matches!(err, RouterError::FailClosed(_)), "{err}");
+        assert!(err.to_string().contains("unknown provider model"), "{err}");
     }
 
     #[tokio::test]

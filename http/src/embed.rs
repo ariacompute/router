@@ -163,6 +163,32 @@ mod tests {
     }
 
     #[test]
+    fn content_type_covers_every_extension() {
+        // Each arm of the match must be exercised: a missing arm would ship a
+        // wrong Content-Type for real dashboard assets.
+        for (ext, expected) in [
+            ("css", "text/css; charset=utf-8"),
+            ("json", "application/json; charset=utf-8"),
+            ("map", "application/json; charset=utf-8"),
+            ("svg", "image/svg+xml"),
+            ("jpg", "image/jpeg"),
+            ("jpeg", "image/jpeg"),
+            ("gif", "image/gif"),
+            ("ico", "image/x-icon"),
+            ("woff", "font/woff"),
+            ("woff2", "font/woff2"),
+            ("ttf", "font/ttf"),
+            ("txt", "text/plain; charset=utf-8"),
+        ] {
+            assert_eq!(
+                content_type(&format!("assets/file.{ext}")),
+                expected,
+                "extension {ext}"
+            );
+        }
+    }
+
+    #[test]
     fn percent_decode_accepts_both_hex_cases() {
         assert_eq!(percent_decode("%2f"), "/");
         assert_eq!(percent_decode("%2F"), "/");

@@ -1018,6 +1018,51 @@ mod tests {
         server.abort();
     }
 
+    #[test]
+    fn tier_of_prefers_explicit_small_and_mid_tiers() {
+        assert_eq!(tier_of(&card_tier("local/x", "small", "u")), "small");
+        assert_eq!(tier_of(&card_tier("local/y", "  MID ", "u")), "mid");
+        // An unrecognised explicit tier falls back to the name heuristic.
+        assert_eq!(
+            tier_of(&card_tier("local/ariamodel-large", "bogus", "u")),
+            "large"
+        );
+    }
+
+    #[test]
+    fn submit_route_requires_an_explicit_model() {
+        let err =
+            decision_from_submit(&json!({"reason": "x"}), &[card("local/general")]).unwrap_err();
+        assert!(err.to_string().contains("missing model"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn llm_non_json_body_is_reported() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // A 200 with a non-JSON body fails at `resp.json()`.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = sock.read(&mut buf).await;
+            let body = b"not-json";
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+                body.len()
+            );
+            let _ = sock.write_all(head.as_bytes()).await;
+            let _ = sock.write_all(body).await;
+        });
+        let err = agent_with(&format!("http://127.0.0.1:{}", addr.port()), None)
+            .route(task_for(vec![card("local/a")], 1), &ToolRuntime::default())
+            .await
+            .expect_err("non-json body");
+        assert!(matches!(err, RouterError::Extension(_)), "{err}");
+        server.abort();
+    }
+
     #[tokio::test]
     async fn llm_bad_endpoint_is_reported_as_extension_error() {
         // An unparseable endpoint fails while the request is built, on every
